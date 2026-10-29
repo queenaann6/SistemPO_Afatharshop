@@ -39,6 +39,17 @@ import {
 } from './components/dashboard/projectBridge';
 import Toast from './components/Toast';
 import { BRANDS, CATEGORIES, PRODUCTS, ROLES } from './data/mockData';
+import { api, tokenStore } from './services/api';
+import {
+  buildOrderPayload,
+  mapApiUser,
+  mapBankAccount,
+  mapBrands,
+  mapCategoryNames,
+  mapCourier,
+  mapOrderToProjectOrder,
+  mapProducts
+} from './services/adapters';
 
 const DEFAULT_USER = {
   name: 'HENI',
@@ -123,6 +134,9 @@ export default function App() {
     }
     return ROLES[0];
   });
+
+  // Sesi JWT aktif — dipakai untuk memicu sinkronisasi pesanan dari backend
+  const [sessionToken, setSessionToken] = useState(() => tokenStore.get());
 
   // Modal States
   const [isLoginPromptOpen, setIsLoginPromptOpen] = useState(false);
@@ -539,6 +553,163 @@ export default function App() {
     }
   }, [mitraActiveTab]);
 
+  // Pulihkan sesi JWT yang masih aktif saat halaman di-refresh
+  useEffect(() => {
+    const token = tokenStore.get();
+    if (!token) return undefined;
+
+    let cancelled = false;
+
+    api
+      .me()
+      .then((response) => {
+        if (cancelled) return;
+        const mapped = mapApiUser(response?.data);
+        if (!mapped) return;
+        const role = ROLES.find((item) => item.id === mapped.roleId) || ROLES[0];
+
+        setSessionToken(token);
+        setIsLoggedIn(true);
+        setActiveRole(role);
+        setCurrentUser((prev) => ({ ...(prev || {}), ...mapped, role: role.name, roleId: role.id }));
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        // Hanya hapus token bila server menolak (401); gangguan jaringan sesaat
+        // tidak boleh memutus sesi pengguna.
+        if (error?.status === 401) {
+          tokenStore.clear();
+          setSessionToken(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Sinkronisasi katalog, brand, kategori, kurir, dan rekening dari backend Laravel
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncCatalog = async () => {
+      try {
+        const [productResponse, brandResponse, categoryResponse, courierResponse, bankResponse] =
+          await Promise.all([
+            api.products(),
+            api.brands(),
+            api.categories(),
+            api.couriers(),
+            api.bankAccounts()
+          ]);
+
+        if (cancelled) return;
+
+        const remoteProducts = mapProducts(productResponse);
+        if (remoteProducts.length) {
+          setProducts(remoteProducts);
+          setPoProducts(projectProductsToCore(remoteProducts));
+          setSelectedProduct(
+            (prev) => remoteProducts.find((item) => item.id === prev?.id) || remoteProducts[0]
+          );
+        }
+
+        const remoteBrands = mapBrands(brandResponse?.data || []);
+        if (remoteBrands.length > 1) {
+          setBrands(remoteBrands);
+          setPoBrands(projectBrandsToCore(remoteBrands));
+        }
+
+        const remoteCategories = mapCategoryNames(categoryResponse?.data || []);
+        if (remoteCategories.length) setPoCategories(remoteCategories);
+
+        const remoteCouriers = (courierResponse?.data || []).map(mapCourier);
+        if (remoteCouriers.length) setAdminCouriers(remoteCouriers);
+
+        const remoteBanks = (bankResponse?.data || []).map(mapBankAccount);
+        if (remoteBanks.length) setAdminBankAccounts(remoteBanks);
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('Sinkronisasi katalog backend dilewati:', error?.message || error);
+        }
+      }
+    };
+
+    syncCatalog();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Tarik riwayat pesanan mitra dari backend setiap sesi JWT aktif
+  useEffect(() => {
+    if (!sessionToken) return undefined;
+
+    let cancelled = false;
+
+    const syncOrders = async () => {
+      try {
+        const response = await api.orders();
+        if (cancelled) return;
+
+        const projectOrders = (response?.data || []).map((order) =>
+          mapOrderToProjectOrder(order, currentUser || {})
+        );
+
+        // Backend tanpa pesanan: pertahankan data demo agar dashboard tetap terisi.
+        if (!projectOrders.length) return;
+
+        const mappedCore = alignCoreOrdersToProducts(
+          projectOrdersToCore(projectOrders, {
+            currentUser,
+            seedMitra: poSeed.mitra,
+            products
+          }),
+          projectProductsToCore(products)
+        );
+
+        setCoreOrders(mappedCore);
+      } catch (error) {
+        if (!cancelled && error?.status !== 0) {
+          console.warn('Gagal memuat pesanan backend:', error?.message || error);
+        }
+      }
+    };
+
+    syncOrders();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken]);
+
+  // Setelah login, muat ulang katalog agar harga sesuai level mitra (token terkirim)
+  useEffect(() => {
+    if (!sessionToken) return undefined;
+
+    let cancelled = false;
+
+    api
+      .products()
+      .then((response) => {
+        if (cancelled) return;
+        const remoteProducts = mapProducts(response);
+        if (!remoteProducts.length) return;
+
+        setProducts(remoteProducts);
+        setPoProducts(projectProductsToCore(remoteProducts));
+        setSelectedProduct(
+          (prev) => remoteProducts.find((item) => item.id === prev?.id) || remoteProducts[0]
+        );
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken]);
+
   // Filter Apply
   const handleApplyBrandSearch = () => {
     setActiveBrandKeyword(brandSearchInput.trim());
@@ -701,6 +872,38 @@ export default function App() {
       message: `Pesanan Pre-Order ${newOrder.orderNo} berhasil dibuat! Faktur invoice siap dicetak di dashboard mitra.`
     });
 
+    // Kirim pesanan ke backend Laravel bila sesi JWT aktif
+    if (tokenStore.get()) {
+      api
+        .createOrder(buildOrderPayload(enrichedOrder, newOrder.items || []))
+        .then((response) => {
+          const serverOrder = response?.data;
+          if (!serverOrder) return;
+
+          const serverCore = projectOrderToCore(
+            mapOrderToProjectOrder(serverOrder, currentUser || {}),
+            { currentUser, seedMitra: poSeed.mitra, products }
+          );
+
+          setCoreOrders((prev) => [
+            serverCore,
+            ...prev.filter((order) => order.id !== coreOrder.id)
+          ]);
+          setToast({
+            show: true,
+            message: `Pesanan ${serverOrder.order_number} tersimpan permanen di backend.`
+          });
+        })
+        .catch((error) => {
+          setToast({
+            show: true,
+            message: `Pesanan dibuat lokal. Sinkronisasi backend gagal: ${
+              error?.message || 'tidak diketahui'
+            }.`
+          });
+        });
+    }
+
     // Navigate to Mitra Dashboard Pesanan Saya
     setMitraActiveTab('pesanan_saya');
     setCurrentPage('mitra_dashboard');
@@ -796,6 +999,7 @@ export default function App() {
   const handleLoginSuccess = (role, userData) => {
     setIsLoggedIn(true);
     setActiveRole(role);
+    setSessionToken(tokenStore.get());
     const savedAvatar = typeof window !== 'undefined' ? localStorage.getItem('afatharshop_user_avatar') : null;
     const roleId = role?.id || 'mitra';
     const roleName = role?.name || 'Mitra Distributor';
@@ -860,6 +1064,9 @@ export default function App() {
     setIsLoggedIn(false);
     setCurrentUser(null);
     setCurrentPage('logout_success');
+    api.logout().catch(() => {});
+    tokenStore.clear();
+    setSessionToken(null);
     if (typeof window !== 'undefined') {
       localStorage.setItem('afathar_is_logged_in', 'false');
       localStorage.removeItem('afathar_current_user');
@@ -1115,7 +1322,11 @@ export default function App() {
             poBatches={poBatches}
             onUploadPayment={handleUploadPayment}
             onDepositSubmit={handleDepositSubmit}
-            orders={mitraOrders.filter((o) => !o.mitraName || o.mitraName.toUpperCase().includes('HENI'))}
+            orders={mitraOrders.filter(
+              (o) =>
+                !o.mitraName ||
+                o.mitraName.toUpperCase().includes((currentUser?.name || 'HENI').toUpperCase())
+            )}
             adminBankAccounts={adminBankAccounts}
             adminCouriers={adminCouriers}
             onUpdateOrder={handleUpdateMitraOrder}

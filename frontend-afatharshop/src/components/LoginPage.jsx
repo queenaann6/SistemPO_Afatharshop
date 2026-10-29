@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { ROLES } from '../data/mockData';
+import { api } from '../services/api';
+import { mapApiUser, roleIdFromApiUser } from '../services/adapters';
 
 // Registered Accounts for Role-based Authentication
 export const REGISTERED_ACCOUNTS = [
@@ -18,13 +20,13 @@ export const REGISTERED_ACCOUNTS = [
     address: 'Perumnas 1 Jl Bungur Raya Rt 12 Rw 7 No 86, Bekasi Barat'
   },
   {
-    roleId: 'purchasing',
+    roleId: 'marketing',
     roleName: 'Admin Purchasing',
-    email: 'purchasing@afatharshop.com',
+    email: 'marketing@afatharshop.com',
     phone: '0812-2222-3333',
-    username: 'purchasing',
-    displayName: 'RINA PURCHASING',
-    dashboardPage: 'purchasing_dashboard',
+    username: 'marketing',
+    displayName: 'RINA MARKETING',
+    dashboardPage: 'marketing_dashboard',
     dashboardName: 'Dashboard Admin Purchasing',
     avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=256&q=80',
     balance: 'Rp 0',
@@ -153,6 +155,7 @@ export default function LoginPage({
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [loginResult, setLoginResult] = useState(null);
   const [validationError, setValidationError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Handle Quick Fill for test credentials
   const handleQuickFill = (accEmail, accPass = 'password123') => {
@@ -161,7 +164,12 @@ export default function LoginPage({
     setValidationError('');
   };
 
-  const handleSubmit = (e) => {
+  const finishLogin = (matchedRole, userData, account, offline) => {
+    setLoginResult({ role: matchedRole, user: userData, account, offline: Boolean(offline) });
+    setShowSuccessModal(true);
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setValidationError('');
 
@@ -175,37 +183,74 @@ export default function LoginPage({
       return;
     }
 
-    // Resolve role and profile based strictly on the identifier entered
-    const detectedAccount = resolveAccountByCredentials(identifier);
-    const matchedRole = ROLES.find((r) => r.id === detectedAccount.roleId) || {
-      id: detectedAccount.roleId,
-      name: detectedAccount.roleName
-    };
-
     const savedAvatar =
       typeof window !== 'undefined'
         ? localStorage.getItem('afatharshop_user_avatar')
         : null;
 
-    const userData = {
-      name: detectedAccount.displayName,
-      identifier: identifier,
-      role: detectedAccount.roleName,
-      roleId: detectedAccount.roleId,
-      avatar: savedAvatar || detectedAccount.avatar,
-      balance: detectedAccount.balance || 'Rp 0',
-      totalBill: detectedAccount.totalBill || 'Rp 0',
-      phone: detectedAccount.phone,
-      email: detectedAccount.email,
-      address: detectedAccount.address
-    };
+    setIsSubmitting(true);
 
-    setLoginResult({
-      role: matchedRole,
-      user: userData,
-      account: detectedAccount
-    });
-    setShowSuccessModal(true);
+    try {
+      const response = await api.login(identifier.trim(), password);
+      const apiUser = response?.user || {};
+      const roleId = roleIdFromApiUser(apiUser);
+      const matchedRole = ROLES.find((r) => r.id === roleId) || {
+        id: roleId,
+        name: apiUser.role || roleId
+      };
+      const demoAccount =
+        REGISTERED_ACCOUNTS.find((account) => account.roleId === roleId) ||
+        REGISTERED_ACCOUNTS[0];
+      const mappedUser = mapApiUser(apiUser, demoAccount);
+
+      finishLogin(
+        matchedRole,
+        {
+          ...mappedUser,
+          identifier: identifier.trim(),
+          role: matchedRole.name,
+          roleId,
+          avatar: savedAvatar || mappedUser.avatar,
+          totalBill: demoAccount.totalBill || 'Rp 0',
+          address: demoAccount.address || mappedUser.address
+        },
+        demoAccount,
+        false
+      );
+    } catch (error) {
+      if (error?.status === 0) {
+        // Backend belum berjalan: tetap izinkan demo lokal agar UI bisa diuji.
+        const detectedAccount = resolveAccountByCredentials(identifier);
+        const roleId =
+          detectedAccount.roleId === 'purchasing' ? 'marketing' : detectedAccount.roleId;
+        const matchedRole = ROLES.find((r) => r.id === roleId) || {
+          id: roleId,
+          name: detectedAccount.roleName
+        };
+
+        finishLogin(
+          matchedRole,
+          {
+            name: detectedAccount.displayName,
+            identifier: identifier.trim(),
+            role: matchedRole.name,
+            roleId,
+            avatar: savedAvatar || detectedAccount.avatar,
+            balance: detectedAccount.balance || 'Rp 0',
+            totalBill: detectedAccount.totalBill || 'Rp 0',
+            phone: detectedAccount.phone,
+            email: detectedAccount.email,
+            address: detectedAccount.address
+          },
+          detectedAccount,
+          true
+        );
+      } else {
+        setValidationError(error?.message || 'Login gagal. Silakan coba lagi.');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleProceed = () => {
@@ -321,9 +366,10 @@ export default function LoginPage({
           {/* Submit Button */}
           <button
             type="submit"
-            className="w-full py-2.5 px-4 rounded-lg bg-white border border-stone-800 hover:bg-stone-50 text-stone-800 font-semibold text-xs sm:text-sm shadow-xs transition duration-150 cursor-pointer"
+            disabled={isSubmitting}
+            className="w-full py-2.5 px-4 rounded-lg bg-white border border-stone-800 hover:bg-stone-50 text-stone-800 font-semibold text-xs sm:text-sm shadow-xs transition duration-150 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            Masuk
+            {isSubmitting ? 'Memeriksa akun...' : 'Masuk'}
           </button>
 
           {/* Divider */}
@@ -390,6 +436,11 @@ export default function LoginPage({
               <p className="text-xs text-stone-600">
                 Sebagai <span className="font-bold text-stone-900">{loginResult.user.name}</span>
               </p>
+              {loginResult.offline && (
+                <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                  Backend tidak terdeteksi — masuk dengan akun demo lokal.
+                </p>
+              )}
             </div>
 
             {/* Clean Proceed Button */}

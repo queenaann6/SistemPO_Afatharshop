@@ -214,6 +214,7 @@ export default function CheckoutPage({
         const brandDiscItem = Number(it.brandDiscountNominal) || 0;
         return {
           id: it.id || idx + 1,
+          variantId: it.variantId ?? null,
           title: it.title || 'PRE-ORDER ITEM',
           brand: it.brand || '',
           variant: it.variant || [it.selectedColor, it.selectedModel, it.selectedSize].filter(Boolean).join('/') || 'All Varian',

@@ -25,7 +25,9 @@ export default function ProductDetailPage({
   const [selectedModel, setSelectedModel] = useState(
     product.models?.[0]?.name || 'MOM DRESS ONLY STYLE 1'
   );
-  const [selectedSize, setSelectedSize] = useState(product.sizes?.[2] || 'M');
+  const [selectedSize, setSelectedSize] = useState(
+    product.sizes?.[2] || product.sizes?.[0] || 'M'
+  );
   const [selectedColor, setSelectedColor] = useState(
     product.colors?.[0]?.name || 'NOIR MATTE'
   );
@@ -75,6 +77,7 @@ export default function ProductDetailPage({
   const handleActionClick = (actionType) => {
     const itemData = {
       id: product.id,
+      variantId: activeVariant?.id ?? null,
       title: product.title,
       brand: product.brand,
       image: selectedImage,
