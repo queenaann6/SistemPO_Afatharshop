@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #FFE5D4;
+    color: #2D2424;
+    min-height: 100vh;
+    margin: 0;
+  }
+}
+
+.font-display {
+  font-family: 'Playfair Display', Georgia, serif;
+}
+
+.font-cinzel {
+  font-family: 'Cinzel', Georgia, serif;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #F8EDE6;
+}
+::-webkit-scrollbar-thumb {
+  background: #D4A885;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #B68664;
+}
+
+/* Dedicated Print Stylesheet: Ensures clean 1-page A4 print without website clutter */
+@media print {
+  body {
+    background-color: #ffffff !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  header, footer, aside, nav, .no-print {
+    display: none !important;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 12mm 15mm;
+  }
+}

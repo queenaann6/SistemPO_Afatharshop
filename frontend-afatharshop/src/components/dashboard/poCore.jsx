@@ -1,0 +1,3096 @@
+import React, {
+  Children,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import Footer from '../Footer';
+
+/* ============================================================================
+   PO CORE — model status, helper, komponen UI, shell & data demo
+   Dipakai bersama oleh MarketingDashboard, FinanceDashboard, OwnerFinanceDashboard.
+   Semua file dashboard diimpor dari folder yang sama.
+   ========================================================================== */
+
+/* ---------------------------------------------------------------- formatter */
+export const uid = (prefix = 'id') =>
+  `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+export const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
+export const num = (n) => Number(n || 0);
+export const pct = (n) => `${Math.round(Number(n || 0))}%`;
+
+export const toISO = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+export const parseISO = (iso) => new Date(`${iso}T00:00:00`);
+export const addDays = (iso, n) => {
+  const d = parseISO(iso);
+  d.setDate(d.getDate() + n);
+  return toISO(d);
+};
+export const daysAgo = (n) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return toISO(d);
+};
+export const diffDays = (a, b) => Math.round((parseISO(a) - parseISO(b)) / 86400000);
+export const todayISO = () => toISO(new Date());
+
+export const fmtDate = (iso) =>
+  iso ? parseISO(iso).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+export const fmtDateShort = (iso) =>
+  iso ? parseISO(iso).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }) : '—';
+export const fmtDateTime = (iso) => {
+  if (!iso) return '—';
+  const d = parseISO(iso);
+  return `${d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} ${d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`;
+};
+export const nowStamp = () =>
+  new Date().toLocaleString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+/* ---------------------------------------------------------- reminder close PO */
+export const poClosingToday = (products, today = todayISO()) =>
+  (products || [])
+    .filter((p) => p && p.status === 'open' && p.closeDate && diffDays(p.closeDate, today) <= 0)
+    .map((p) => ({ ...p, daysLeft: diffDays(p.closeDate, today) }))
+    .sort((a, b) => String(a.closeDate).localeCompare(String(b.closeDate)));
+
+export function PoClosingReminder({ products, onAction, actionLabel = 'Kelola Katalog', className = '' }) {
+  const [dismissed, setDismissed] = useState(false);
+  const due = useMemo(() => poClosingToday(products), [products]);
+  if (dismissed || !due.length) return null;
+
+  const todayCount = due.filter((p) => p.daysLeft === 0).length;
+  const overdueCount = due.length - todayCount;
+  const shown = due.slice(0, 4);
+  const actions = (
+    <>
+      {onAction && (
+        <Button size="xs" variant="outline" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      )}
+      <button
+        type="button"
+        onClick={() => setDismissed(true)}
+        className="p-1.5 rounded-md text-amber-600 hover:bg-amber-100"
+        title="Tutup pengingat"
+      >
+        <Icon name="x" className="w-3.5 h-3.5" />
+      </button>
+    </>
+  );
+
+  return (
+    <div className={`rounded-xl border border-amber-200 bg-amber-50/80 px-3 sm:px-4 py-3 ${className}`}>
+      <div className="flex items-start gap-2.5 sm:gap-3">
+        <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+          <Icon name="alert" className="w-4 h-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-bold text-amber-900">Reminder Tutup PO</p>
+            {todayCount > 0 && <Badge tone="red">{todayCount} tutup hari ini</Badge>}
+            {overdueCount > 0 && <Badge tone="amber">{overdueCount} lewat jadwal</Badge>}
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {shown.map((p) => (
+              <span
+                key={p.id}
+                className="flex sm:inline-flex w-full sm:w-auto min-w-0 items-center gap-1 rounded-md border border-amber-200 bg-white px-2 py-1 text-[10px] text-amber-900"
+              >
+                <span className="min-w-0 truncate font-semibold">{p.title}</span>
+                <span className="shrink-0 text-amber-500">·</span>
+                <span className="shrink-0">{p.daysLeft === 0 ? 'tutup hari ini' : `lewat ${Math.abs(p.daysLeft)} hari`}</span>
+              </span>
+            ))}
+            {due.length > shown.length && (
+              <span className="py-1 text-[10px] text-amber-700">+{due.length - shown.length} produk lain</span>
+            )}
+          </div>
+          <p className="mt-1.5 text-[10px] text-amber-800/80">
+            Pastikan pesanan masuk sudah di-ACC dan DP terverifikasi sebelum PO ditutup.
+          </p>
+        </div>
+        <div className="hidden sm:flex items-center gap-1.5 shrink-0">{actions}</div>
+      </div>
+      <div className="mt-2 flex sm:hidden items-center justify-end gap-1.5">{actions}</div>
+    </div>
+  );
+}
+
+export const terminDueList = (products, today = todayISO(), windowDays = 21) => {
+  const rows = [];
+  (products || []).forEach((product) => {
+    if (!product || product.status === 'closed') return;
+    const plan =
+      Array.isArray(product.paymentStages) && product.paymentStages.length >= 2
+        ? product.paymentStages
+        : [
+            { label: 'Termin 1 · DP', pct: num(product.dpPct) || 50, date: product.openDate || product.closeDate },
+            { label: 'Termin 2 · Pelunasan', pct: 100 - (num(product.dpPct) || 50), date: product.pelunasanDueDate }
+          ];
+    plan.forEach((stage) => {
+      if (!stage?.date) return;
+      const days = diffDays(stage.date, today);
+      if (days < 0 || days > windowDays) return;
+      rows.push({
+        productId: product.id,
+        title: product.title,
+        label: stage.label || 'Termin',
+        pct: num(stage.pct ?? stage.percent),
+        date: stage.date,
+        days
+      });
+    });
+  });
+  return rows.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+};
+
+export function TerminDueReminder({
+  products,
+  windowDays = 21,
+  onAction,
+  actionLabel = 'Kelola Katalog',
+  className = ''
+}) {
+  const [dismissed, setDismissed] = useState(false);
+  const due = useMemo(() => terminDueList(products, todayISO(), windowDays), [products, windowDays]);
+  if (dismissed || !due.length) return null;
+
+  const todayCount = due.filter((row) => row.days === 0).length;
+  const shown = due.slice(0, 4);
+  const actions = (
+    <>
+      {onAction && (
+        <Button size="xs" variant="outline" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      )}
+      <button
+        type="button"
+        onClick={() => setDismissed(true)}
+        className="p-1.5 rounded-md text-sky-600 hover:bg-sky-100"
+        title="Tutup pengingat"
+      >
+        <Icon name="x" className="w-3.5 h-3.5" />
+      </button>
+    </>
+  );
+
+  return (
+    <div className={`rounded-xl border border-sky-200 bg-sky-50/80 px-3 sm:px-4 py-3 ${className}`}>
+      <div className="flex items-start gap-2.5 sm:gap-3">
+        <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center shrink-0">
+          <Icon name="alert" className="w-4 h-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-bold text-sky-900">Reminder Termin Pembayaran</p>
+            {todayCount > 0 && <Badge tone="red">{todayCount} jatuh tempo hari ini</Badge>}
+            <Badge tone="blue">{due.length} termin dalam {windowDays} hari</Badge>
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {shown.map((row, index) => (
+              <span
+                key={`${row.productId}-${row.label}-${index}`}
+                className="flex sm:inline-flex w-full sm:w-auto min-w-0 items-center gap-1 rounded-md border border-sky-200 bg-white px-2 py-1 text-[10px] text-sky-900"
+              >
+                <span className="min-w-0 truncate font-semibold">{row.title}</span>
+                <span className="shrink-0 text-sky-400">·</span>
+                <span className="shrink-0">{row.label}</span>
+                <span className="hidden sm:inline text-sky-400">·</span>
+                <span className="shrink-0">{row.days === 0 ? 'hari ini' : `H-${row.days}`}</span>
+              </span>
+            ))}
+            {due.length > shown.length && (
+              <span className="py-1 text-[10px] text-sky-700">+{due.length - shown.length} termin lain</span>
+            )}
+          </div>
+          <p className="mt-1.5 text-[10px] text-sky-800/80">
+            Ingatkan mitra & finance untuk menyiapkan pembayaran sesuai jadwal termin produk PO.
+          </p>
+        </div>
+        <div className="hidden sm:flex items-center gap-1.5 shrink-0">{actions}</div>
+      </div>
+      <div className="mt-2 flex sm:hidden items-center justify-end gap-1.5">{actions}</div>
+    </div>
+  );
+}
+
+export const normPhone = (p) => {
+  let s = String(p || '').replace(/\D/g, '');
+  if (s.startsWith('0')) s = '62' + s.slice(1);
+  else if (s.startsWith('8')) s = '62' + s;
+  return s;
+};
+
+export const initials = (name = '') =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase();
+
+export const escapeHtml = (v) =>
+  String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+export const copyText = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const waLink = (phone, text) =>
+  `https://wa.me/${normPhone(phone)}?text=${encodeURIComponent(text)}`;
+
+/* ------------------------------------------------------------------ status */
+export const PAY = {
+  BELUM: 'Belum',
+  MENUNGGU: 'Menunggu Verifikasi',
+  ACC: 'ACC',
+  TOLAK: 'Ditolak'
+};
+
+export const MKT = {
+  PENDING: 'Menunggu ACC',
+  ACC: 'ACC',
+  TOLAK: 'Ditolak'
+};
+
+export const PROD = {
+  QUEUE: 'Antrian',
+  RUN: 'Produksi',
+  READY: 'Ready'
+};
+
+export const SHIP = {
+  BELUM: 'Belum',
+  SIAP: 'Siap Kirim',
+  DIKIRIM: 'Dikirim',
+  DITERIMA: 'Diterima'
+};
+
+export const PREQ = {
+  REVIEW_MKT: 'Menunggu Review Purchasing',
+  APPROVAL_OWNER: 'Menunggu Approval Owner',
+  APPROVED: 'Disetujui Owner',
+  TRANSFERRED: 'Ditransfer',
+  REJECTED: 'Ditolak',
+  CANCELED: 'Dibatalkan'
+};
+
+export const isPaid = (s) => s === PAY.ACC;
+export const payTone = (s) =>
+  s === PAY.ACC ? 'emerald' : s === PAY.MENUNGGU ? 'blue' : s === PAY.TOLAK ? 'red' : 'gray';
+export const mktTone = (s) =>
+  s === MKT.ACC ? 'emerald' : s === MKT.PENDING ? 'amber' : s === MKT.TOLAK ? 'red' : 'gray';
+export const preqTone = (s) =>
+  s === PREQ.TRANSFERRED
+    ? 'emerald'
+    : s === PREQ.APPROVED
+    ? 'teal'
+    : s === PREQ.APPROVAL_OWNER
+    ? 'violet'
+    : s === PREQ.REVIEW_MKT
+    ? 'amber'
+    : s === PREQ.REJECTED
+    ? 'red'
+    : 'gray';
+
+/* ------------------------------------------------------------------- stages */
+export const STAGES = [
+  { id: 'baru', label: 'Pesanan Baru', tone: 'amber' },
+  { id: 'dp', label: 'Pembayaran DP', tone: 'blue' },
+  { id: 'produksi', label: 'Produksi', tone: 'violet' },
+  { id: 'alamat', label: 'Input Alamat', tone: 'cyan' },
+  { id: 'ongkir', label: 'Input Ongkir', tone: 'orange' },
+  { id: 'pelunasan', label: 'Pelunasan', tone: 'indigo' },
+  { id: 'ongkir_bayar', label: 'Bayar Ongkir', tone: 'orange' },
+  { id: 'kirim', label: 'Siap Kirim', tone: 'teal' },
+  { id: 'dikirim', label: 'Dikirim', tone: 'blue' },
+  { id: 'selesai', label: 'Selesai', tone: 'emerald' },
+  { id: 'ditolak', label: 'Ditolak', tone: 'red' }
+];
+
+export const stageMeta = (id) => STAGES.find((s) => s.id === id) || STAGES[0];
+export const activeStages = STAGES.filter((s) => s.id !== 'ditolak');
+
+export const hasAddress = (o) => {
+  if (!o) return false;
+  if (typeof o.address === 'string') return o.address.trim().length > 0;
+  return !!(o.address && (o.address.street || o.address.city || o.address.recipient));
+};
+export const addressText = (o) => {
+  if (!hasAddress(o)) return '';
+  if (typeof o.address === 'string') return o.address;
+  const a = o.address;
+  return [a.recipient, a.phone, a.street, a.kelurahan, a.kecamatan, a.city, a.province, a.postalCode, a.note]
+    .filter(Boolean)
+    .join(', ');
+};
+
+export const splitAddressGroups = (o) => {
+  const map = new Map();
+  (o?._projectMeta?.items || []).forEach((item) => {
+    (item.splits || []).forEach((sp) => {
+      const key = String(sp.address?.id ?? sp.address?.recipient ?? sp.id);
+      if (!map.has(key)) map.set(key, { address: sp.address, courier: sp.courier || null, rows: [] });
+      const group = map.get(key);
+      group.rows.push({ item, split: sp });
+      if (sp.courier) group.courier = sp.courier;
+    });
+  });
+  return [...map.values()];
+};
+
+export const effectiveProd = (o) =>
+  o?.productionStatus || (o?.readyAt || hasAddress(o) ? PROD.READY : PROD.QUEUE);
+
+export const orderStage = (o) => {
+  if (!o) return 'baru';
+  if (o.marketingStatus === MKT.TOLAK) return 'ditolak';
+  if (o.marketingStatus && o.marketingStatus !== MKT.ACC) return 'baru';
+  if (!isPaid(o.dpStatus)) return 'dp';
+  if (effectiveProd(o) !== PROD.READY) return 'produksi';
+  if (!hasAddress(o)) return 'alamat';
+  if (!num(o.ongkir)) return 'ongkir';
+  if (!isPaid(o.pelunasanStatus)) return 'pelunasan';
+  if (!isPaid(o.ongkirStatus)) return 'ongkir_bayar';
+  if (!o.resi) return 'kirim';
+  if (o.shipStatus !== SHIP.DITERIMA) return 'dikirim';
+  return 'selesai';
+};
+
+export const orderValue = (o) => num(o?.subtotal);
+export const orderPaid = (o) =>
+  (isPaid(o?.dpStatus) ? num(o?.dpNominal) : 0) +
+  (isPaid(o?.pelunasanStatus) ? num(o?.pelunasanNominal) : 0) +
+  (isPaid(o?.ongkirStatus) ? num(o?.ongkir) : 0);
+export const orderOutstanding = (o) =>
+  Math.max(0, orderValue(o) + num(o?.ongkir) - orderPaid(o));
+
+export const nextAction = (o) => {
+  const st = orderStage(o);
+  if (st === 'baru') return { who: 'Purchasing', label: 'ACC pesanan masuk', tone: 'amber' };
+  if (st === 'ditolak') return { who: 'Purchasing', label: 'Pesanan ditolak', tone: 'red' };
+  if (st === 'dp')
+    return o.dpStatus === PAY.MENUNGGU
+      ? { who: 'Finance', label: 'Verifikasi bukti DP', tone: 'blue' }
+      : { who: 'Mitra', label: 'Lakukan pembayaran DP', tone: 'blue' };
+  if (st === 'produksi') return { who: 'Purchasing', label: 'Update produksi → Ready', tone: 'violet' };
+  if (st === 'alamat') return { who: 'Mitra', label: 'Lengkapi alamat pengiriman', tone: 'cyan' };
+  if (st === 'ongkir') return { who: 'Finance', label: 'Input ongkir & ekspedisi', tone: 'orange' };
+  if (st === 'pelunasan')
+    return o.pelunasanStatus === PAY.MENUNGGU
+      ? { who: 'Finance', label: 'Verifikasi bukti pelunasan', tone: 'indigo' }
+      : { who: 'Mitra', label: 'Bayar pelunasan', tone: 'indigo' };
+  if (st === 'ongkir_bayar')
+    return o.ongkirStatus === PAY.MENUNGGU
+      ? { who: 'Finance', label: 'Verifikasi bukti ongkir', tone: 'orange' }
+      : { who: 'Mitra', label: 'Bayar ongkir', tone: 'orange' };
+  if (st === 'kirim') return { who: 'Finance', label: 'Input resi & kirim', tone: 'teal' };
+  if (st === 'dikirim') return { who: 'Mitra', label: 'Konfirmasi pesanan diterima', tone: 'blue' };
+  return { who: '—', label: 'Pesanan selesai', tone: 'emerald' };
+};
+
+export const orderTimeline = (o) => {
+  const st = orderStage(o);
+  const idx = STAGES.findIndex((s) => s.id === st);
+  const reached = (id) => idx >= STAGES.findIndex((s) => s.id === id);
+  const done = (cond, id) => (cond ? 'done' : reached(id) ? 'active' : 'pending');
+
+  return [
+    { key: 'checkout', label: 'Checkout', at: o.date, state: 'done', note: `Oleh ${o.mitraName}` },
+    {
+      key: 'mkt',
+      label: 'ACC Purchasing',
+      at: o.marketingAt,
+      state:
+        o.marketingStatus === MKT.TOLAK
+          ? 'reject'
+          : !o.marketingStatus || o.marketingStatus === MKT.ACC
+          ? 'done'
+          : 'active',
+      note: o.marketingNote || o.marketingBy
+    },
+    {
+      key: 'dp',
+      label: 'DP',
+      at: o.dpVerifiedAt,
+      state:
+        o.dpStatus === PAY.TOLAK
+          ? 'reject'
+          : isPaid(o.dpStatus)
+          ? 'done'
+          : reached('dp')
+          ? 'active'
+          : 'pending',
+      note: `${rp(o.dpNominal)} · ${o.dpStatus}`
+    },
+    {
+      key: 'produksi',
+      label: 'Produksi',
+      at: o.readyAt,
+      state: effectiveProd(o) === PROD.READY ? 'done' : reached('produksi') ? 'active' : 'pending',
+      note: effectiveProd(o)
+    },
+    {
+      key: 'ready',
+      label: 'Ready',
+      at: o.readyAt,
+      state: o.readyAt ? 'done' : reached('alamat') ? 'done' : reached('produksi') ? 'active' : 'pending',
+      note: o.readyAt ? 'Mitra dinotifikasi' : ''
+    },
+    {
+      key: 'alamat',
+      label: 'Alamat',
+      at: o.readyAt,
+      state: hasAddress(o) ? 'done' : reached('alamat') ? 'active' : 'pending',
+      note: hasAddress(o) ? o.address.city : 'Belum diisi mitra'
+    },
+    {
+      key: 'ongkir',
+      label: 'Ongkir',
+      at: o.ongkirAt,
+      state: num(o.ongkir) ? 'done' : reached('ongkir') ? 'active' : 'pending',
+      note: num(o.ongkir) ? `${o.ekspedisi || 'Ekspedisi'} · ${rp(o.ongkir)}` : ''
+    },
+    {
+      key: 'pelunasan',
+      label: 'Pelunasan',
+      at: o.pelunasanVerifiedAt,
+      state:
+        o.pelunasanStatus === PAY.TOLAK
+          ? 'reject'
+          : isPaid(o.pelunasanStatus)
+          ? 'done'
+          : reached('pelunasan')
+          ? 'active'
+          : 'pending',
+      note: `${rp(o.pelunasanNominal)} · ${o.pelunasanStatus}`
+    },
+    {
+      key: 'ongkir_bayar',
+      label: 'Ongkir Dibayar',
+      at: o.ongkirVerifiedAt,
+      state:
+        o.ongkirStatus === PAY.TOLAK
+          ? 'reject'
+          : isPaid(o.ongkirStatus)
+          ? 'done'
+          : reached('ongkir_bayar')
+          ? 'active'
+          : 'pending',
+      note: `${rp(o.ongkir)} · ${o.ongkirStatus}`
+    },
+    {
+      key: 'kirim',
+      label: 'Pengiriman',
+      at: o.shippedAt,
+      state: o.resi ? 'done' : reached('kirim') ? 'active' : 'pending',
+      note: o.resi ? `${o.ekspedisi || 'Ekspedisi'} · ${o.resi}` : ''
+    },
+    {
+      key: 'selesai',
+      label: 'Selesai',
+      at: o.receivedAt,
+      state: o.shipStatus === SHIP.DITERIMA ? 'done' : reached('dikirim') ? 'active' : 'pending',
+      note: o.shipStatus === SHIP.DITERIMA ? 'Diterima mitra' : ''
+    }
+  ];
+};
+
+/* ------------------------------------------------------------------ utility */
+export const downloadCSV = (filename, rows) => {
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const blob = new Blob(
+    ['\ufeff' + rows.map((r) => r.map(esc).join(',')).join('\r\n')],
+    { type: 'text/csv;charset=utf-8;' }
+  );
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+export const BRAND_FEE_FIELDS = [
+  ['discountDBAll', 'DB All'],
+  ['discountSubDB', 'Sub DB'],
+  ['discountAgen', 'Agen'],
+  ['discountReseller', 'Reseller']
+];
+
+const brandFeeKey = (level) => {
+  const map = {
+    'DB All': 'discountDBAll',
+    'Sub DB': 'discountSubDB',
+    Agen: 'discountAgen',
+    Reseller: 'discountReseller'
+  };
+  return map[level] || 'discountDBAll';
+};
+
+export const feeTypeFor = (brand) => (brand?.feeType === 'nominal' ? 'nominal' : 'pct');
+
+export const brandFeeValue = (brand, level) => num(brand?.[brandFeeKey(level)]);
+
+export const feeNominalFor = (brand, level, price) => {
+  const value = brandFeeValue(brand, level);
+  if (!value) return 0;
+  const perUnit = feeTypeFor(brand) === 'nominal' ? value : Math.round((num(price) * value) / 100);
+  return Math.max(0, Math.min(num(price), Math.round(perUnit)));
+};
+
+export const brandDiscountTypeFor = (brand) => (brand?.discountType === 'nominal' ? 'nominal' : 'pct');
+
+export const brandDiscountValueFor = (brand) =>
+  num(brand?.discountValue ?? brand?.discountDBAll);
+
+export const brandDiscountNominalFor = (brand, price) => {
+  const value = brandDiscountValueFor(brand);
+  if (!value) return 0;
+  const perUnit =
+    brandDiscountTypeFor(brand) === 'nominal' ? value : Math.round((num(price) * value) / 100);
+  return Math.max(0, Math.min(num(price), Math.round(perUnit)));
+};
+
+export const discountPctFor = (brand, level) => {
+  if (!brand) return 0;
+  return num(brand[brandFeeKey(level)]);
+};
+
+export const calcOrderAmount = ({
+  price,
+  qty,
+  discountPct = 0,
+  feeNominal = null,
+  brandDiscountNominal = 0,
+  dpPct = 50
+}) => {
+  const gross = num(price) * num(qty);
+  const feePerUnit =
+    feeNominal != null ? num(feeNominal) : Math.round((num(price) * num(discountPct)) / 100);
+  const discountNominal = Math.max(0, Math.min(gross, Math.round(feePerUnit * num(qty))));
+  const subtotal = gross - discountNominal;
+  const dpNominal = Math.round((subtotal * num(dpPct)) / 100);
+  const brandDiscountTotal = Math.max(
+    0,
+    Math.min(gross, Math.round(num(brandDiscountNominal) * num(qty)))
+  );
+  return {
+    gross,
+    discountNominal,
+    feeMitraNominal: discountNominal,
+    brandDiscountNominal: brandDiscountTotal,
+    feeCompanyNominal: brandDiscountTotal - discountNominal,
+    subtotal,
+    dpNominal,
+    pelunasanNominal: subtotal - dpNominal
+  };
+};
+
+export const groupBy = (list, fn) => {
+  const map = {};
+  (list || []).forEach((item) => {
+    const key = fn(item);
+    map[key] = [...(map[key] || []), item];
+  });
+  return Object.entries(map).map(([key, items]) => ({ key, items }));
+};
+
+export const sumBy = (list, fn) => (list || []).reduce((s, x) => s + num(fn(x)), 0);
+
+export const variantLabel = (v) => [v?.color, v?.model, v?.size].filter(Boolean).join('/');
+
+/* -------------------------------------------------------- WhatsApp messages */
+export const buildWA = (kind, order, ctx = {}) => {
+  const shop = ctx.shopName || 'Afathar Shop';
+  const sender = ctx.senderName || 'Admin Afathar Shop';
+  const banks = (ctx.banks || []).filter((b) => b.active);
+  const bankLines = banks.length
+    ? banks.map((b) => `• ${b.bank} ${b.accountNo} a.n ${b.holder}`).join('\n')
+    : '• (rekening belum diatur)';
+  const footer = `\n\nTransfer hanya ke rekening resmi:\n${bankLines}\n\nTerima kasih 🙏\n${sender}`;
+
+  const head = `Assalamu'alaikum Kak ${order?.mitraName || 'Mitra'} (${order?.level || 'Mitra'}),`;
+
+  if (kind === 'dp') {
+    return (
+      `${head}\n\nPesanan Anda di *${shop}* sudah kami ACC dan masuk antrean.\n\n` +
+      `🧾 Invoice: *${order.invoice}*\n📦 ${order.produk} — ${order.variant} (${order.qty} pcs)\n` +
+      `🧮 Nilai pesanan: ${rp(order.subtotal)}\n💰 DP yang harus dibayar: *${rp(order.dpNominal)}*\n\n` +
+      `Mohon transfer DP lalu unggah bukti di dashboard mitra.` +
+      footer
+    );
+  }
+  if (kind === 'ready') {
+    return (
+      `${head}\n\nKabar baik! Pesanan *${order.invoice}* (${order.produk} ${order.variant}) sudah *READY*.\n\n` +
+      `Langkah berikutnya:\n1. Lengkapi alamat pengiriman di dashboard mitra\n2. Kami hitung ongkir & kirim tagihannya\n\n` +
+      `Mohon segera diisi agar pesanan dapat kami jadwalkan kirim.` +
+      footer
+    );
+  }
+  if (kind === 'ongkir') {
+    return (
+      `${head}\n\nOngkir pesanan *${order.invoice}* sudah dihitung:\n\n` +
+      `🚚 Ekspedisi: ${order.ekspedisi || '-'}\n📦 Berat/koli: ${order.weight ? `${order.weight} kg` : '-'}\n` +
+      `💰 Ongkir: *${rp(order.ongkir)}*\n${order.shippingNote ? `📝 ${order.shippingNote}\n` : ''}\n` +
+      `Sisa pelunasan: *${rp(order.pelunasanNominal)}* (${order.pelunasanStatus})\n\n` +
+      `Silakan selesaikan pembayaran pelunasan & ongkir di dashboard mitra.` +
+      footer
+    );
+  }
+  if (kind === 'pelunasan') {
+    return (
+      `${head}\n\nTagihan pelunasan pesanan *${order.invoice}*:\n\n` +
+      `📦 ${order.produk} — ${order.variant} (${order.qty} pcs)\n💰 Pelunasan: *${rp(order.pelunasanNominal)}*\n` +
+      `🚚 Ongkir: ${rp(order.ongkir)} (${order.ongkirStatus})\n\n` +
+      `Mohon selesaikan pembayaran agar pesanan dapat segera dikirim.` +
+      footer
+    );
+  }
+  if (kind === 'shipped') {
+    return (
+      `${head}\n\nPesanan *${order.invoice}* sudah kami kirimkan 🚚\n\n` +
+      `🚚 Ekspedisi: ${order.ekspedisi || '-'}\n🔖 No. Resi: *${order.resi || '-'}*\n📅 Tanggal kirim: ${fmtDate(order.shippedAt)}\n\n` +
+      `Silakan pantau resi dan konfirmasi "Diterima" di dashboard mitra setelah barang sampai.` +
+      footer
+    );
+  }
+  if (kind === 'diterima') {
+    return (
+      `${head}\n\nTerima kasih, pesanan *${order.invoice}* sudah dikonfirmasi diterima.\n\n` +
+      `Semoga produknya bermanfaat. Sampai jumpa di PO berikutnya 💚\n${sender}`
+    );
+  }
+  if (kind === 'ditolak') {
+    return (
+      `${head}\n\nMohon maaf, pesanan *${order.invoice}* belum dapat kami proses.\n\n` +
+      `Alasan: ${order.marketingNote || order.cancelReason || '-'}\n\n` +
+      `Silakan hubungi admin purchasing bila ingin melakukan revisi pesanan.\n${sender}`
+    );
+  }
+  return (
+    `${head}\n\nRingkasan tagihan pesanan *${order.invoice}*:\n\n` +
+    `📦 ${order.produk} — ${order.variant} (${order.qty} pcs)\n` +
+    `💰 Nilai: ${rp(order.subtotal)}\n` +
+    `• DP: ${rp(order.dpNominal)} (${order.dpStatus})\n` +
+    `• Pelunasan: ${rp(order.pelunasanNominal)} (${order.pelunasanStatus})\n` +
+    `• Ongkir: ${rp(order.ongkir)} (${order.ongkirStatus})\n\n` +
+    `Total sisa tagihan: *${rp(orderOutstanding(order))}*` +
+    footer
+  );
+};
+
+/* ------------------------------------------------------------ demo seed data */
+const proofSvg = (title, amount) =>
+  'data:image/svg+xml;charset=utf-8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="840" viewBox="0 0 640 840">
+      <rect width="640" height="840" fill="#eef2f7"/>
+      <rect x="28" y="28" width="584" height="784" rx="18" fill="#ffffff" stroke="#dbe3ec"/>
+      <rect x="28" y="28" width="584" height="96" rx="18" fill="#0f6b4f"/>
+      <text x="56" y="86" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#ffffff">BUKTI TRANSFER</text>
+      <text x="56" y="112" font-family="Arial, sans-serif" font-size="14" fill="#c7ead9">${escapeHtml(title)}</text>
+      <text x="56" y="190" font-family="Arial, sans-serif" font-size="14" fill="#64748b">Nominal</text>
+      <text x="56" y="232" font-family="Arial, sans-serif" font-size="34" font-weight="bold" fill="#0f172a">${escapeHtml(amount)}</text>
+      <line x1="56" y1="268" x2="584" y2="268" stroke="#e2e8f0" stroke-dasharray="6 6"/>
+      <text x="56" y="312" font-family="Arial, sans-serif" font-size="14" fill="#64748b">Bank Pengirim</text>
+      <text x="56" y="340" font-family="Arial, sans-serif" font-size="17" font-weight="bold" fill="#0f172a">BCA</text>
+      <text x="56" y="392" font-family="Arial, sans-serif" font-size="14" fill="#64748b">Bank Tujuan</text>
+      <text x="56" y="420" font-family="Arial, sans-serif" font-size="17" font-weight="bold" fill="#0f172a">BCA 1234567890</text>
+      <text x="56" y="472" font-family="Arial, sans-serif" font-size="14" fill="#64748b">Atas Nama</text>
+      <text x="56" y="500" font-family="Arial, sans-serif" font-size="17" font-weight="bold" fill="#0f172a">PT Afathar Makmur</text>
+      <text x="56" y="552" font-family="Arial, sans-serif" font-size="14" fill="#64748b">Waktu</text>
+      <text x="56" y="580" font-family="Arial, sans-serif" font-size="17" font-weight="bold" fill="#0f172a">${escapeHtml(nowStamp())}</text>
+      <rect x="56" y="640" width="528" height="96" rx="12" fill="#f1f5f9"/>
+      <text x="80" y="682" font-family="Arial, sans-serif" font-size="13" fill="#64748b">Status</text>
+      <text x="80" y="712" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f6b4f">TRANSFER BERHASIL</text>
+      <text x="320" y="790" font-family="Arial, sans-serif" font-size="12" fill="#94a3b8" text-anchor="middle">Dokumen demo · bukan transaksi sebenarnya</text>
+    </svg>`
+  );
+
+export const SAMPLE_PROOF = proofSvg('DP Pesanan PO', 'Rp341.250');
+export const SAMPLE_PROOF_2 = proofSvg('Pelunasan + Ongkir', 'Rp774.000');
+
+export const createSeedData = () => {
+  const today = todayISO();
+
+  const mitra = [
+    { id: 'm-1', name: 'Budi Santoso', email: 'budi.santoso@gmail.com', level: 'DB All', phone: '081234567801', city: 'Bandung', address: 'Jl. Cihampelas No. 88', active: true, deposit: 0, joinedAt: daysAgo(120) },
+    { id: 'm-2', name: 'Siti Rahma', email: 'siti.rahma@gmail.com', level: 'Agen', phone: '081234567802', city: 'Surabaya', address: 'Jl. Darmo Permai No. 21', active: true, deposit: 500000, joinedAt: daysAgo(96) },
+    { id: 'm-3', name: 'Dewi Lestari', email: 'dewi.lestari@gmail.com', level: 'Reseller', phone: '081234567803', city: 'Medan', address: 'Jl. Gatot Subroto No. 45', active: true, deposit: 0, joinedAt: daysAgo(74) },
+    { id: 'm-4', name: 'HENI', email: 'heni@maknahijab.com', level: 'DB All', phone: '081219991888', city: 'Bekasi', address: 'Jl. Merdeka No. 12', active: true, deposit: 0, joinedAt: daysAgo(65) },
+    { id: 'm-5', name: 'Rina Kartika', email: 'rina.kartika@gmail.com', level: 'Sub DB', phone: '081377889900', city: 'Semarang', address: 'Jl. Pandanaran No. 7', active: true, deposit: 0, joinedAt: daysAgo(22) },
+    { id: 'm-6', name: 'Ayu Puspita', email: 'ayu.puspita@gmail.com', level: 'Agen', phone: '081255667788', city: 'Yogyakarta', address: 'Jl. Kaliurang KM 5', active: false, deposit: 0, joinedAt: daysAgo(190) }
+  ];
+
+  const team = [
+    { id: 'u-1', name: 'Owner Afathar', email: 'owner@afathar.id', role: 'owner', phone: '081200000001', active: true, createdAt: daysAgo(365), createdBy: 'System' },
+    { id: 'u-2', name: 'Nadia Finance', email: 'finance@afathar.id', role: 'finance', phone: '081200000002', active: true, createdAt: daysAgo(210), createdBy: 'Owner Afathar' },
+    { id: 'u-3', name: 'Fajar Marketing', email: 'marketing@afathar.id', role: 'marketing', phone: '081200000003', active: true, createdAt: daysAgo(205), createdBy: 'Owner Afathar' },
+    { id: 'u-4', name: 'Lia Marketing', email: 'lia@afathar.id', role: 'marketing', phone: '081200000004', active: true, createdAt: daysAgo(80), createdBy: 'Fajar Marketing' },
+    { id: 'u-5', name: 'Dito Finance', email: 'dito@afathar.id', role: 'finance', phone: '081200000005', active: false, createdAt: daysAgo(60), createdBy: 'Nadia Finance' }
+  ];
+
+  const suppliers = [
+    { id: 's-1', name: 'Hana Textile', city: 'Bandung', contact: 'Bpk. Ahmad', phone: '08122334455', note: 'Spesialis crinkle & airflow', createdAt: daysAgo(300) },
+    { id: 's-2', name: 'Bandung Garment', city: 'Bandung', contact: 'Ibu Rina', phone: '08129988776', note: 'Konveksi tunik & dress', createdAt: daysAgo(260) },
+    { id: 's-3', name: 'Gaya Hijab Factory', city: 'Solo', contact: 'Bpk. Tri', phone: '08137788990', note: 'Produksi hijab & gamis premium', createdAt: daysAgo(150) },
+    { id: 's-4', name: 'Sentra Konveksi Pekalongan', city: 'Pekalongan', contact: 'Bpk. Wahyu', phone: '08125566778', note: 'Bordir dan batik etnik', createdAt: daysAgo(180) },
+    { id: 's-5', name: 'Garmen Nusantara Bogor', city: 'Bogor', contact: 'Ibu Maya', phone: '08139900112', note: 'Spesialis prayer set & mukena', createdAt: daysAgo(210) }
+  ];
+
+  const brands = [
+    { id: 'b-1', name: 'Hanara', supplier: 'Hana Textile', address: 'Bandung', discountDBAll: 30, discountSubDB: 25, discountAgen: 20, discountReseller: 15, active: true, createdAt: daysAgo(300) },
+    { id: 'b-2', name: 'Nusaku', supplier: 'Bandung Garment', address: 'Bandung', discountDBAll: 30, discountSubDB: 25, discountAgen: 20, discountReseller: 15, active: true, createdAt: daysAgo(250) },
+    { id: 'b-3', name: 'Coverme Hijab', supplier: 'Gaya Hijab Factory', address: 'Solo', discountDBAll: 35, discountSubDB: 30, discountAgen: 25, discountReseller: 20, active: true, createdAt: daysAgo(140) }
+  ];
+
+  const products = [
+    {
+      id: 'p-1',
+      title: 'Gamis Almira',
+      brand: 'Hanara',
+      category: 'Gamis',
+      price: 195000,
+      hpp: 110000,
+      closeDate: addDays(today, 9),
+      status: 'open',
+      readyEstimate: 'Desember 2026',
+      terms: 'DP 50% saat checkout · pelunasan sebelum kirim',
+      description: 'Bahan crinkle airflow premium, nyaman untuk harian maupun acara.',
+      image: '',
+      createdAt: daysAgo(18),
+      variants: [
+        { id: 'v-11', color: 'Dusty Pink', model: 'Syari', size: 'M', price: 195000, addon: 0, quota: 40, used: 12 },
+        { id: 'v-12', color: 'Navy', model: 'Syari', size: 'L', price: 195000, addon: 0, quota: 30, used: 9 },
+        { id: 'v-13', color: 'Hitam', model: 'Syari', size: 'XL', price: 205000, addon: 15000, quota: 20, used: 4 }
+      ]
+    },
+    {
+      id: 'p-2',
+      title: 'Tunik Alma',
+      brand: 'Nusaku',
+      category: 'Tunik',
+      price: 135000,
+      hpp: 82000,
+      closeDate: addDays(today, -6),
+      status: 'closed',
+      readyEstimate: '45 hari setelah PO tutup',
+      terms: 'DP 50% · pelunasan sebelum kirim',
+      description: 'Tunik katun premium dengan potongan casual.',
+      image: '',
+      createdAt: daysAgo(40),
+      variants: [
+        { id: 'v-21', color: 'Sage Green', model: 'Casual', size: 'All Size', price: 135000, addon: 0, quota: 50, used: 50 },
+        { id: 'v-22', color: 'Cokelat', model: 'Casual', size: 'M', price: 135000, addon: 0, quota: 25, used: 3 }
+      ]
+    },
+    {
+      id: 'p-3',
+      title: 'Greenism Senada',
+      brand: 'Coverme Hijab',
+      category: 'Dress',
+      price: 180000,
+      hpp: 120000,
+      closeDate: addDays(today, 21),
+      status: 'open',
+      readyEstimate: 'Januari 2027',
+      terms: 'DP 50% · pelunasan sebelum kirim',
+      description: 'Dress senada keluarga, bahan adem dan tidak menerawang.',
+      image: '',
+      createdAt: daysAgo(10),
+      variants: [
+        { id: 'v-31', color: 'Dad Panjang', model: 'Reguler', size: 'XL', price: 180000, addon: 0, quota: 30, used: 13 },
+        { id: 'v-32', color: 'Dad Panjang', model: 'Reguler', size: 'L', price: 180000, addon: 0, quota: 30, used: 6 },
+        { id: 'v-33', color: 'Army', model: 'Reguler', size: 'M', price: 185000, addon: 10000, quota: 20, used: 2 }
+      ]
+    }
+  ];
+
+  const mkOrder = (cfg) => {
+    const p = products.find((x) => x.title === cfg.produk);
+    const b = brands.find((x) => x.name === p.brand);
+    const m = mitra.find((x) => x.name === cfg.mitraName);
+    const discountPct = discountPctFor(b, m.level);
+    const feeNominal = feeNominalFor(b, m.level, p.price);
+    const brandDiscountNominal = brandDiscountNominalFor(b, p.price);
+    const amounts = calcOrderAmount({
+      price: p.price,
+      qty: cfg.qty,
+      feeNominal,
+      brandDiscountNominal,
+      dpPct: cfg.dpPct || 50
+    });
+    return {
+      id: cfg.invoice,
+      invoice: cfg.invoice,
+      date: cfg.date,
+      mitraId: m.id,
+      mitraName: m.name,
+      level: m.level,
+      phone: m.phone,
+      brand: p.brand,
+      produkId: p.id,
+      produk: p.title,
+      variant: cfg.variant,
+      qty: cfg.qty,
+      price: p.price,
+      discountPct,
+      discountNominal: amounts.discountNominal,
+      feeMitraNominal: amounts.feeMitraNominal,
+      brandDiscountNominal: amounts.brandDiscountNominal,
+      feeCompanyNominal: amounts.feeCompanyNominal,
+      subtotal: amounts.subtotal,
+      dpPct: cfg.dpPct || 50,
+      dpNominal: amounts.dpNominal,
+      pelunasanNominal: amounts.pelunasanNominal,
+      dpStatus: cfg.dpStatus || PAY.BELUM,
+      dpProof: cfg.dpProof || '',
+      dpVerifiedBy: cfg.dpStatus === PAY.ACC ? 'Nadia Finance' : '',
+      dpVerifiedAt: cfg.dpStatus === PAY.ACC ? cfg.date : '',
+      pelunasanStatus: cfg.pelunasanStatus || PAY.BELUM,
+      pelunasanProof: cfg.pelunasanProof || '',
+      pelunasanVerifiedBy: cfg.pelunasanStatus === PAY.ACC ? 'Nadia Finance' : '',
+      pelunasanVerifiedAt: cfg.pelunasanStatus === PAY.ACC ? daysAgo(1) : '',
+      ongkir: cfg.ongkir || 0,
+      ongkirAt: cfg.ongkir ? daysAgo(2) : '',
+      ekspedisi: cfg.ekspedisi || '',
+      weight: cfg.weight || '',
+      shippingNote: cfg.shippingNote || '',
+      ongkirStatus: cfg.ongkirStatus || PAY.BELUM,
+      ongkirProof: cfg.ongkirProof || '',
+      ongkirVerifiedBy: cfg.ongkirStatus === PAY.ACC ? 'Nadia Finance' : '',
+      ongkirVerifiedAt: cfg.ongkirStatus === PAY.ACC ? daysAgo(1) : '',
+      resi: cfg.resi || '',
+      shippedAt: cfg.shippedAt || '',
+      receivedAt: cfg.receivedAt || '',
+      shipStatus: cfg.shipStatus || SHIP.BELUM,
+      marketingStatus: cfg.marketingStatus || MKT.ACC,
+      marketingNote: cfg.marketingNote || '',
+      marketingBy: cfg.marketingStatus === MKT.PENDING ? '' : 'Fajar Marketing',
+      marketingAt: cfg.marketingStatus === MKT.PENDING ? '' : cfg.date,
+      productionStatus: cfg.productionStatus || PROD.QUEUE,
+      readyAt: cfg.readyAt || '',
+      address: cfg.address || null,
+      createdBy: cfg.createdBy || 'Checkout Mitra',
+      notes: cfg.notes || '',
+      revisionNote: cfg.revisionNote || '',
+      cancelReason: ''
+    };
+  };
+
+  const addressBekasi = {
+    recipient: 'HENI',
+    phone: '081219991888',
+    street: 'Jl. Merdeka No. 12, RT 04 / RW 02',
+    kelurahan: 'Bekasi Timur',
+    kecamatan: 'Bekasi Timur',
+    city: 'Bekasi',
+    province: 'Jawa Barat',
+    postalCode: '17111',
+    note: 'Kirim pagi hari, titip ke pos keamanan bila kosong.'
+  };
+  const addressBandung = {
+    recipient: 'Budi Santoso',
+    phone: '081234567801',
+    street: 'Jl. Cihampelas No. 88, Ruko Blok B',
+    kelurahan: 'Cipaganti',
+    kecamatan: 'Coblong',
+    city: 'Bandung',
+    province: 'Jawa Barat',
+    postalCode: '40131',
+    note: ''
+  };
+  const addressSurabaya = {
+    recipient: 'Siti Rahma',
+    phone: '081234567802',
+    street: 'Jl. Darmo Permai No. 21',
+    kelurahan: 'Pradah Kalikendal',
+    kecamatan: 'Dukuh Pakis',
+    city: 'Surabaya',
+    province: 'Jawa Timur',
+    postalCode: '60226',
+    note: 'Hubungi sebelum kirim.'
+  };
+  const addressMedan = {
+    recipient: 'Dewi Lestari',
+    phone: '081234567803',
+    street: 'Jl. Gatot Subroto No. 45',
+    kelurahan: 'Sei Sikambing',
+    kecamatan: 'Medan Sunggal',
+    city: 'Medan',
+    province: 'Sumatera Utara',
+    postalCode: '20122',
+    note: ''
+  };
+  const addressSemarang = {
+    recipient: 'Rina Kartika',
+    phone: '081377889900',
+    street: 'Jl. Pandanaran No. 7, Ruko 2',
+    kelurahan: 'Mugassari',
+    kecamatan: 'Semarang Selatan',
+    city: 'Semarang',
+    province: 'Jawa Tengah',
+    postalCode: '50249',
+    note: 'Kirim setelah pukul 10.00.'
+  };
+
+  const orders = [
+    mkOrder({
+      invoice: 'INV-1001', date: daysAgo(8), mitraName: 'Budi Santoso', produk: 'Gamis Almira', variant: 'Dusty Pink/Syari/M',
+      qty: 5, dpStatus: PAY.ACC, productionStatus: PROD.RUN, createdBy: 'Checkout Mitra'
+    }),
+    mkOrder({
+      invoice: 'INV-1002', date: daysAgo(1), mitraName: 'Siti Rahma', produk: 'Gamis Almira', variant: 'Navy/Syari/L',
+      qty: 2, dpStatus: PAY.MENUNGGU, dpProof: SAMPLE_PROOF, productionStatus: PROD.QUEUE, createdBy: 'Checkout Mitra'
+    }),
+    mkOrder({
+      invoice: 'INV-1003', date: daysAgo(12), mitraName: 'Dewi Lestari', produk: 'Tunik Alma', variant: 'Sage Green/Casual/All Size',
+      qty: 3, dpStatus: PAY.ACC, productionStatus: PROD.READY, readyAt: daysAgo(1), createdBy: 'Checkout Mitra'
+    }),
+    mkOrder({
+      invoice: 'INV-1011', date: daysAgo(6), mitraName: 'Rina Kartika', produk: 'Greenism Senada', variant: 'Dusty Pink/Reguler/L',
+      qty: 2, dpStatus: PAY.ACC, productionStatus: PROD.READY, readyAt: daysAgo(2),
+      address: addressSemarang, createdBy: 'Checkout Mitra'
+    }),
+    mkOrder({
+      invoice: 'INV-1004', date: daysAgo(15), mitraName: 'HENI', produk: 'Greenism Senada', variant: 'Dad Panjang/Reguler/XL',
+      qty: 10, dpStatus: PAY.ACC, productionStatus: PROD.READY, readyAt: daysAgo(4),
+      address: addressBekasi, ongkir: 185000, ekspedisi: 'JNE Trucking (JTR)', weight: 12, shippingNote: 'Koli besar, ambil di gudang',
+      pelunasanStatus: PAY.MENUNGGU, pelunasanProof: SAMPLE_PROOF_2,
+      ongkirStatus: PAY.MENUNGGU, ongkirProof: SAMPLE_PROOF_2
+    }),
+    mkOrder({
+      invoice: 'INV-1005', date: daysAgo(18), mitraName: 'Budi Santoso', produk: 'Greenism Senada', variant: 'Dad Panjang/Reguler/L',
+      qty: 3, dpStatus: PAY.ACC, productionStatus: PROD.READY, readyAt: daysAgo(6),
+      address: addressBandung, ongkir: 85000, ekspedisi: 'J&T Cargo', weight: 4,
+      pelunasanStatus: PAY.ACC, ongkirStatus: PAY.ACC, shipStatus: SHIP.SIAP
+    }),
+    mkOrder({
+      invoice: 'INV-1006', date: daysAgo(24), mitraName: 'Siti Rahma', produk: 'Gamis Almira', variant: 'Hitam/Syari/XL',
+      qty: 4, dpStatus: PAY.ACC, productionStatus: PROD.READY, readyAt: daysAgo(9),
+      address: addressSurabaya, ongkir: 60000, ekspedisi: 'JNE Trucking (JTR)', weight: 3,
+      pelunasanStatus: PAY.ACC, ongkirStatus: PAY.ACC, resi: 'JTR-8891234', shippedAt: daysAgo(2), shipStatus: SHIP.DIKIRIM
+    }),
+    mkOrder({
+      invoice: 'INV-1007', date: daysAgo(35), mitraName: 'Dewi Lestari', produk: 'Greenism Senada', variant: 'Army/Reguler/M',
+      qty: 6, dpStatus: PAY.ACC, productionStatus: PROD.READY, readyAt: daysAgo(14),
+      address: addressMedan, ongkir: 120000, ekspedisi: 'Dakota Cargo', weight: 7,
+      pelunasanStatus: PAY.ACC, ongkirStatus: PAY.ACC, resi: 'DKT-77120', shippedAt: daysAgo(8), receivedAt: daysAgo(3), shipStatus: SHIP.DITERIMA
+    }),
+    mkOrder({
+      invoice: 'INV-1008', date: daysAgo(1), mitraName: 'Rina Kartika', produk: 'Gamis Almira', variant: 'Dusty Pink/Syari/M',
+      qty: 2, marketingStatus: MKT.PENDING, createdBy: 'Checkout Mitra', notes: 'Mohon dikirim setelah tanggal 5.',
+      revisionNote: 'Rina mengubah ukuran dari S menjadi M dan menambah 1 pcs.'
+    }),
+    mkOrder({
+      invoice: 'INV-1009', date: today, mitraName: 'HENI', produk: 'Gamis Almira', variant: 'Navy/Syari/L',
+      qty: 3, marketingStatus: MKT.PENDING, createdBy: 'Lia Marketing', notes: 'Pesanan diinput tim purchasing via WhatsApp.'
+    }),
+    mkOrder({
+      invoice: 'INV-1010', date: daysAgo(3), mitraName: 'Budi Santoso', produk: 'Tunik Alma', variant: 'Cokelat/Casual/M',
+      qty: 1, marketingStatus: MKT.TOLAK, marketingNote: 'Kuota varian Cokelat/M sudah habis, silakan pilih varian lain.',
+      createdBy: 'Checkout Mitra'
+    })
+  ];
+
+  const deletedOrders = [
+    {
+      ...mkOrder({
+        invoice: 'INV-0990', date: daysAgo(20), mitraName: 'Ayu Puspita', produk: 'Gamis Almira', variant: 'Dusty Pink/Syari/M',
+        qty: 1, marketingStatus: MKT.PENDING, createdBy: 'Checkout Mitra'
+      }),
+      deletedAt: daysAgo(19),
+      deletedBy: 'Fajar Marketing',
+      deleteReason: 'Duplikat pesanan — mitra checkout dua kali.'
+    }
+  ];
+
+  const deposits = [
+    { id: 'dep-1', date: daysAgo(2), mitraName: 'Siti Rahma', nominal: 500000, bank: 'Mandiri', proof: SAMPLE_PROOF, status: PAY.ACC, verifiedBy: 'Nadia Finance', note: 'Top up saldo deposit' },
+    { id: 'dep-2', date: daysAgo(1), mitraName: 'Budi Santoso', nominal: 1000000, bank: 'BCA', proof: SAMPLE_PROOF, status: PAY.MENUNGGU, verifiedBy: '', note: 'Deposit untuk PO berikutnya' }
+  ];
+
+  const bankAccounts = [
+    { id: 'bk-1', bank: 'BCA', accountNo: '1234567890', holder: 'PT Afathar Makmur', active: true },
+    { id: 'bk-2', bank: 'Mandiri', accountNo: '133-00-2998801', holder: 'Afathar Shop Official', active: true },
+    { id: 'bk-3', bank: 'BRI', accountNo: '987654312156', holder: 'Afathar Shop Official', active: true },
+    { id: 'bk-4', bank: 'BSI', accountNo: '7211009988', holder: 'Afathar Shop Official', active: false }
+  ];
+
+  const couriers = [
+    { id: 'c-1', name: 'JNE Trucking (JTR)', code: 'JTR', active: true, note: 'Koli besar & volume tinggi', createdAt: daysAgo(300) },
+    { id: 'c-2', name: 'J&T Cargo', code: 'JTC', active: true, note: 'Retail & koli menengah', createdAt: daysAgo(280) },
+    { id: 'c-3', name: 'Dakota Cargo', code: 'DKT', active: true, note: 'Antar pulau, minimal 5 kg', createdAt: daysAgo(200) },
+    { id: 'c-4', name: 'SiCepat REG', code: 'SCP', active: true, note: 'Paket kecil < 5 kg', createdAt: daysAgo(90) },
+    { id: 'c-5', name: 'AnterAja', code: 'ANT', active: false, note: 'Sementara tidak dipakai', createdAt: daysAgo(120) }
+  ];
+
+  const categories = [
+    'Sarimbit Keluarga',
+    'Gamis & Abaya',
+    "Khimar & Bergo Syar'i",
+    'Scarf & Voal Premium',
+    'Oneset & Kids',
+    'Prayer Set & Mukena',
+    'Tas Kulit & Aksesoris'
+  ];
+
+  const ledger = [
+    { id: 'l-1', date: daysAgo(2), type: 'DP', ref: 'INV-1002', mitraName: 'Siti Rahma', nominal: 0, bank: 'BCA', by: 'Nadia Finance', status: 'Menunggu Verifikasi', note: '' },
+    { id: 'l-2', date: daysAgo(1), type: 'DP', ref: 'INV-1001', mitraName: 'Budi Santoso', nominal: 341250, bank: 'BCA', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-3', date: daysAgo(3), type: 'DP', ref: 'INV-1003', mitraName: 'Dewi Lestari', nominal: 111000, bank: 'Mandiri', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-4', date: daysAgo(5), type: 'DP', ref: 'INV-1004', mitraName: 'HENI', nominal: 585000, bank: 'BCA', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-5', date: daysAgo(6), type: 'DP', ref: 'INV-1005', mitraName: 'Budi Santoso', nominal: 132300, bank: 'BCA', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-6', date: daysAgo(9), type: 'DP', ref: 'INV-1006', mitraName: 'Siti Rahma', nominal: 249600, bank: 'BRI', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-7', date: daysAgo(14), type: 'DP', ref: 'INV-1007', mitraName: 'Dewi Lestari', nominal: 345600, bank: 'Mandiri', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-8', date: daysAgo(6), type: 'Pelunasan', ref: 'INV-1005', mitraName: 'Budi Santoso', nominal: 132300, bank: 'BCA', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-9', date: daysAgo(9), type: 'Pelunasan', ref: 'INV-1006', mitraName: 'Siti Rahma', nominal: 249600, bank: 'BRI', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-10', date: daysAgo(14), type: 'Pelunasan', ref: 'INV-1007', mitraName: 'Dewi Lestari', nominal: 345600, bank: 'Mandiri', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-11', date: daysAgo(2), type: 'Ongkir', ref: 'INV-1006', mitraName: 'Siti Rahma', nominal: 60000, bank: 'BRI', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-12', date: daysAgo(8), type: 'Ongkir', ref: 'INV-1007', mitraName: 'Dewi Lestari', nominal: 120000, bank: 'Mandiri', by: 'Nadia Finance', status: 'ACC', note: '' },
+    { id: 'l-13', date: daysAgo(2), type: 'Deposit', ref: '-', mitraName: 'Siti Rahma', nominal: 500000, bank: 'Mandiri', by: 'Nadia Finance', status: 'ACC', note: 'Top up deposit' }
+  ];
+
+  const paymentRequests = [
+    {
+      id: 'pr-1', code: 'PR-0001', createdAt: daysAgo(1), createdBy: 'Nadia Finance',
+      amount: 1250000, bank: 'BCA', accountNo: '1234567890', holder: 'PT Afathar Makmur',
+      purpose: 'DP produksi supplier Hana Textile', ref: 'PO Gamis Almira',
+      note: 'Pembayaran DP 40% produksi 120 pcs Gamis Almira.',
+      status: PREQ.REVIEW_MKT,
+      marketing: null,
+      owner: null,
+      transfer: null
+    },
+    {
+      id: 'pr-2', code: 'PR-0002', createdAt: daysAgo(2), createdBy: 'Nadia Finance',
+      amount: 3500000, bank: 'BCA', accountNo: '1234567890', holder: 'PT Afathar Makmur',
+      purpose: 'Pelunasan produksi supplier Bandung Garment', ref: 'PO Tunik Alma',
+      note: 'Pelunasan setelah QC lolos.',
+      status: PREQ.APPROVAL_OWNER,
+      marketing: { by: 'Fajar Marketing', at: daysAgo(2), note: 'Dokumen dan nota supplier sesuai.', decision: 'ACC' },
+      owner: null,
+      transfer: null
+    },
+    {
+      id: 'pr-3', code: 'PR-0003', createdAt: daysAgo(4), createdBy: 'Nadia Finance',
+      amount: 2100000, bank: 'Mandiri', accountNo: '133-00-2998801', holder: 'Afathar Shop Official',
+      purpose: 'Ongkos kirim massal & packing', ref: 'Batch Oktober',
+      note: 'Ongkir 42 koli + perlengkapan packing.',
+      status: PREQ.APPROVED,
+      marketing: { by: 'Lia Marketing', at: daysAgo(4), note: 'Sudah dicek dengan rekap ekspedisi.', decision: 'ACC' },
+      owner: { by: 'Owner Afathar', at: daysAgo(3), note: 'Disetujui, mohon segera ditransfer.', decision: 'ACC' },
+      transfer: null
+    },
+    {
+      id: 'pr-4', code: 'PR-0004', createdAt: daysAgo(8), createdBy: 'Nadia Finance',
+      amount: 4250000, bank: 'BSI', accountNo: '7211009988', holder: 'Afathar Shop Official',
+      purpose: 'Pembayaran hijab premium Coverme', ref: 'PO Greenism Senada',
+      note: 'Termin 2 dari 3.',
+      status: PREQ.TRANSFERRED,
+      marketing: { by: 'Fajar Marketing', at: daysAgo(8), note: 'OK.', decision: 'ACC' },
+      owner: { by: 'Owner Afathar', at: daysAgo(7), note: 'Setuju.', decision: 'ACC' },
+      transfer: { by: 'Owner Afathar', at: daysAgo(7), note: 'Transfer via BSI mobile.', proof: SAMPLE_PROOF_2 }
+    },
+    {
+      id: 'pr-5', code: 'PR-0005', createdAt: daysAgo(3), createdBy: 'Nadia Finance',
+      amount: 980000, bank: 'BCA', accountNo: '9998887776', holder: 'CV Sinar Jaya',
+      purpose: 'Pembelian bahan tambahan', ref: '-',
+      note: 'Supplier baru.',
+      status: PREQ.REJECTED,
+      marketing: { by: 'Lia Marketing', at: daysAgo(3), note: 'Rekening tujuan belum terdaftar sebagai vendor resmi.', decision: 'TOLAK' },
+      owner: null,
+      transfer: null
+    }
+  ];
+
+  const settings = {
+    shopName: 'Afathar Shop',
+    senderName: 'Owner Afathar Shop',
+    dpPct: 50,
+    pelunasanDueDays: 7,
+    ongkirDueDays: 3,
+    waFooter: 'Transfer hanya ke rekening resmi Afathar Shop.',
+    instagram: '@afatharshop'
+  };
+
+  const auditLog = [
+    { id: 'a-1', at: nowStamp(), date: daysAgo(1), by: 'Nadia Finance', role: 'Finance', action: 'Membuat pengajuan pembayaran PR-0001', target: 'PR-0001', tone: 'blue' },
+    { id: 'a-2', at: nowStamp(), date: daysAgo(2), by: 'Fajar Marketing', role: 'Purchasing', action: 'Mereview pengajuan PR-0002', target: 'PR-0002', tone: 'violet' },
+    { id: 'a-3', at: nowStamp(), date: daysAgo(3), by: 'Owner Afathar', role: 'Owner', action: 'Menyetujui pengajuan PR-0003', target: 'PR-0003', tone: 'emerald' },
+    { id: 'a-4', at: nowStamp(), date: daysAgo(3), by: 'Lia Marketing', role: 'Purchasing', action: 'Menolak pengajuan PR-0005', target: 'PR-0005', tone: 'red' },
+    { id: 'a-5', at: nowStamp(), date: daysAgo(4), by: 'Fajar Marketing', role: 'Purchasing', action: 'ACC pesanan INV-1001', target: 'INV-1001', tone: 'emerald' }
+  ];
+
+  return {
+    mitra,
+    team,
+    suppliers,
+    brands,
+    products,
+    orders,
+    deletedOrders,
+    deposits,
+    bankAccounts,
+    couriers,
+    categories,
+    ledger,
+    paymentRequests,
+    settings,
+    auditLog
+  };
+};
+
+/* ------------------------------------------------------------------ hooks */
+export function useDataState(propValue, seedValue, onChange) {
+  const [local, setLocal] = useState(seedValue);
+  const value = propValue !== undefined ? propValue : local;
+  const commit = useCallback(
+    (nextOrFn) => {
+      const next = typeof nextOrFn === 'function' ? nextOrFn(value) : nextOrFn;
+      setLocal(next);
+      if (onChange) onChange(next);
+    },
+    [value, onChange]
+  );
+  return [value, commit];
+}
+
+export function useToast() {
+  const [toast, setToast] = useState(null);
+  const timer = useRef(null);
+  const show = useCallback((msg, tone = 'success') => {
+    setToast({ msg, tone });
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setToast(null), 4200);
+  }, []);
+  useEffect(() => () => timer.current && clearTimeout(timer.current), []);
+  return { show, toast, close: () => setToast(null) };
+}
+
+/* ------------------------------------------------------------------ accents */
+export const ACCENTS = {
+  finance: {
+    key: 'finance',
+    solid: 'bg-[#0F6B4F] hover:bg-[#0C563F]',
+    solidText: 'bg-[#0F6B4F] text-white',
+    text: 'text-[#0F6B4F]',
+    textHover: 'hover:text-[#0F6B4F]',
+    soft: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    softBg: 'bg-emerald-50',
+    inputFocus: 'focus:ring-2 focus:ring-emerald-600/15 focus:border-emerald-600',
+    sidebarActive: 'bg-[#0F6B4F] text-white shadow-sm',
+    sidebarHover: 'hover:bg-emerald-50/70 hover:text-[#0F6B4F]',
+    border: 'border-emerald-200',
+    gradient: 'from-[#0F6B4F] to-[#0A4A36]',
+    chip: 'bg-emerald-50 text-emerald-800 border-emerald-200'
+  },
+  marketing: {
+    key: 'marketing',
+    solid: 'bg-[#6B1416] hover:bg-[#571012]',
+    solidText: 'bg-[#6B1416] text-white',
+    text: 'text-[#6B1416]',
+    textHover: 'hover:text-[#6B1416]',
+    soft: 'bg-rose-50 text-[#6B1416] border-rose-200',
+    softBg: 'bg-rose-50',
+    inputFocus: 'focus:ring-2 focus:ring-rose-800/15 focus:border-[#6B1416]',
+    sidebarActive: 'bg-[#6B1416] text-white shadow-sm',
+    sidebarHover: 'hover:bg-rose-50/70 hover:text-[#6B1416]',
+    border: 'border-rose-200',
+    gradient: 'from-[#6B1416] to-[#3F0B0D]',
+    chip: 'bg-amber-50 text-amber-900 border-amber-200'
+  },
+  owner: {
+    key: 'owner',
+    solid: 'bg-[#8A6A2F] hover:bg-[#745725]',
+    solidText: 'bg-[#8A6A2F] text-white',
+    text: 'text-[#8A6A2F]',
+    textHover: 'hover:text-[#8A6A2F]',
+    soft: 'bg-amber-50 text-amber-900 border-amber-200',
+    softBg: 'bg-amber-50',
+    inputFocus: 'focus:ring-2 focus:ring-amber-700/15 focus:border-[#8A6A2F]',
+    sidebarActive: 'bg-[#8A6A2F] text-white shadow-sm',
+    sidebarHover: 'hover:bg-amber-50/80 hover:text-[#8A6A2F]',
+    border: 'border-amber-200',
+    gradient: 'from-[#1F2937] to-[#0B1220]',
+    chip: 'bg-amber-50 text-amber-900 border-amber-200'
+  }
+};
+
+const AccentContext = createContext(ACCENTS.finance);
+export const useAccent = () => useContext(AccentContext);
+
+export const ROLE_LABEL = {
+  owner: 'Owner',
+  finance: 'Admin Finance',
+  marketing: 'Admin Purchasing',
+  mitra: 'Mitra'
+};
+export const roleLabel = (r) => ROLE_LABEL[r] || r || 'Tim';
+
+export const LEVELS = ['DB All', 'Sub DB', 'Agen', 'Reseller'];
+export const levelTone = (level) =>
+  level === 'DB All'
+    ? 'emerald'
+    : level === 'Sub DB'
+    ? 'teal'
+    : level === 'Agen'
+    ? 'blue'
+    : 'violet';
+
+/* ------------------------------------------------------------------- badges */
+const TONES = {
+  emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  amber: 'bg-amber-50 text-amber-700 border-amber-200',
+  red: 'bg-rose-50 text-rose-700 border-rose-200',
+  blue: 'bg-sky-50 text-sky-700 border-sky-200',
+  gray: 'bg-gray-100 text-gray-600 border-gray-200',
+  violet: 'bg-violet-50 text-violet-700 border-violet-200',
+  cyan: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+  orange: 'bg-orange-50 text-orange-700 border-orange-200',
+  teal: 'bg-teal-50 text-teal-700 border-teal-200',
+  indigo: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  slate: 'bg-slate-100 text-slate-700 border-slate-200'
+};
+
+export function Badge({ tone = 'gray', children, dot = false, className = '' }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md border whitespace-nowrap ${
+        TONES[tone] || TONES.gray
+      } ${className}`}
+    >
+      {dot && <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />}
+      {children}
+    </span>
+  );
+}
+
+export const PayBadge = ({ status }) => <Badge tone={payTone(status)}>{status || PAY.BELUM}</Badge>;
+
+export const StageBadge = ({ order }) => {
+  const meta = stageMeta(orderStage(order));
+  return <Badge tone={meta.tone}>{meta.label}</Badge>;
+};
+
+export const RoleBadge = ({ role }) => (
+  <Badge tone={role === 'owner' ? 'amber' : role === 'finance' ? 'emerald' : role === 'marketing' ? 'red' : 'blue'}>
+    {roleLabel(role)}
+  </Badge>
+);
+
+/* ------------------------------------------------------------------ buttons */
+export function Button({ variant = 'primary', size = 'sm', icon, children, className = '', ...rest }) {
+  const a = useAccent();
+  const base =
+    'inline-flex items-center justify-center gap-1.5 rounded-lg font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap focus:outline-none';
+  const sizes = {
+    xs: 'px-2.5 py-1.5 text-[11px]',
+    sm: 'px-3 py-1.5 text-xs',
+    md: 'px-4 py-2 text-xs',
+    lg: 'px-5 py-2.5 text-sm'
+  };
+  const variants = {
+    primary: `${a.solid} text-white shadow-xs`,
+    outline: 'border border-gray-300 bg-white text-gray-700 hover:border-gray-400 hover:bg-gray-50',
+    ghost: 'text-gray-600 hover:bg-gray-100',
+    soft: `${a.soft} border`,
+    danger: 'bg-rose-600 text-white hover:bg-rose-700 shadow-xs',
+    dangerOutline: 'border border-rose-200 bg-white text-rose-700 hover:bg-rose-50',
+    gold: 'bg-[#8A6A2F] text-white hover:bg-[#745725] shadow-xs'
+  };
+  return (
+    <button type="button" className={`${base} ${sizes[size]} ${variants[variant]} ${className}`} {...rest}>
+      {icon && <Icon name={icon} className="w-3.5 h-3.5" />}
+      {children}
+    </button>
+  );
+}
+
+/* -------------------------------------------------------------------- icons */
+const ICON_PATHS = {
+  grid: 'M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm10 0h6v6h-6v-6Z',
+  bell: 'M12 3a5 5 0 0 0-5 5v3.2L5.4 15a1 1 0 0 0 .9 1.5h11.4a1 1 0 0 0 .9-1.5L17 11.2V8a5 5 0 0 0-5-5Zm0 18a2.4 2.4 0 0 0 2.3-2H9.7A2.4 2.4 0 0 0 12 21Z',
+  search: 'M10 4a6 6 0 1 0 3.8 10.7l4.2 4.2 1.4-1.4-4.2-4.2A6 6 0 0 0 10 4Zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z',
+  plus: 'M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z',
+  edit: 'm4 17.3V20h2.7L18 8.7 15.3 6 4 17.3ZM19.7 7a1 1 0 0 0 0-1.4l-1.3-1.3a1 1 0 0 0-1.4 0L15.6 5.7 18.3 8.4 19.7 7Z',
+  trash: 'M6 7h12l-1 14H7L6 7Zm3-3h6l1 2H8l1-2Zm1 5v9h1.5V9H10Zm3.5 0v9H15V9h-1.5Z',
+  check: 'M20 6 9 17l-5-5 1.4-1.4L9 14.2 18.6 4.6 20 6Z',
+  x: 'M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3 1.4 1.4Z',
+  chevron: 'm9 6 6 6-6 6-1.4-1.4L12.2 12 7.6 7.4 9 6Z',
+  menu: 'M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z',
+  store: 'M4 4h16l1 5a3 3 0 0 1-3 3 3 3 0 0 1-3-3 3 3 0 0 1-6 0 3 3 0 0 1-3 3 3 3 0 0 1-3-3l1-5Zm1 9.5A5 5 0 0 0 8 12.4a5 5 0 0 0 4-2 5 5 0 0 0 8 2V20H5v-6.5Z',
+  logout: 'M10 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7v-2h7V5h-7V3Zm-2.6 5L11 11.6H4v.8h7L7.4 16 6 14.6 2.8 12 6 8.6 7.4 7.4Z',
+  box: 'M12 2 3 7v10l9 5 9-5V7l-9-5Zm0 2.3L18.8 8 12 11.7 5.2 8 12 4.3ZM5 9.7l6 3.3v6.3l-6-3.3V9.7Zm8 9.6V13l6-3.3v6.3l-6 3.3Z',
+  truck: 'M3 5h11v9h2.5l3.5-4H23v7h-2a2 2 0 0 1-4 0h-5a2 2 0 0 1-4 0H3V5Zm2 2v3h5V7H5Z',
+  users: 'M9 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm7 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6ZM2 19a7 7 0 0 1 14 0v1H2v-1Zm15.5-4.5A5.5 5.5 0 0 1 22 19v1h-3.2a8.9 8.9 0 0 0-2.6-5.2l1.3-.3Z',
+  receipt: 'M6 2h12v20l-3-2-3 2-3-2-3 2V2Zm3 5v2h6V7H9Zm0 4v2h6v-2H9Z',
+  wallet: 'M3 6h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H3V6Zm2 3v9h14V9H5Zm10 3h3v2h-3v-2Z',
+  file: 'M6 2h8l4 4v16H6V2Zm7 2v4h4l-4-4ZM8 12h8v2H8v-2Zm0 4h8v2H8v-2Z',
+  clock: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 4v6l4.5 2.7-.8 1.4L11 13V6h2Z',
+  alert: 'M12 2 1 21h22L12 2Zm1 6v6h-2V8h2Zm0 8v2h-2v-2h2Z',
+  eye: 'M12 5C6.5 5 2.7 9.4 1.5 12c1.2 2.6 5 7 10.5 7s9.3-4.4 10.5-7C21.3 9.4 17.5 5 12 5Zm0 2c3.9 0 6.9 2.8 8.1 5-1.2 2.2-4.2 5-8.1 5s-6.9-2.8-8.1-5c1.2-2.2 4.2-5 8.1-5Zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z',
+  download: 'M11 3h2v9.2l3.3-3.3 1.4 1.4L12 16 6.3 10.3l1.4-1.4L11 12.2V3ZM4 18h16v3H4v-3Z',
+  upload: 'M11 16h2V6.8l3.3 3.3 1.4-1.4L12 3 6.3 8.7l1.4 1.4L11 6.8V16ZM4 18h16v3H4v-3Z',
+  refresh: 'M12 4a8 8 0 0 1 7.4 5H17v2h6V5h-2v2.3A10 10 0 1 0 22 12h-2a8 8 0 1 1-8-8Z',
+  print: 'M7 3h10v4h3v9h-3v5H7v-5H4V7h3V3Zm2 2v2h6V5H9Zm-2 9v5h10v-5H7Zm10-3h1.5v-2H5.5v2H7v-2h10v2Z',
+  chat: 'M3 3h18v14H8l-5 4V3Zm3 3v8h11.2l1.8 1.4V6H6Zm2 2h9v2H8V8Zm0 4h6v2H8v-2Z',
+  filter: 'M3 5h18v2l-7 7v6l-4 2v-8L3 7V5Z',
+  copy: 'M8 2h11v14h-3V4H9V2H8ZM5 6h11v16H5V6Zm2 2v12h7V8H7Z',
+  arrow: 'M4 11h12.2l-4.6-4.6L13 5l7 7-7 7-1.4-1.4 4.6-4.6H4v-2Z',
+  card: 'M3 5h18v14H3V5Zm2 3v2h14V8H5Zm0 4v5h8v-5H5Z',
+  shield: 'M12 2 4 5v6c0 5 3.4 9.5 8 11 4.6-1.5 8-6 8-11V5l-8-3Zm0 2.2 6 2.2V11c0 3.9-2.5 7.5-6 8.8C8.5 18.5 6 14.9 6 11V6.4l6-2.2Z',
+  spark: 'm12 2 2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4L12 2Z'
+};
+
+export function Icon({ name, className = 'w-4 h-4' }) {
+  const d = ICON_PATHS[name] || ICON_PATHS.grid;
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden="true">
+      <path d={d} />
+    </svg>
+  );
+}
+
+/* ------------------------------------------------------------------- inputs */
+export function Field({ label, hint, required, children, className = '' }) {
+  return (
+    <label className={`block ${className}`}>
+      {label && (
+        <span className="block text-[11px] font-semibold text-gray-600 mb-1">
+          {label} {required && <span className="text-rose-500">*</span>}
+        </span>
+      )}
+      {children}
+      {hint && <span className="block text-[10px] text-gray-400 mt-1">{hint}</span>}
+    </label>
+  );
+}
+
+const fieldBase =
+  'w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 placeholder:text-gray-400 transition-all outline-none disabled:bg-gray-100 disabled:text-gray-500';
+
+export function Input({ className = '', ...rest }) {
+  const a = useAccent();
+  return <input className={`${fieldBase} ${a.inputFocus} ${className}`} {...rest} />;
+}
+
+export function Select({ className = '', children, ...rest }) {
+  const a = useAccent();
+  return (
+    <select className={`${fieldBase} ${a.inputFocus} ${className}`} {...rest}>
+      {children}
+    </select>
+  );
+}
+
+export function Textarea({ className = '', ...rest }) {
+  const a = useAccent();
+  return <textarea className={`${fieldBase} ${a.inputFocus} ${className}`} {...rest} />;
+}
+
+export function SearchBox({ value, onChange, placeholder = 'Cari...', className = '' }) {
+  return (
+    <div className={`relative ${className}`}>
+      <Icon name="search" className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full bg-white border border-gray-300 rounded-lg pl-8 pr-3 py-2 text-xs outline-none focus:ring-2 focus:ring-gray-200 focus:border-gray-400"
+      />
+    </div>
+  );
+}
+
+export function Switch({ checked, onChange, label, disabled }) {
+  const a = useAccent();
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="inline-flex items-center gap-2 text-xs text-gray-700 disabled:opacity-40 cursor-pointer"
+    >
+      <span
+        className={`relative w-8 h-4 rounded-full transition-colors shrink-0 ${
+          checked ? a.solidText.split(' ')[0] : 'bg-gray-300'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform ${
+            checked ? 'translate-x-4' : ''
+          }`}
+        />
+      </span>
+      {label && <span>{label}</span>}
+    </button>
+  );
+}
+
+export function Segmented({ value, onChange, options, className = '' }) {
+  return (
+    <div className={`inline-flex p-0.5 bg-gray-100 rounded-lg text-[11px] gap-0.5 flex-wrap ${className}`}>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={`px-2.5 py-1.5 rounded-md font-semibold transition-all ${
+            value === o.value ? 'bg-white text-gray-900 shadow-xs' : 'text-gray-500 hover:text-gray-800'
+          }`}
+        >
+          {o.label}
+          {o.count !== undefined && (
+            <span className={`ml-1 text-[10px] ${value === o.value ? 'text-gray-500' : 'text-gray-400'}`}>
+              {o.count}
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------- cards */
+export function Card({ title, subtitle, action, children, className = '', bodyClassName = '' }) {
+  return (
+    <div className={`bg-white rounded-xl border border-gray-200/80 shadow-xs overflow-hidden ${className}`}>
+      {(title || action) && (
+        <div className="px-4 sm:px-5 py-3.5 border-b border-gray-100 flex items-start justify-between gap-3 flex-wrap bg-gray-50/40">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-gray-800">{title}</h3>
+            {subtitle && <p className="text-[11px] text-gray-500 mt-0.5">{subtitle}</p>}
+          </div>
+          {action && <div className="shrink-0 ml-auto">{action}</div>}
+        </div>
+      )}
+      <div className={bodyClassName}>{children}</div>
+    </div>
+  );
+}
+
+export function MetricCard({ label, value, sub, hint, tone = 'gray', icon, badge, onClick }) {
+  const toneCls = {
+    gray: 'text-gray-900',
+    emerald: 'text-emerald-700',
+    blue: 'text-sky-700',
+    amber: 'text-amber-700',
+    red: 'text-rose-600',
+    violet: 'text-violet-700',
+    orange: 'text-orange-600'
+  }[tone];
+  const iconCls = {
+    gray: 'bg-gray-100 text-gray-500',
+    emerald: 'bg-emerald-50 text-emerald-700',
+    blue: 'bg-sky-50 text-sky-700',
+    amber: 'bg-amber-50 text-amber-700',
+    red: 'bg-rose-50 text-rose-600',
+    violet: 'bg-violet-50 text-violet-700',
+    orange: 'bg-orange-50 text-orange-600'
+  }[tone];
+  return (
+    <div
+      onClick={onClick}
+      className={`bg-white p-4 rounded-xl border border-gray-200/80 shadow-xs flex flex-col justify-between ${
+        onClick ? 'cursor-pointer hover:border-gray-300 transition-colors' : ''
+      }`}
+    >
+      <div>
+        <div className="flex min-h-[48px] items-start justify-between gap-2">
+          <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">{label}</span>
+            {badge}
+          </div>
+          {icon && (
+            <span className={`w-7 h-7 shrink-0 rounded-lg flex items-center justify-center ${iconCls}`}>
+              <Icon name={icon} className="w-3.5 h-3.5" />
+            </span>
+          )}
+        </div>
+        <p className={`text-xl sm:text-2xl font-bold mt-1.5 tracking-tight whitespace-nowrap ${toneCls}`}>{value}</p>
+        {sub && <p className="text-[11px] text-gray-600 mt-0.5 leading-snug">{sub}</p>}
+      </div>
+      {hint && <p className="text-[10px] text-gray-400 mt-2 pt-2 border-t border-gray-100">{hint}</p>}
+    </div>
+  );
+}
+
+export function ProgressBar({ value, max = 100, tone = 'emerald', className = '' }) {
+  const cls = {
+    emerald: 'bg-emerald-500',
+    amber: 'bg-amber-400',
+    red: 'bg-rose-500',
+    blue: 'bg-sky-500',
+    violet: 'bg-violet-500',
+    orange: 'bg-orange-500'
+  }[tone];
+  const pctVal = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+  return (
+    <div className={`h-2 bg-gray-100 rounded-full overflow-hidden ${className}`}>
+      <div className={`h-full rounded-full ${cls}`} style={{ width: `${pctVal}%` }} />
+    </div>
+  );
+}
+
+export function EmptyState({ title = 'Belum ada data', desc, icon = 'box', action }) {
+  return (
+    <div className="py-12 px-6 text-center">
+      <div className="w-11 h-11 rounded-xl bg-gray-100 text-gray-400 flex items-center justify-center mx-auto mb-3">
+        <Icon name={icon} className="w-5 h-5" />
+      </div>
+      <p className="text-xs font-semibold text-gray-700">{title}</p>
+      {desc && <p className="text-[11px] text-gray-400 mt-1 max-w-sm mx-auto">{desc}</p>}
+      {action && <div className="mt-4 flex justify-center">{action}</div>}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- page head */
+export function PageHead({ title, desc, actions, badge }) {
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h1 className="text-base font-bold text-gray-900 tracking-tight">{title}</h1>
+          {badge}
+        </div>
+        {desc && <p className="text-[11px] text-gray-500 mt-1 max-w-3xl leading-relaxed">{desc}</p>}
+      </div>
+      {actions && <div className="flex items-center gap-2 flex-wrap shrink-0">{actions}</div>}
+    </div>
+  );
+}
+
+export function Toolbar({ children, className = '' }) {
+  return <div className={`flex flex-wrap items-center gap-2 ${className}`}>{children}</div>;
+}
+
+export function usePagination(list, initialSize = 10) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(initialSize);
+  const total = list.length;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, pages);
+  const rows = useMemo(() => list.slice((safePage - 1) * pageSize, safePage * pageSize), [list, safePage, pageSize]);
+  useEffect(() => {
+    if (page > pages) setPage(pages);
+  }, [page, pages]);
+  return { rows, page: safePage, setPage, pageSize, setPageSize, total };
+}
+
+/* ------------------------------------------------------------------- tables */
+export const TH =
+  'px-3 sm:px-4 py-2.5 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap';
+export const TD = 'px-3 sm:px-4 py-2.5 sm:py-3 text-xs text-gray-700 align-middle';
+
+export function TableWrap({ children, className = '', minWidth, fluid = false }) {
+  const autoMinWidth = useMemo(() => {
+    const nodes = Children.toArray(children);
+    const thead = nodes.find((n) => n?.type === 'thead');
+    const headRow = thead ? Children.toArray(thead.props.children)[0] : null;
+    const cols = headRow ? Children.count(headRow.props.children) : 0;
+    if (cols >= 9) return 1040;
+    if (cols === 8) return 960;
+    if (cols === 7) return 880;
+    if (cols === 6) return 800;
+    if (cols === 5) return 700;
+    return 620;
+  }, [children]);
+  return (
+    <div className={`overflow-x-auto ${className}`}>
+      <table className="w-full" style={fluid ? undefined : { minWidth: Number(minWidth) || autoMinWidth }}>
+        {children}
+      </table>
+    </div>
+  );
+}
+
+export function Pagination({ page, pageSize, total, onPageChange, onPageSizeChange }) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = Math.min(total, page * pageSize);
+  return (
+    <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3 border-t border-gray-100 text-[11px] text-gray-500">
+      <div className="flex items-center gap-2">
+        <span>
+          Menampilkan <b className="text-gray-700">{from}</b>–<b className="text-gray-700">{to}</b> dari{' '}
+          <b className="text-gray-700">{total}</b>
+        </span>
+        {onPageSizeChange && (
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              onPageSizeChange(Number(e.target.value));
+              onPageChange(1);
+            }}
+            className="border border-gray-200 rounded-md px-1.5 py-1 text-[11px] bg-white"
+          >
+            {[10, 25, 50, 100].map((n) => (
+              <option key={n} value={n}>
+                {n} / hal
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          className="px-2 py-1 rounded-md border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
+        >
+          ‹
+        </button>
+        {Array.from({ length: Math.min(5, pages) }).map((_, i) => {
+          const start = Math.min(Math.max(1, page - 2), Math.max(1, pages - 4));
+          const p = start + i;
+          if (p > pages) return null;
+          return (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onPageChange(p)}
+              className={`min-w-[26px] px-2 py-1 rounded-md border ${
+                p === page ? 'border-gray-800 bg-gray-800 text-white' : 'border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              {p}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          disabled={page >= pages}
+          onClick={() => onPageChange(page + 1)}
+          className="px-2 py-1 rounded-md border border-gray-200 disabled:opacity-40 hover:bg-gray-50"
+        >
+          ›
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------- modals */
+export function Modal({ title, subtitle, onClose, children, footer, size = 'md' }) {
+  useEffect(() => {
+    const fn = (e) => e.key === 'Escape' && onClose();
+    document.addEventListener('keydown', fn);
+    return () => document.removeEventListener('keydown', fn);
+  }, [onClose]);
+
+  const widths = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-6">
+      <div className="absolute inset-0 bg-gray-900/55 backdrop-blur-[2px]" onClick={onClose} />
+      <div
+        className={`relative w-full ${widths[size]} bg-white rounded-2xl shadow-2xl max-h-[90vh] flex flex-col`}
+        role="dialog"
+        aria-modal="true"
+      >
+        <div className="px-5 py-4 border-b border-gray-100 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">{title}</h3>
+            {subtitle && <p className="text-[11px] text-gray-500 mt-0.5">{subtitle}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+            aria-label="Tutup"
+          >
+            <Icon name="x" className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="px-5 py-4 overflow-y-auto">{children}</div>
+        {footer && <div className="px-5 py-3.5 border-t border-gray-100 bg-gray-50/60 flex justify-end gap-2">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+export function Drawer({ title, subtitle, onClose, children, footer, width = 'max-w-xl' }) {
+  useEffect(() => {
+    const fn = (e) => e.key === 'Escape' && onClose();
+    document.addEventListener('keydown', fn);
+    return () => document.removeEventListener('keydown', fn);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[65] flex justify-end">
+      <div className="absolute inset-0 bg-gray-900/50 backdrop-blur-[2px]" onClick={onClose} />
+      <div className={`relative w-full ${width} bg-gray-50 h-full flex flex-col shadow-2xl`}>
+        <div className="px-5 py-4 bg-white border-b border-gray-200 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-bold text-gray-900">{title}</h3>
+            {subtitle && <p className="text-[11px] text-gray-500 mt-0.5">{subtitle}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+            aria-label="Tutup"
+          >
+            <Icon name="x" className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">{children}</div>
+        {footer && (
+          <div className="px-5 py-3.5 bg-white border-t border-gray-200 flex justify-end gap-2 flex-wrap">{footer}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function Toast({ toast, onClose }) {
+  if (!toast) return null;
+  const tones = {
+    success: 'bg-emerald-700 text-white',
+    error: 'bg-rose-700 text-white',
+    info: 'bg-gray-900 text-white',
+    warning: 'bg-amber-600 text-white'
+  };
+  return (
+    <div className="fixed bottom-5 right-5 z-[80] max-w-sm">
+      <div
+        className={`px-4 py-3 rounded-xl shadow-xl text-xs font-medium flex items-start gap-3 ${
+          tones[toast.tone] || tones.info
+        }`}
+      >
+        <span className="mt-0.5">
+          <Icon name={toast.tone === 'error' ? 'alert' : 'check'} className="w-4 h-4" />
+        </span>
+        <span className="leading-relaxed">{toast.msg}</span>
+        <button type="button" onClick={onClose} className="ml-1 opacity-70 hover:opacity-100">
+          <Icon name="x" className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function ReasonModal({ title, subtitle, label = 'Catatan', placeholder, confirmLabel = 'Simpan', danger, onClose, onSubmit, extra }) {
+  const [reason, setReason] = useState('');
+  return (
+    <Modal
+      title={title}
+      subtitle={subtitle}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Batal
+          </Button>
+          <Button
+            variant={danger ? 'danger' : 'primary'}
+            disabled={!reason.trim()}
+            onClick={() => onSubmit(reason.trim())}
+          >
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        {extra}
+        <Field label={label} required>
+          <Textarea
+            rows={4}
+            value={reason}
+            placeholder={placeholder}
+            onChange={(e) => setReason(e.target.value)}
+            autoFocus
+          />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+export function ConfirmModal({ title, message, confirmLabel = 'Ya, lanjutkan', danger, onClose, onConfirm }) {
+  return (
+    <Modal
+      title={title}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Batal
+          </Button>
+          <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-xs text-gray-600 leading-relaxed">{message}</p>
+    </Modal>
+  );
+}
+
+export function ProofModal({ src, title = 'Bukti Transfer', onClose }) {
+  return (
+    <Modal title={title} onClose={onClose} size="md">
+      <div className="rounded-xl overflow-hidden border border-gray-200 bg-gray-50">
+        {src ? (
+          <img src={src} alt={title} className="w-full max-h-[65vh] object-contain" />
+        ) : (
+          <div className="py-16 text-center text-xs text-gray-400">Tidak ada berkas bukti.</div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+export function ProofThumb({ src, onClick, label = 'Lihat bukti' }) {
+  if (!src) return <span className="text-[11px] text-gray-400">—</span>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group inline-flex items-center gap-1.5 text-[11px] font-semibold text-sky-700 hover:underline"
+    >
+      <span className="w-7 h-7 rounded-md overflow-hidden border border-gray-200 bg-gray-50 shrink-0">
+        <img src={src} alt={label} className="w-full h-full object-cover" />
+      </span>
+      {label}
+    </button>
+  );
+}
+
+/* ------------------------------------------------------------------- stepper */
+export function Stepper({ steps, className = '' }) {
+  return (
+    <div className={`flex flex-col sm:flex-row gap-2 sm:gap-0 ${className}`}>
+      {steps.map((s, i) => {
+        const dot =
+          s.state === 'done'
+            ? 'bg-emerald-500 text-white border-emerald-500'
+            : s.state === 'reject'
+            ? 'bg-rose-500 text-white border-rose-500'
+            : s.state === 'active'
+            ? 'bg-white text-amber-600 border-amber-500'
+            : 'bg-white text-gray-400 border-gray-300';
+        return (
+          <div key={s.label} className="flex-1 flex sm:flex-col items-start gap-2 sm:gap-1.5 relative">
+            <div className="flex items-center gap-2 sm:w-full">
+              <span className={`w-5 h-5 rounded-full border-2 flex items-center justify-center text-[10px] font-bold shrink-0 ${dot}`}>
+                {s.state === 'done' ? '✓' : s.state === 'reject' ? '!' : i + 1}
+              </span>
+              {i < steps.length - 1 && <span className="hidden sm:block flex-1 h-px bg-gray-200" />}
+            </div>
+            <div className="sm:pr-3">
+              <p className={`text-[11px] font-semibold ${s.state === 'pending' ? 'text-gray-400' : 'text-gray-800'}`}>
+                {s.label}
+              </p>
+              {s.by && <p className="text-[10px] text-gray-400">{s.by}</p>}
+              {s.at && <p className="text-[10px] text-gray-400">{fmtDate(s.at)}</p>}
+              {s.note && <p className="text-[10px] text-gray-500 leading-snug">{s.note}</p>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export const prSteps = (req) => [
+  {
+    label: 'Diajukan Finance',
+    state: 'done',
+    by: req.createdBy,
+    at: req.createdAt
+  },
+  {
+    label: 'Review Purchasing',
+    state: req.marketing ? (req.marketing.decision === 'ACC' ? 'done' : 'reject') : req.status === PREQ.REVIEW_MKT ? 'active' : 'pending',
+    by: req.marketing?.by,
+    at: req.marketing?.at,
+    note: req.marketing?.note
+  },
+  {
+    label: 'Approval Owner',
+    state: req.owner ? (req.owner.decision === 'ACC' ? 'done' : 'reject') : req.status === PREQ.APPROVAL_OWNER ? 'active' : 'pending',
+    by: req.owner?.by,
+    at: req.owner?.at,
+    note: req.owner?.note
+  },
+  {
+    label: 'Transfer',
+    state: req.transfer ? 'done' : req.status === PREQ.APPROVED ? 'active' : 'pending',
+    by: req.transfer?.by,
+    at: req.transfer?.at,
+    note: req.transfer?.note
+  }
+];
+
+/* -------------------------------------------------------------- stage tabs */
+export function StageTabs({ orders, value, onChange, includeRejected = true, className = '' }) {
+  const list = includeRejected ? STAGES : activeStages;
+  const counts = useMemo(() => {
+    const c = {};
+    STAGES.forEach((s) => (c[s.id] = 0));
+    (orders || []).forEach((o) => (c[orderStage(o)] += 1));
+    return c;
+  }, [orders]);
+  return (
+    <div className={`flex gap-1.5 overflow-x-auto pb-1 ${className}`}>
+      <button
+        type="button"
+        onClick={() => onChange('all')}
+        className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap border transition-all ${
+          value === 'all'
+            ? 'bg-gray-900 text-white border-gray-900'
+            : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+        }`}
+      >
+        Semua <span className="opacity-60">({(orders || []).length})</span>
+      </button>
+      {list.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          onClick={() => onChange(s.id)}
+          className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap border transition-all ${
+            value === s.id
+              ? 'bg-gray-900 text-white border-gray-900'
+              : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+          }`}
+        >
+          {s.label} <span className="opacity-60">({counts[s.id] || 0})</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ orders table */
+export function OrdersTable({ orders, onOpen, renderActions, empty = 'Tidak ada pesanan pada filter ini.', compact = false }) {
+  const HEAD = 'px-2 sm:px-3 xl:px-4 py-2.5 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap';
+  const CELL = 'px-2 sm:px-3 xl:px-4 py-2.5 sm:py-3 text-xs text-gray-700 align-middle';
+  return (
+    <TableWrap fluid>
+      <thead className="bg-gray-50 border-b border-gray-100">
+        <tr>
+          <th className={HEAD}>Invoice</th>
+          <th className={HEAD}>Mitra</th>
+          <th className={HEAD}>Item PO</th>
+          <th className={`${HEAD} text-right`}>Nilai</th>
+          <th className={HEAD}><span className="xl:hidden">Bayar</span><span className="hidden xl:inline">Pembayaran</span></th>
+          <th className={HEAD}>Tahap</th>
+          {renderActions && <th className={`${HEAD} text-right`}>Aksi</th>}
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-gray-100">
+        {orders.map((o) => (
+          <tr key={o.invoice} className="hover:bg-gray-50/70">
+            <td className={CELL}>
+              <button
+                type="button"
+                onClick={() => onOpen(o)}
+                className="font-bold text-sky-700 hover:underline whitespace-nowrap"
+              >
+                {o.invoice}
+              </button>
+              <p className="text-[10px] text-gray-400 mt-0.5">{fmtDate(o.date)}</p>
+            </td>
+            <td className={CELL}>
+              <p className="font-semibold text-gray-900">{o.mitraName}</p>
+              <p className="text-[10px] text-gray-400">
+                {o.level} · {o.brand}
+              </p>
+            </td>
+            <td className={CELL}>
+              <p className="font-medium text-gray-800">{o.produk}</p>
+              <p className="text-[10px] text-gray-400">
+                {o.variant} · {o.qty} pcs
+              </p>
+              {(() => {
+                const groups = splitAddressGroups(o);
+                if (!groups.length) return null;
+                return (
+                  <p className="text-[10px] text-emerald-700 font-semibold mt-0.5">
+                    {groups.length} alamat kirim ·{' '}
+                    {groups.filter((g) => g.courier?.name).length} ekspedisi terpilih
+                  </p>
+                );
+              })()}
+            </td>
+            <td className={`${CELL} text-right`}>
+              <p className="font-bold text-gray-900 whitespace-nowrap">{rp(o.subtotal)}</p>
+              <p className="text-[10px] text-gray-400">Ongkir {o.ongkir ? rp(o.ongkir) : '—'}</p>
+            </td>
+            <td className={CELL}>
+              {compact ? (
+                <div className="flex items-center gap-1">
+                  <span title={`DP: ${o.dpStatus}`} className={`w-2 h-2 rounded-full ${isPaid(o.dpStatus) ? 'bg-emerald-500' : o.dpStatus === PAY.MENUNGGU ? 'bg-amber-400' : 'bg-gray-300'}`} />
+                  <span title={`Pelunasan: ${o.pelunasanStatus}`} className={`w-2 h-2 rounded-full ${isPaid(o.pelunasanStatus) ? 'bg-emerald-500' : o.pelunasanStatus === PAY.MENUNGGU ? 'bg-amber-400' : 'bg-gray-300'}`} />
+                  <span title={`Ongkir: ${o.ongkirStatus}`} className={`w-2 h-2 rounded-full ${isPaid(o.ongkirStatus) ? 'bg-emerald-500' : o.ongkirStatus === PAY.MENUNGGU ? 'bg-amber-400' : 'bg-gray-300'}`} />
+                </div>
+              ) : (
+                <>
+                  <div className="flex xl:hidden items-center gap-1">
+                    <span title={`DP: ${o.dpStatus}`} className={`w-2 h-2 rounded-full ${isPaid(o.dpStatus) ? 'bg-emerald-500' : o.dpStatus === PAY.MENUNGGU ? 'bg-amber-400' : 'bg-gray-300'}`} />
+                    <span title={`Pelunasan: ${o.pelunasanStatus}`} className={`w-2 h-2 rounded-full ${isPaid(o.pelunasanStatus) ? 'bg-emerald-500' : o.pelunasanStatus === PAY.MENUNGGU ? 'bg-amber-400' : 'bg-gray-300'}`} />
+                    <span title={`Ongkir: ${o.ongkirStatus}`} className={`w-2 h-2 rounded-full ${isPaid(o.ongkirStatus) ? 'bg-emerald-500' : o.ongkirStatus === PAY.MENUNGGU ? 'bg-amber-400' : 'bg-gray-300'}`} />
+                  </div>
+                  <div className="hidden xl:flex flex-wrap gap-1">
+                    <Badge tone={payTone(o.dpStatus)}>DP {isPaid(o.dpStatus) ? '✓' : ''}</Badge>
+                    <Badge tone={payTone(o.pelunasanStatus)}>Lunas {isPaid(o.pelunasanStatus) ? '✓' : ''}</Badge>
+                    <Badge tone={payTone(o.ongkirStatus)}>Ongkir {isPaid(o.ongkirStatus) ? '✓' : ''}</Badge>
+                  </div>
+                </>
+              )}
+            </td>
+            <td className={CELL}>
+              <StageBadge order={o} />
+              <p className="text-[10px] text-gray-400 mt-0.5">{nextAction(o).label}</p>
+            </td>
+            {renderActions && (
+              <td className={`${CELL} text-right`}>
+                <div className="flex items-center justify-end gap-1.5 flex-wrap">{renderActions(o)}</div>
+              </td>
+            )}
+          </tr>
+        ))}
+        {orders.length === 0 && (
+          <tr>
+            <td colSpan={renderActions ? 7 : 6} className="px-4 py-12 text-center text-xs text-gray-400">
+              {empty}
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </TableWrap>
+  );
+}
+
+/* ------------------------------------------------------------- order drawer */
+export function OrderSummaryStrip({ order }) {
+  const outstanding = orderOutstanding(order);
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <div className="bg-white rounded-lg border border-gray-200 p-3">
+        <p className="text-[10px] font-semibold uppercase text-gray-400">Nilai Pesanan</p>
+        <p className="text-sm font-bold text-gray-900 mt-1">{rp(order.subtotal)}</p>
+      </div>
+      <div className="bg-white rounded-lg border border-gray-200 p-3">
+        <p className="text-[10px] font-semibold uppercase text-gray-400">Sudah Dibayar</p>
+        <p className="text-sm font-bold text-emerald-700 mt-1">{rp(orderPaid(order))}</p>
+      </div>
+      <div className="bg-white rounded-lg border border-gray-200 p-3">
+        <p className="text-[10px] font-semibold uppercase text-gray-400">Sisa Tagihan</p>
+        <p className={`text-sm font-bold mt-1 ${outstanding > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>{rp(outstanding)}</p>
+      </div>
+    </div>
+  );
+}
+
+export function OrderPaymentList({ order, onProof }) {
+  const rows = [
+    { label: 'DP', status: order.dpStatus, amount: order.dpNominal, proof: order.dpProof, by: order.dpVerifiedBy, at: order.dpVerifiedAt },
+    { label: 'Pelunasan', status: order.pelunasanStatus, amount: order.pelunasanNominal, proof: order.pelunasanProof, by: order.pelunasanVerifiedBy, at: order.pelunasanVerifiedAt },
+    { label: 'Ongkir', status: order.ongkirStatus, amount: order.ongkir, proof: order.ongkirProof, by: order.ongkirVerifiedBy, at: order.ongkirVerifiedAt }
+  ];
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+      {rows.map((r) => (
+        <div key={r.label} className="px-4 py-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold text-gray-800">{r.label}</p>
+            <p className="text-[10px] text-gray-400">
+              {r.at ? `Diverifikasi ${r.by || '-'} · ${fmtDate(r.at)}` : 'Belum diverifikasi'}
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs font-bold text-gray-900">{rp(r.amount)}</p>
+            <div className="mt-1 flex items-center justify-end gap-2">
+              <PayBadge status={r.status} />
+              {r.proof && <ProofThumb src={r.proof} onClick={() => onProof(r.proof, `Bukti ${r.label} ${order.invoice}`)} />}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function OrderTimeline({ order }) {
+  const timeline = orderTimeline(order);
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-4">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-3">Timeline Pesanan</p>
+      <ol className="space-y-0">
+        {timeline.map((s, i) => (
+          <li key={s.key} className="flex gap-3">
+            <div className="flex flex-col items-center">
+              <span
+                className={`w-5 h-5 rounded-full border-2 flex items-center justify-center text-[9px] font-bold shrink-0 ${
+                  s.state === 'done'
+                    ? 'bg-emerald-500 border-emerald-500 text-white'
+                    : s.state === 'reject'
+                    ? 'bg-rose-500 border-rose-500 text-white'
+                    : s.state === 'active'
+                    ? 'bg-white border-amber-500 text-amber-600'
+                    : 'bg-white border-gray-300 text-gray-400'
+                }`}
+              >
+                {s.state === 'done' ? '✓' : s.state === 'reject' ? '!' : i + 1}
+              </span>
+              {i < timeline.length - 1 && (
+                <span className={`w-px flex-1 min-h-[18px] ${s.state === 'done' ? 'bg-emerald-200' : 'bg-gray-200'}`} />
+              )}
+            </div>
+            <div className="pb-3">
+              <p className={`text-[11px] font-semibold ${s.state === 'pending' ? 'text-gray-400' : 'text-gray-800'}`}>
+                {s.label}
+              </p>
+              <p className="text-[10px] text-gray-400">
+                {s.at ? fmtDate(s.at) : ''} {s.note ? `· ${s.note}` : ''}
+              </p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+const orderPaymentPlan = (order) => {
+  const plan = Array.isArray(order?.paymentStages) ? order.paymentStages.filter(Boolean) : [];
+  if (plan.length >= 2) return plan.slice(0, 3);
+  const dp = Math.min(100, Math.max(0, num(order?.dpPct) || 50));
+  return [
+    { label: 'Termin 1 · DP', pct: dp, date: order?.date || '' },
+    { label: 'Termin 2 · Pelunasan', pct: 100 - dp, date: order?._projectMeta?.pelunasanDueDate || '' }
+  ].filter((stage) => num(stage.pct) > 0);
+};
+
+const paymentStageMeta = (order, index, total, stage) => {
+  const overdue = stage?.date && diffDays(stage.date, todayISO()) < 0;
+  const lunas = { label: 'Lunas', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+  const menunggu = { label: 'Menunggu verifikasi', className: 'bg-sky-50 text-sky-700 border-sky-200' };
+  if (index === 0) {
+    if (order.pelunasanStatus === PAY.ACC) return lunas;
+    if (order.dpStatus === PAY.ACC) return { label: 'DP terverifikasi', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+    if (order.dpStatus === PAY.MENUNGGU) return menunggu;
+  } else if (index === total - 1) {
+    if (order.pelunasanStatus === PAY.ACC) return lunas;
+    if (order.pelunasanStatus === PAY.MENUNGGU) return menunggu;
+  } else if (order.pelunasanStatus === PAY.ACC) {
+    return lunas;
+  }
+  return overdue
+    ? { label: 'Lewat jatuh tempo', className: 'bg-rose-50 text-rose-700 border-rose-200' }
+    : { label: 'Terjadwal', className: 'bg-amber-50 text-amber-700 border-amber-200' };
+};
+
+function PaymentPlanCard({ order }) {
+  const plan = orderPaymentPlan(order);
+  if (!plan.length) return null;
+  const total = plan.length;
+  const sumPct = plan.reduce((sum, stage) => sum + num(stage.pct ?? stage.percent), 0);
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Termin Pembayaran</p>
+        <span className="text-[10px] text-gray-400">
+          {total}x termin · total {sumPct}%
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {plan.map((stage, index) => {
+          const pct = num(stage.pct ?? stage.percent);
+          const amount = Math.round((num(order.subtotal) * pct) / 100);
+          const meta = paymentStageMeta(order, index, total, stage);
+          return (
+            <div key={`${index}-${stage.label || ''}`} className="rounded-lg border border-gray-100 bg-gray-50/70 px-2.5 py-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold text-gray-800">
+                  {stage.label || `Termin ${index + 1}`}
+                </span>
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${meta.className}`}>
+                  {meta.label}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[10px] text-gray-500 mt-0.5">
+                <span>
+                  {pct}% · jatuh tempo {stage.date ? fmtDate(stage.date) : '—'}
+                </span>
+                <span className="font-semibold text-gray-700">{rp(amount)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-gray-400">Nominal dihitung dari subtotal pesanan, di luar ongkir.</p>
+    </div>
+  );
+}
+
+export function OrderDrawer({ order, onClose, actions, onProof, printInvoice }) {
+  if (!order) return null;
+  const next = nextAction(order);
+  const st = stageMeta(orderStage(order));
+
+  const orderItems = order._projectMeta?.items || [];
+  const splitGroups = splitAddressGroups(order);
+  const mainRemainder = orderItems
+    .map((item) => {
+      const allocated = (item.splits || []).reduce(
+        (sum, sp) => sum + (Number(sp.qty) || 0),
+        0
+      );
+      const qty = Math.max(0, (Number(item.qty) || 1) - allocated);
+      return qty > 0 ? { item, qty } : null;
+    })
+    .filter(Boolean);
+
+  return (
+    <Drawer
+      title={
+        <span className="flex items-center gap-2 flex-wrap">
+          {order.invoice}
+          <Badge tone={st.tone}>{st.label}</Badge>
+        </span>
+      }
+      subtitle={`${order.mitraName} · ${order.level} · ${fmtDate(order.date)}`}
+      onClose={onClose}
+      width="max-w-2xl"
+      footer={
+        <>
+          {printInvoice && (
+            <Button variant="outline" icon="print" onClick={() => printInvoice(order)}>
+              Cetak Invoice
+            </Button>
+          )}
+          {actions}
+        </>
+      }
+    >
+      <div className={`rounded-xl border ${TONES[next.tone] || TONES.gray} px-4 py-3`}>
+        <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">Tindakan berikutnya</p>
+        <p className="text-xs font-semibold mt-0.5">
+          {next.who} — {next.label}
+        </p>
+      </div>
+
+      <OrderSummaryStrip order={order} />
+
+      <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Rincian Item</p>
+          <span className="text-[10px] text-gray-400">
+            {orderItems.length || 1} produk · {num(order.qty) || 1} pcs · DP {num(order.dpPct) || 0}%
+          </span>
+        </div>
+        {(orderItems.length
+          ? orderItems
+          : [
+              {
+                id: 'single',
+                title: order.produk,
+                brand: order.brand,
+                variant: order.variant,
+                qty: order.qty,
+                price: order.price,
+                discountPct: order.discountPct,
+                addon: order.addon,
+                subtotal: order.subtotal
+              }
+            ]
+        ).map((item, idx) => {
+          const qty = Math.max(1, num(item.qty));
+          const price = num(item.price);
+          const disc = num(item.discountPct);
+          const addon = num(item.addon);
+          const subtotal = num(item.subtotal) || (price + addon) * qty;
+          return (
+            <div
+              key={item.id ?? idx}
+              className="rounded-lg border border-gray-100 bg-gray-50/70 px-3 py-2"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-gray-900">{item.title || order.produk}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    {[item.brand || order.brand, item.variant, `${qty} pcs x ${rp(price)}`]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                  {(disc > 0 || addon > 0) && (
+                    <p className="text-[10px] text-gray-400 mt-0.5">
+                      {disc > 0 ? `Diskon mitra ${disc}%` : ''}
+                      {disc > 0 && addon > 0 ? ' · ' : ''}
+                      {addon > 0 ? `Tambahan ${rp(addon)}/pcs` : ''}
+                    </p>
+                  )}
+                </div>
+                <p className="text-xs font-bold text-gray-900 shrink-0">{rp(subtotal)}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <OrderPaymentList order={order} onProof={onProof} />
+
+      <PaymentPlanCard order={order} />
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1.5">Alamat Pengiriman</p>
+          {hasAddress(order) ? (
+            <>
+              <p className="text-xs font-semibold text-gray-900">{order.address.recipient}</p>
+              <p className="text-[11px] text-gray-600 leading-relaxed mt-0.5">{addressText(order)}</p>
+            </>
+          ) : (
+            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+              Mitra belum melengkapi alamat pengiriman.
+            </p>
+          )}
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1.5">Pengiriman</p>
+          <dl className="text-[11px] space-y-1">
+            <div className="flex justify-between gap-2">
+              <dt className="text-gray-400">Ekspedisi</dt>
+              <dd className="font-semibold text-gray-800">{order.ekspedisi || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt className="text-gray-400">Ongkir</dt>
+              <dd className="font-semibold text-gray-800">{order.ongkir ? rp(order.ongkir) : '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt className="text-gray-400">No. Resi</dt>
+              <dd className="font-semibold text-gray-800">{order.resi || '—'}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt className="text-gray-400">Status</dt>
+              <dd className="font-semibold text-gray-800">{order.shipStatus}</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+
+      {splitGroups.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
+              Pengiriman per Alamat
+            </p>
+            <span className="text-[10px] text-gray-400">
+              {splitGroups.length} alamat tambahan
+            </span>
+          </div>
+
+          {mainRemainder.length > 0 && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[11px] font-bold text-gray-800">
+                  Alamat Utama — {order.address?.recipient || order.mitraName}
+                </p>
+                <span className="text-[10px] font-semibold text-gray-500">
+                  Ekspedisi: {order.ekspedisi || '—'}
+                </span>
+              </div>
+              <div className="mt-1 space-y-0.5">
+                {mainRemainder.map(({ item, qty }) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between gap-2 text-[10px]"
+                  >
+                    <span className="text-gray-600">
+                      {item.title} — {item.variant}
+                    </span>
+                    <span className="font-bold text-gray-800">{qty}x</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {splitGroups.map((group, idx) => {
+            const dropship = group.rows.find(
+              (row) => row.split.senderName || row.split.senderPhone
+            );
+            return (
+              <div
+                key={String(group.address?.id ?? idx)}
+                className="rounded-lg border border-gray-200 p-2.5 space-y-1.5"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] font-bold text-gray-800">
+                    {group.address?.recipient || group.address?.name || 'Penerima'}
+                  </p>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                      group.courier?.name
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                    }`}
+                  >
+                    {group.courier?.name || 'Belum ada jasa kirim'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  {group.address?.address}
+                </p>
+                {group.address?.phone && (
+                  <p className="text-[10px] text-gray-500">{group.address.phone}</p>
+                )}
+                <div className="mt-1 space-y-0.5">
+                  {group.rows.map(({ item, split }) => (
+                    <div
+                      key={split.id}
+                      className="flex items-center justify-between gap-2 text-[10px]"
+                    >
+                      <span className="text-gray-600">
+                        {item.title} — {item.variant}
+                      </span>
+                      <span className="font-bold text-gray-800">
+                        {split.qty}x{split.weight ? ` · ${split.weight} g` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {dropship && (
+                  <p className="text-[10px] text-amber-700">
+                    Dropship: {dropship.split.senderName || '—'}
+                    {dropship.split.senderPhone ? ` (${dropship.split.senderPhone})` : ''}
+                    {dropship.split.senderNotes ? ` — "${dropship.split.senderNotes}"` : ''}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {order.revisionNote && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-amber-800">Catatan Revisi Mitra</p>
+          <p className="text-[11px] text-amber-900 mt-1 leading-relaxed">{order.revisionNote}</p>
+        </div>
+      )}
+
+      {order.notes && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Catatan</p>
+          <p className="text-[11px] text-gray-700 mt-1 leading-relaxed">{order.notes}</p>
+        </div>
+      )}
+
+      <OrderTimeline order={order} />
+
+      <div className="bg-white rounded-xl border border-gray-200 p-4 text-[10px] text-gray-400 flex flex-wrap gap-x-6 gap-y-1">
+        <span>Dibuat oleh: {order.createdBy || '—'}</span>
+        <span>ACC Purchasing: {order.marketingBy || '—'}</span>
+        <span>DP oleh: {order.dpVerifiedBy || '—'}</span>
+        <span>Pelunasan oleh: {order.pelunasanVerifiedBy || '—'}</span>
+        <span>Ongkir oleh: {order.ongkirVerifiedBy || '—'}</span>
+      </div>
+    </Drawer>
+  );
+}
+
+/* -------------------------------------------------------------------- shell */
+function findMenuItem(menus, id) {
+  for (const m of menus) {
+    if (m.id === id) return m;
+    if (m.children) {
+      const found = m.children.find((c) => c.id === id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function DashboardShell({
+  accent = ACCENTS.finance,
+  menus = [],
+  activeMenu,
+  onNavigate,
+  portalLabel = 'Portal',
+  portalSub = '',
+  brandName = 'Afathar Group',
+  brandInitial = 'A',
+  currentUser,
+  onLogout,
+  onNavigateStore,
+  notifications = [],
+  headerRight,
+  children,
+  darkSidebar = false
+}) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [openGroups, setOpenGroups] = useState(() => {
+    const o = {};
+    menus.forEach((m) => {
+      if (m.group) o[m.group] = true;
+    });
+    return o;
+  });
+
+  const activeItem = findMenuItem(menus, activeMenu);
+  const notifCount = notifications.filter((n) => n.unread !== false).length;
+
+  const sideBg = darkSidebar ? 'bg-[#111827] border-gray-800' : 'bg-white border-gray-200';
+  const sideText = darkSidebar ? 'text-gray-300' : 'text-gray-700';
+  const sideMuted = darkSidebar ? 'text-gray-500' : 'text-gray-400';
+  const sideBorder = darkSidebar ? 'border-gray-800' : 'border-gray-100';
+  const sideHover = darkSidebar ? 'hover:bg-white/5 hover:text-white' : accent.sidebarHover;
+  const groupColor = darkSidebar ? 'text-gray-500 hover:bg-white/5' : 'text-gray-500 hover:bg-gray-50';
+
+  return (
+    <AccentContext.Provider value={accent}>
+      <div className="min-h-[calc(100vh-64px)] sm:min-h-[calc(100vh-72px)] bg-[#F5F7F6] text-stone-800 antialiased font-sans flex flex-col">
+        <div className="flex flex-1">
+        {mobileOpen && (
+          <div
+            onClick={() => setMobileOpen(false)}
+            className="fixed top-16 sm:top-[72px] inset-x-0 bottom-0 bg-gray-900/50 z-30 lg:hidden"
+          />
+        )}
+
+        <aside
+          className={`fixed top-16 sm:top-[72px] bottom-0 left-0 z-40 w-64 border-r shrink-0 flex flex-col justify-between transition-transform duration-300 ${sideBg} ${
+            mobileOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full lg:translate-x-0'
+          } lg:sticky lg:top-[72px] lg:h-[calc(100vh-72px)] lg:translate-x-0`}
+        >
+          <div className="min-h-0 flex flex-col">
+            <div className={`px-5 py-4 border-b ${sideBorder} flex items-center justify-between`}>
+              <div className="flex items-center gap-2.5">
+                <div className={`w-9 h-9 rounded-xl ${accent.solidText} flex items-center justify-center font-bold text-sm shadow-sm`}>
+                  {brandInitial}
+                </div>
+                <div>
+                  <h1 className={`text-sm font-bold leading-none ${darkSidebar ? 'text-white' : 'text-stone-900'}`}>
+                    {brandName}
+                  </h1>
+                  <p className={`text-[9px] font-bold uppercase tracking-widest mt-1 ${darkSidebar ? 'text-amber-400' : accent.text}`}>
+                    {portalLabel}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileOpen(false)}
+                className={`lg:hidden p-1 rounded-md ${sideMuted} hover:text-gray-800`}
+              >
+                <Icon name="x" className="w-4 h-4" />
+              </button>
+            </div>
+
+            {portalSub && (
+              <p className={`px-5 pt-3 pb-1 text-[10px] ${sideMuted}`}>{portalSub}</p>
+            )}
+
+            <nav className="p-3 space-y-0.5 overflow-y-auto flex-1">
+              {menus.map((m) =>
+                m.children ? (
+                  <div key={m.group || m.label} className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setOpenGroups({ ...openGroups, [m.group]: !openGroups[m.group] })}
+                      className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider ${groupColor}`}
+                    >
+                      <span>{m.label}</span>
+                      <span className={`transition-transform ${openGroups[m.group] ? 'rotate-90' : ''}`}>
+                        <Icon name="chevron" className="w-3 h-3" />
+                      </span>
+                    </button>
+                    {openGroups[m.group] && (
+                      <div className="mt-1 space-y-0.5 pl-1">
+                        {m.children.map((c) => {
+                          const active = activeMenu === c.id;
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => {
+                                onNavigate(c.id);
+                                setMobileOpen(false);
+                              }}
+                              className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[11px] font-medium transition-all ${
+                                active
+                                  ? accent.sidebarActive
+                                  : `${sideText} ${sideHover}`
+                              }`}
+                            >
+                              <span className="flex items-center gap-2 min-w-0">
+                                <Icon name={c.icon || 'chevron'} className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                                <span className="truncate">{c.label}</span>
+                              </span>
+                              {c.badge ? (
+                                <span
+                                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                                    active ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-700'
+                                  }`}
+                                >
+                                  {c.badge}
+                                </span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      onNavigate(m.id);
+                      setMobileOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-[11px] font-medium transition-all ${
+                      activeMenu === m.id ? accent.sidebarActive : `${sideText} ${sideHover}`
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <Icon name={m.icon || 'grid'} className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                      <span className="truncate">{m.label}</span>
+                    </span>
+                    {m.badge ? (
+                      <span
+                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                          activeMenu === m.id ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-700'
+                        }`}
+                      >
+                        {m.badge}
+                      </span>
+                    ) : null}
+                  </button>
+                )
+              )}
+            </nav>
+          </div>
+
+          <div className={`p-3 border-t ${sideBorder} space-y-2`}>
+            <div className={`flex items-center gap-2.5 px-2 py-2 rounded-lg ${darkSidebar ? 'bg-white/5' : 'bg-gray-50'}`}>
+              <div className={`w-8 h-8 rounded-full ${accent.solidText} flex items-center justify-center text-[11px] font-bold shrink-0`}>
+                {initials(currentUser?.name || 'User')}
+              </div>
+              <div className="min-w-0">
+                <p className={`text-[11px] font-semibold truncate ${darkSidebar ? 'text-white' : 'text-gray-900'}`}>
+                  {currentUser?.name || 'User'}
+                </p>
+                <p className={`text-[9px] uppercase tracking-wider ${sideMuted}`}>
+                  {roleLabel(currentUser?.role)}
+                </p>
+              </div>
+            </div>
+            {onNavigateStore && (
+              <button
+                type="button"
+                onClick={onNavigateStore}
+                className={`w-full py-2 px-3 text-[11px] font-semibold rounded-lg flex items-center justify-center gap-1.5 border transition ${
+                  darkSidebar
+                    ? 'border-gray-700 text-amber-300 hover:bg-white/5'
+                    : `bg-white border-gray-200 ${accent.text} hover:border-gray-300`
+                }`}
+              >
+                <Icon name="store" className="w-3.5 h-3.5" /> Toko Mitra
+              </button>
+            )}
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="w-full py-2 px-3 text-[11px] font-semibold rounded-lg flex items-center justify-center gap-1.5 text-rose-500 hover:bg-rose-50 transition"
+              >
+                <Icon name="logout" className="w-3.5 h-3.5" /> Keluar
+              </button>
+            )}
+          </div>
+        </aside>
+
+        <div className="flex-1 flex flex-col min-w-0 min-h-[calc(100vh-64px)] sm:min-h-[calc(100vh-72px)]">
+          <header className="h-16 px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2 sm:gap-3 border-b border-gray-200/80 bg-white/95 backdrop-blur sticky top-16 sm:top-[72px] z-20">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <button
+                type="button"
+                onClick={() => setMobileOpen(true)}
+                className="lg:hidden p-1.5 rounded-lg border border-gray-200 text-gray-700"
+                aria-label="Buka menu"
+              >
+                <Icon name="menu" className="w-4 h-4" />
+              </button>
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{portalLabel}</p>
+                <h2 className="text-sm font-bold text-gray-900 truncate">{activeItem?.title || activeItem?.label || 'Dashboard'}</h2>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0 ml-auto">
+              {headerRight && <div className="hidden md:flex items-center">{headerRight}</div>}
+              <span className="hidden lg:inline-flex items-center gap-1.5 text-[10px] font-bold text-gray-500 bg-gray-50 border border-gray-200 px-2.5 py-1.5 rounded-full">
+                <Icon name="clock" className="w-3 h-3" />
+                {fmtDate(todayISO())}
+              </span>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setNotifOpen(!notifOpen)}
+                  className="relative w-9 h-9 rounded-lg bg-white border border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-50"
+                >
+                  <Icon name="bell" className="w-4 h-4" />
+                  {notifCount > 0 && (
+                    <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-rose-600 text-white rounded-full text-[9px] font-bold flex items-center justify-center">
+                      {notifCount}
+                    </span>
+                  )}
+                </button>
+                {notifOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setNotifOpen(false)} />
+                    <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden">
+                      <div className="px-3.5 py-2.5 border-b border-gray-100 flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-gray-800">Pemberitahuan</span>
+                        <span className="text-[9px] font-semibold text-gray-400 uppercase">{notifCount} baru</span>
+                      </div>
+                      <div className="max-h-72 overflow-y-auto divide-y divide-gray-50">
+                        {notifications.length === 0 && (
+                          <p className="px-4 py-8 text-center text-[11px] text-gray-400">Tidak ada pemberitahuan.</p>
+                        )}
+                        {notifications.map((n) => (
+                          <button
+                            key={n.id}
+                            type="button"
+                            onClick={() => {
+                              if (n.onClick) n.onClick();
+                              setNotifOpen(false);
+                            }}
+                            className="w-full text-left px-3.5 py-2.5 hover:bg-gray-50 flex gap-2.5"
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${n.tone === 'red' ? 'bg-rose-500' : n.tone === 'amber' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                            <span className="min-w-0">
+                              <span className="block text-[11px] font-semibold text-gray-800 leading-snug">{n.title}</span>
+                              {n.sub && <span className="block text-[10px] text-gray-500 mt-0.5">{n.sub}</span>}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="flex items-center gap-2 pl-2 border-l border-gray-200">
+                <div className={`w-8 h-8 rounded-full ${accent.solidText} flex items-center justify-center text-[11px] font-bold`}>
+                  {initials(currentUser?.name || 'U')}
+                </div>
+                <div className="hidden sm:block">
+                  <p className="text-[11px] font-bold text-gray-900 leading-none">{currentUser?.name || 'User'}</p>
+                  <p className="text-[9px] uppercase tracking-wider text-gray-400 mt-1">{roleLabel(currentUser?.role)}</p>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <main className="flex-1 px-3 sm:px-5 lg:px-8 py-5 lg:py-6">
+            <div className="max-w-[1500px] mx-auto space-y-5">{children}</div>
+          </main>
+        </div>
+        </div>
+        <Footer />
+      </div>
+    </AccentContext.Provider>
+  );
+}
+
+/* ------------------------------------------------------------------ rekap fee */
+const feeLabelOf = (brand) =>
+  brandDiscountTypeFor(brand) === 'nominal'
+    ? rp(brandDiscountValueFor(brand))
+    : `${brandDiscountValueFor(brand)}%`;
+const feeMitraLabelOf = (brand, level) =>
+  feeTypeFor(brand) === 'nominal' ? rp(brandFeeValue(brand, level)) : `${brandFeeValue(brand, level)}%`;
+const feeCompanyLabelOf = (brand, level) => {
+  const diff = num(brandDiscountValueFor(brand)) - num(brandFeeValue(brand, level));
+  return brandDiscountTypeFor(brand) === 'nominal' ? rp(Math.max(0, diff)) : `${Math.max(0, diff)}%`;
+};
+const levelOfOrder = (order) => (LEVELS.includes(order?.level) ? order.level : 'DB All');
+
+export function FeeRecapPanel({
+  orders = [],
+  brands = [],
+  title = 'Rekap Fee & Diskon Brand',
+  subtitle = 'Fee mitra dipotong saat checkout, diskon pabrik diterima perusahaan. Fee perusahaan = diskon pabrik − fee mitra.'
+}) {
+  const [brandFilter, setBrandFilter] = useState('all');
+  const valid = useMemo(
+    () => (orders || []).filter((o) => !o.cancelReason && o.marketingStatus !== MKT.TOLAK),
+    [orders]
+  );
+  const filtered = useMemo(
+    () => (brandFilter === 'all' ? valid : valid.filter((o) => o.brand === brandFilter)),
+    [valid, brandFilter]
+  );
+  const feeOf = (o) => num(o.feeMitraNominal) || num(o.discountNominal);
+  const brandDiscOf = (o) => num(o.brandDiscountNominal);
+  const companyOf = (o) => Math.max(0, num(o.feeCompanyNominal) || brandDiscOf(o) - feeOf(o));
+
+  const totals = useMemo(
+    () => ({
+      count: filtered.length,
+      qty: sumBy(filtered, (o) => o.qty),
+      omzet: sumBy(filtered, (o) => o.subtotal),
+      feeMitra: sumBy(filtered, feeOf),
+      brandDiscount: sumBy(filtered, brandDiscOf),
+      feeCompany: sumBy(filtered, companyOf)
+    }),
+    [filtered]
+  );
+
+  const brandRows = useMemo(() => {
+    const map = new Map();
+    filtered.forEach((o) => {
+      const key = o.brand || 'Lainnya';
+      const row = map.get(key) || {
+        brand: key,
+        count: 0,
+        qty: 0,
+        omzet: 0,
+        feeMitra: 0,
+        brandDiscount: 0,
+        feeCompany: 0
+      };
+      row.count += 1;
+      row.qty += num(o.qty);
+      row.omzet += num(o.subtotal);
+      row.feeMitra += feeOf(o);
+      row.brandDiscount += brandDiscOf(o);
+      row.feeCompany += companyOf(o);
+      map.set(key, row);
+    });
+    return [...map.values()].sort((a, b) => b.feeMitra - a.feeMitra);
+  }, [filtered]);
+
+  const levelRows = useMemo(
+    () =>
+      LEVELS.map((level) => {
+        const rows = filtered.filter((o) => levelOfOrder(o) === level);
+        return {
+          level,
+          count: rows.length,
+          feeMitra: sumBy(rows, feeOf),
+          feeCompany: sumBy(rows, companyOf)
+        };
+      }),
+    [filtered]
+  );
+
+  const pagination = usePagination(filtered, 10);
+
+  return (
+    <div className="space-y-4">
+      <PageHead
+        title={title}
+        desc={subtitle}
+        actions={
+          <Select value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)} className="min-w-[180px]">
+            <option value="all">Semua Brand</option>
+            {[...new Set((orders || []).map((o) => o.brand).filter(Boolean))].map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </Select>
+        }
+      />
+
+      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <MetricCard label="Omzet Pesanan" value={rp(totals.omzet)} sub={`${totals.count} pesanan · ${totals.qty} pcs`} icon="receipt" tone="gray" />
+        <MetricCard label="Fee Mitra (dipotong)" value={rp(totals.feeMitra)} sub="Mengurangi harga varian saat checkout" icon="users" tone="emerald" />
+        <MetricCard label="Diskon Pabrik" value={rp(totals.brandDiscount)} sub="Diterima dari brand / pabrik" icon="box" tone="amber" />
+        <MetricCard label="Fee Perusahaan" value={rp(totals.feeCompany)} sub="Diskon pabrik − fee mitra" icon="wallet" tone="red" />
+      </div>
+
+      <Card title="Rekap per Brand" subtitle="Total fee mitra, diskon pabrik, dan fee perusahaan tiap brand">
+        {brandRows.length ? (
+          <TableWrap>
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className={TH}>Brand</th>
+                <th className={`${TH} text-right`}>Pesanan</th>
+                <th className={`${TH} text-right`}>Qty</th>
+                <th className={`${TH} text-right`}>Omzet</th>
+                <th className={`${TH} text-right`}>Fee Mitra</th>
+                <th className={`${TH} text-right`}>Diskon Pabrik</th>
+                <th className={`${TH} text-right`}>Fee Perusahaan</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {brandRows.map((row) => (
+                <tr key={row.brand}>
+                  <td className={`${TD} font-semibold text-gray-900`}>{row.brand}</td>
+                  <td className={`${TD} text-right`}>{row.count}</td>
+                  <td className={`${TD} text-right`}>{row.qty} pcs</td>
+                  <td className={`${TD} text-right`}>{rp(row.omzet)}</td>
+                  <td className={`${TD} text-right font-semibold text-emerald-700`}>{rp(row.feeMitra)}</td>
+                  <td className={`${TD} text-right text-amber-700`}>{rp(row.brandDiscount)}</td>
+                  <td className={`${TD} text-right font-semibold`}>{rp(row.feeCompany)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        ) : (
+          <EmptyState title="Belum ada pesanan" desc="Rekap fee muncul setelah pesanan mitra dibuat." icon="receipt" />
+        )}
+      </Card>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <Card title="Fee Mitra per Level" subtitle="Total fee mitra yang dipotong dari harga varian">
+          <TableWrap>
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className={TH}>Level</th>
+                <th className={`${TH} text-right`}>Pesanan</th>
+                <th className={`${TH} text-right`}>Fee Mitra</th>
+                <th className={`${TH} text-right`}>Fee Perusahaan</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {levelRows.map((row) => (
+                <tr key={row.level}>
+                  <td className={TD}>
+                    <Badge tone={levelTone(row.level)}>{row.level}</Badge>
+                  </td>
+                  <td className={`${TD} text-right`}>{row.count}</td>
+                  <td className={`${TD} text-right font-semibold text-emerald-700`}>{rp(row.feeMitra)}</td>
+                  <td className={`${TD} text-right`}>{rp(row.feeCompany)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </Card>
+
+        <Card title="Konfigurasi Brand" subtitle="Diskon pabrik & fee mitra yang diinput di menu Brand">
+          <TableWrap>
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className={TH}>Brand</th>
+                <th className={`${TH} text-right`}>Diskon Pabrik</th>
+                {LEVELS.map((level) => (
+                  <th key={level} className={`${TH} text-right`}>
+                    {level}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {(brands || []).map((b) => (
+                <tr key={b.id || b.name}>
+                  <td className={`${TD} font-semibold text-gray-900`}>
+                    {b.name}
+                    <span className="block text-[10px] text-gray-400">
+                      Fee perusahaan {feeCompanyLabelOf(b, 'DB All')} / pcs (DB All)
+                    </span>
+                  </td>
+                  <td className={`${TD} text-right`}>{feeLabelOf(b)}</td>
+                  {LEVELS.map((level) => (
+                    <td key={level} className={`${TD} text-right`}>
+                      {feeMitraLabelOf(b, level)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              {!brands?.length && (
+                <tr>
+                  <td className={`${TD} text-gray-400`} colSpan={6}>
+                    Belum ada brand.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </TableWrap>
+        </Card>
+      </div>
+
+      <Card title="Rincian Fee per Pesanan" subtitle={`${pagination.total} pesanan`}>
+        {filtered.length ? (
+          <>
+            <TableWrap>
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className={TH}>Invoice</th>
+                  <th className={TH}>Mitra</th>
+                  <th className={TH}>Brand / Produk</th>
+                  <th className={`${TH} text-right`}>Qty</th>
+                  <th className={`${TH} text-right`}>Omzet</th>
+                  <th className={`${TH} text-right`}>Fee Mitra</th>
+                  <th className={`${TH} text-right`}>Diskon Pabrik</th>
+                  <th className={`${TH} text-right`}>Fee Perusahaan</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {pagination.rows.map((o) => (
+                  <tr key={o.id || o.invoice}>
+                    <td className={TD}>
+                      <p className="font-semibold text-gray-900">{o.invoice}</p>
+                      <p className="text-[10px] text-gray-400">{fmtDate(o.date)}</p>
+                    </td>
+                    <td className={TD}>
+                      <p className="font-semibold text-gray-800">{o.mitraName}</p>
+                      <p className="text-[10px] text-gray-400">{o.level}</p>
+                    </td>
+                    <td className={TD}>
+                      <p className="font-semibold text-gray-800">{o.produk}</p>
+                      <p className="text-[10px] text-gray-400">{o.brand}</p>
+                    </td>
+                    <td className={`${TD} text-right`}>{o.qty}</td>
+                    <td className={`${TD} text-right`}>{rp(o.subtotal)}</td>
+                    <td className={`${TD} text-right font-semibold text-emerald-700`}>{rp(feeOf(o))}</td>
+                    <td className={`${TD} text-right text-amber-700`}>{rp(brandDiscOf(o))}</td>
+                    <td className={`${TD} text-right font-semibold`}>{rp(companyOf(o))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </TableWrap>
+            <Pagination
+              page={pagination.page}
+              pageSize={pagination.pageSize}
+              total={pagination.total}
+              onPageChange={pagination.setPage}
+              onPageSizeChange={pagination.setPageSize}
+            />
+          </>
+        ) : (
+          <EmptyState title="Belum ada data fee" desc="Pilih brand lain atau buat pesanan terlebih dahulu." icon="receipt" />
+        )}
+      </Card>
+    </div>
+  );
+}
+
