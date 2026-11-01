@@ -143,14 +143,17 @@ const titleKey = (title) => String(title || '').trim().toLowerCase();
 export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = [], products = [] } = {}) =>
   (projectOrders || []).map((order) => {
     const { name, city } = splitMitraName(order.mitraName);
+    const orderCity = order.mitraCity || city;
     const seed = (seedMitra || []).find((m) => m.name.toLowerCase() === name.toLowerCase());
-    const isHen = name.toUpperCase().includes('HENI');
     const level = normalizeLevel(order.mitraLevel || seed?.level);
     const items = Array.isArray(order.items) && order.items.length ? order.items : [];
     const orderTitle = order.title || items[0]?.title;
     const matchedProduct = (products || []).find((p) => titleKey(p.title) === titleKey(orderTitle));
     const qty = items.reduce((sum, item) => sum + num(item.qty), 0) || num(order.qty) || 1;
-    const subtotal = num(order.total) || items.reduce((sum, item) => sum + num(item.subtotal), 0);
+    const subtotal =
+      num(order.subtotal) ||
+      num(order.total) ||
+      items.reduce((sum, item) => sum + num(item.subtotal), 0);
     const price = items.length === 1 ? num(items[0].price) : Math.round(subtotal / Math.max(1, qty));
     const feeMitraNominal =
       num(order.feeMitraNominal) ||
@@ -170,13 +173,12 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
     const dpNominal = num(order.dpNominal) || Math.round((subtotal * schemeDpPct) / 100);
     const flags = statusFlags(order.status);
     const date = parseProjectDate(order.date);
-    const ongkir = flags.paid ? Math.max(20000, Math.round(subtotal * 0.05)) : 0;
+    const hasShipping = order.ongkir !== undefined && order.ongkir !== null && order.ongkir !== '';
+    const ongkir = hasShipping ? num(order.ongkir) : flags.paid ? Math.max(20000, Math.round(subtotal * 0.05)) : 0;
     const address = flags.dpPaid
-      ? isHen && currentUser?.address
-        ? currentUser.address
-        : city
-        ? `Kota ${city}`
-        : null
+      ? order.mitraAddress ||
+        order.recipientAddress ||
+        (orderCity ? `Kota ${orderCity}` : null)
       : null;
     const invoice = order.orderNo || order.id || `INV-${Date.now()}`;
     const paymentPlan =
@@ -197,10 +199,11 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       id: invoice,
       invoice,
       date,
-      mitraId: seed?.id || `m-${slug(name)}`,
-      mitraName: name || currentUser?.name || 'HENI',
+      mitraId: order.mitraId || seed?.id || `m-${slug(name)}`,
+      mitraName: name || currentUser?.name || 'Mitra',
       level,
-      phone: order.mitraPhone || seed?.phone || (isHen ? currentUser?.phone : ''),
+      phone: order.mitraPhone || seed?.phone || currentUser?.phone || '',
+      email: order.mitraEmail || '',
       brand: prettyBrand(order.brand || items[0]?.brand),
       produkId: matchedProduct ? `p-${matchedProduct.id}` : `p-${slug(orderTitle)}`,
       produk: orderTitle || 'Pesanan PO',
@@ -220,31 +223,37 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       dpNominal,
       pelunasanNominal: Math.max(0, subtotal - dpNominal),
       paymentStages: paymentPlan,
-      dpStatus: flags.rejected ? PAY.TOLAK : flags.dpPaid ? PAY.ACC : PAY.BELUM,
+      dpStatus: order.dpStatus || (flags.rejected ? PAY.TOLAK : flags.dpPaid ? PAY.ACC : PAY.BELUM),
       dpProof: '',
-      dpVerifiedBy: flags.dpPaid ? 'Nadia Finance' : '',
+      dpVerifiedBy: flags.dpPaid ? 'Admin Finance' : '',
       dpVerifiedAt: flags.dpPaid ? date : '',
-      pelunasanStatus: flags.paid ? PAY.ACC : PAY.BELUM,
+      pelunasanStatus: order.pelunasanStatus || (flags.paid ? PAY.ACC : PAY.BELUM),
       pelunasanProof: '',
-      pelunasanVerifiedBy: flags.paid ? 'Nadia Finance' : '',
+      pelunasanVerifiedBy: flags.paid ? 'Admin Finance' : '',
       pelunasanVerifiedAt: flags.paid ? date : '',
       ongkir,
       ongkirAt: flags.paid ? date : '',
       ekspedisi: order.courier || '',
       weight: `${Math.max(1, Math.round(qty * 0.4))} kg`,
       shippingNote: '',
-      ongkirStatus: flags.paid ? PAY.ACC : PAY.BELUM,
+      ongkirStatus: order.ongkirStatus || (flags.paid ? PAY.ACC : PAY.BELUM),
       ongkirProof: '',
-      ongkirVerifiedBy: flags.paid ? 'Nadia Finance' : '',
+      ongkirVerifiedBy: flags.paid ? 'Admin Finance' : '',
       ongkirVerifiedAt: flags.paid ? date : '',
       resi: flags.shipped ? `AWB-${String(invoice).replace(/\s+/g, '')}` : '',
       shippedAt: flags.shipped ? date : '',
       receivedAt: flags.done ? date : '',
       shipStatus: flags.done ? SHIP.DITERIMA : flags.shipped ? SHIP.DIKIRIM : flags.paid ? SHIP.SIAP : SHIP.BELUM,
-      marketingStatus: flags.rejected ? (flags.done ? MKT.TOLAK : MKT.ACC) : flags.dpPaid ? MKT.ACC : MKT.PENDING,
+      marketingStatus: order.marketingStatus
+        ? order.marketingStatus
+        : flags.rejected
+          ? (flags.done ? MKT.TOLAK : MKT.ACC)
+          : flags.dpPaid
+            ? MKT.ACC
+            : MKT.PENDING,
 
       marketingNote: '',
-      marketingBy: flags.dpPaid ? 'Fajar Marketing' : '',
+      marketingBy: flags.dpPaid ? 'Admin Marketing' : '',
       marketingAt: flags.dpPaid ? date : '',
       productionStatus: flags.paid ? PROD.READY : flags.dpPaid ? PROD.RUN : PROD.QUEUE,
       readyAt: flags.paid ? date : '',
@@ -258,7 +267,7 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
         image: order.image,
         closeDate: order.closeDate,
         isClosedPO: order.isClosedPO,
-        city,
+        city: orderCity,
         mitraPhone: order.mitraPhone,
         pelunasanDueDate: order.pelunasanDueDate || matchedProduct?.pelunasanDueDate || ''
       }
@@ -295,7 +304,7 @@ export const alignCoreOrdersToProducts = (coreOrders, coreProducts) => {
 };
 
 const STATUS_META = {
-  baru: ['Pesanan Dibuat', 'bg-amber-100 text-amber-800'],
+  baru: ['Menunggu ACC Admin', 'bg-amber-100 text-amber-800'],
   produksi: ['DP Terbayar (Validasi Selesai)', 'bg-emerald-100 text-emerald-800'],
   alamat: ['Menunggu Alamat Mitra', 'bg-cyan-100 text-cyan-800'],
   ongkir: ['DP Terbayar (Validasi Selesai)', 'bg-emerald-100 text-emerald-800'],
@@ -372,7 +381,24 @@ export const coreOrdersToProject = (coreOrders) =>
       isClosedPO: !!meta.isClosedPO,
       closeDate: meta.closeDate || '-',
       image: meta.image || FALLBACK_IMAGE,
-      items: buildProjectItems(order)
+      items: buildProjectItems(order),
+      dpStatus: order.dpStatus,
+      dpProof: order.dpProof,
+      dpBank: order.dpBank,
+      dpNote: order.dpNote,
+      dpSubmittedAt: order.dpSubmittedAt,
+      pelunasanStatus: order.pelunasanStatus,
+      pelunasanProof: order.pelunasanProof,
+      pelunasanBank: order.pelunasanBank,
+      pelunasanNote: order.pelunasanNote,
+      pelunasanSubmittedAt: order.pelunasanSubmittedAt,
+      ongkirStatus: order.ongkirStatus,
+      ongkirProof: order.ongkirProof,
+      ongkirBank: order.ongkirBank,
+      ongkirNote: order.ongkirNote,
+      ongkirSubmittedAt: order.ongkirSubmittedAt,
+      marketingStatus: order.marketingStatus,
+      stage
     };
   });
 
@@ -422,6 +448,9 @@ export const projectProductsToCore = (products) =>
       category: product.category || 'Gamis & Abaya',
       price: num(product.price),
       hpp: Math.round(num(product.price) * 0.62),
+      isSale: !!product.isSale,
+      discountPercent: num(product.discountPercent) || 0,
+      originalPrice: num(product.originalPrice) || 0,
       openDate: product.openDate ? parseProjectDate(product.openDate) : '',
       closeDate,
       closeTime: closeTimeMatch ? closeTimeMatch[1] : '',
@@ -491,9 +520,9 @@ export const coreProductsToProject = (coreProducts, prevProducts) => {
       price: basePrice,
       priceMin: basePrice,
       priceMax: maxPrice,
-      originalPrice: base?.originalPrice || Math.round(basePrice * 1.2),
-      discountPercent: base?.discountPercent || 0,
-      isSale: !!base?.isSale,
+      originalPrice: product.originalPrice ? num(product.originalPrice) : (base?.originalPrice || (product.isSale && product.discountPercent ? Math.round(basePrice / (1 - num(product.discountPercent) / 100)) : Math.round(basePrice * 1.2))),
+      discountPercent: product.discountPercent != null ? num(product.discountPercent) : (base?.discountPercent || 0),
+      isSale: product.isSale !== undefined ? !!product.isSale : (base?.isSale !== undefined ? !!base.isSale : false),
       status: product.status === 'closed' ? 'closed' : 'pre_order',
       statusLabel: product.status === 'closed' ? 'PO Ditutup' : 'Open Pre-Order',
       tutupPO: longDate(product.closeDate),
@@ -590,15 +619,20 @@ export const buildMitraList = (coreOrders, seedMitra, currentUser) => {
       joinedAt: existing?.joinedAt || order.date
     });
   });
-  if (currentUser?.name) {
+  const isMitraUser =
+    currentUser?.name &&
+    (!currentUser.roleId || currentUser.roleId === 'mitra') &&
+    !['owner', 'finance', 'marketing'].includes(String(currentUser.role || '').toLowerCase());
+
+  if (isMitraUser) {
     const key = currentUser.name.toLowerCase();
     if (!map.has(key)) {
       map.set(key, {
         id: `m-${slug(currentUser.name)}`,
         name: currentUser.name,
-        level: 'DB All',
+        level: normalizeLevel(currentUser.level || currentUser.role || 'DB All'),
         phone: currentUser.phone || '',
-        city: 'Bekasi',
+        city: currentUser.city || '',
         address: currentUser.address || '',
         active: true,
         deposit: 0,
@@ -635,6 +669,8 @@ export const paymentToCorePatch = (order, payment) => {
       dpStatus: PAY.MENUNGGU,
       dpProof: payment.image || '',
       dpNominal: num(payment.nominal) || order.dpNominal,
+      dpBank: payment.bank || '',
+      dpNote: payment.note || '',
       dpSubmittedAt: todayISO()
     };
   }
@@ -643,6 +679,8 @@ export const paymentToCorePatch = (order, payment) => {
       pelunasanStatus: PAY.MENUNGGU,
       pelunasanProof: payment.image || '',
       pelunasanSubmittedNominal: num(payment.nominal),
+      pelunasanBank: payment.bank || '',
+      pelunasanNote: payment.note || '',
       pelunasanSubmittedAt: todayISO()
     };
   }
@@ -650,6 +688,8 @@ export const paymentToCorePatch = (order, payment) => {
     ongkirStatus: PAY.MENUNGGU,
     ongkirProof: payment.image || '',
     ongkirSubmittedNominal: num(payment.nominal),
+    ongkirBank: payment.bank || '',
+    ongkirNote: payment.note || '',
     ongkirSubmittedAt: todayISO()
   };
 };
@@ -665,7 +705,7 @@ export const projectPaymentToCoreOrder = (coreOrders, payment) => {
 export const paymentToDeposit = (payment) => ({
   id: `dep-${payment.id || Date.now()}`,
   date: parseProjectDate(payment.date),
-  mitraName: String(payment.mitraName || 'HENI').replace(/\s*\(.*\)\s*$/, ''),
+  mitraName: String(payment.mitraName || 'Mitra').replace(/\s*\(.*\)\s*$/, ''),
   nominal: num(payment.nominal),
   bank: payment.bank || '-',
   proof: payment.image || '',

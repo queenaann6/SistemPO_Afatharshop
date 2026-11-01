@@ -23,10 +23,13 @@ export default function MitraDashboard({
   poBatches = [],
   onUploadPayment,
   onDepositSubmit,
+  onPayWithDeposit,
   orders = [],
   adminBankAccounts = [],
   adminCouriers = [],
-  onUpdateOrder
+  onUpdateOrder,
+  deposits = [],
+  products = []
 }) {
   return (
     <div className="min-h-screen bg-[#FFE5D4] py-6 sm:py-8 antialiased">
@@ -74,6 +77,9 @@ export default function MitraDashboard({
                 currentUser={currentUser}
                 onNavigateCatalog={onNavigateCatalog}
                 onSelectTab={onSelectTab}
+                orders={orders}
+                products={products}
+                poBatches={poBatches}
               />
             )}
 
@@ -90,7 +96,13 @@ export default function MitraDashboard({
             )}
 
             {activeTab === 'tagihan' && (
-              <MitraBillsTab orders={orders} currentUser={currentUser} adminBankAccounts={adminBankAccounts} />
+              <MitraBillsTab
+                orders={orders}
+                currentUser={currentUser}
+                adminBankAccounts={adminBankAccounts}
+                onUploadPayment={onUploadPayment}
+                onPayWithDeposit={onPayWithDeposit}
+              />
             )}
 
             {activeTab === 'riwayat_tagihan' && (
@@ -102,7 +114,7 @@ export default function MitraDashboard({
             )}
 
             {activeTab === 'riwayat_pembayaran' && (
-              <MitraPaymentsTab />
+              <MitraPaymentsTab orders={orders} currentUser={currentUser} />
             )}
 
             {activeTab === 'deposit' && (
@@ -110,6 +122,7 @@ export default function MitraDashboard({
                 currentUser={currentUser}
                 onDepositSubmit={onDepositSubmit}
                 adminBankAccounts={adminBankAccounts}
+                deposits={deposits}
               />
             )}
 
@@ -122,6 +135,8 @@ export default function MitraDashboard({
                 onNavigateCatalog={onNavigateCatalog}
                 onSelectTab={onSelectTab}
                 onUploadPayment={onUploadPayment}
+                onPayWithDeposit={onPayWithDeposit}
+                currentUser={currentUser}
                 poBatches={poBatches}
                 orders={orders}
                 adminBankAccounts={adminBankAccounts}

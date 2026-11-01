@@ -385,113 +385,24 @@ export default function OwnerFinanceDashboard({
   const [reminderOff, setReminderOff] = useState({});
   const [reminderFilter, setReminderFilter] = useState('all');
   const [waModal, setWaModal] = useState(null);
-  const [reminderHistory, setReminderHistory] = useState([
-    { id: 'h-1', ts: Date.now() - 26 * 3600 * 1000, mode: 'invoice', key: 'INV-0002', name: 'Siti Rahma', label: 'INV-0002 · DP' }
-  ]);
+  const [reminderHistory, setReminderHistory] = useState([]);
 
   // Master Data
-  const usersList = [
-    { id: 1, name: 'Budi Santoso', level: 'DB All', phone: '081234567801', city: 'Bandung' },
-    { id: 2, name: 'Siti Rahma', level: 'Agen', phone: '081234567802', city: 'Surabaya' },
-    { id: 3, name: 'Dewi Lestari', level: 'Reseller', phone: '081234567803', city: 'Medan' },
-    { id: 4, name: 'HENI', level: 'DB All', phone: '081219991888', city: 'Bekasi' }
-  ];
+  const usersList = [];
 
-  const [productsList, setProductsList] = useState([
-    { name: 'Gamis Almira', brand: 'Hanara', hpp: 110000, poClose: todayISO },
-    { name: 'Tunik Alma', brand: 'Nusaku', hpp: 105000, poClose: addDays(todayISO, 5) },
-    { name: 'Greenism Senada', brand: 'Greenism', hpp: 120000, poClose: addDays(todayISO, -3) }
-  ]);
+  const [productsList, setProductsList] = useState([]);
 
-  const [ordersList, setOrdersList] = useState([
-    {
-      invoice: 'INV-0001', name: 'Budi Santoso', mitra: 'DB All', brand: 'Hanara',
-      produk: 'Gamis Almira', varian: 'Dusty Pink/M', qty: 5, nilai: 875000,
-      dpNominal: 437500, dpStatus: 'ACC',
-      pelunasanNominal: 437500, pelunasanStatus: 'Belum Pelunasan',
-      ongkir: 45000, ekspedisi: 'JNE Trucking', ongkirStatus: 'Lunas', ship: 'belum',
-      checkoutDate: daysAgo(4)
-    },
-    {
-      invoice: 'INV-0002', name: 'Siti Rahma', mitra: 'Agen', brand: 'Hanara',
-      produk: 'Gamis Almira', varian: 'Navy/L', qty: 2, nilai: 400000,
-      dpNominal: 200000, dpStatus: 'Menunggu Transfer',
-      pelunasanNominal: 200000, pelunasanStatus: 'Belum Pelunasan',
-      ongkir: 30000, ekspedisi: 'J&T Cargo', ongkirStatus: 'Menunggu', ship: 'belum',
-      checkoutDate: daysAgo(4)
-    },
-    {
-      invoice: 'INV-0003', name: 'Dewi Lestari', mitra: 'Reseller', brand: 'Nusaku',
-      produk: 'Tunik Alma', varian: 'Cokelat/M', qty: 3, nilai: 495000,
-      dpNominal: 198000, dpStatus: 'ACC',
-      pelunasanNominal: 297000, pelunasanStatus: 'Menunggu Verifikasi',
-      pelunasanProof: 'https://images.unsplash.com/photo-1554224155-6726b3ff858f?auto=format&fit=crop&w=600&q=80',
-      ongkir: 35000, ekspedisi: 'JNE', ongkirStatus: 'Menunggu Verifikasi', ship: 'belum',
-      checkoutDate: daysAgo(5)
-    },
-    {
-      invoice: 'INV-0004', name: 'Budi Santoso', mitra: 'DB All', brand: 'Greenism',
-      produk: 'Greenism Senada', varian: 'Dad Panjang XL', qty: 10, nilai: 1800000,
-      dpNominal: 900000, dpStatus: 'ACC',
-      pelunasanNominal: 900000, pelunasanStatus: 'ACC',
-      ongkir: 60000, ekspedisi: 'Dakota Cargo', ongkirStatus: 'Menunggu', ship: 'diatur',
-      checkoutDate: daysAgo(12)
-    },
-    {
-      invoice: 'INV-0005', name: 'Siti Rahma', mitra: 'Agen', brand: 'Hanara',
-      produk: 'Gamis Almira', varian: 'Hitam/M', qty: 4, nilai: 800000,
-      dpNominal: 400000, dpStatus: 'ACC',
-      pelunasanNominal: 400000, pelunasanStatus: 'ACC',
-      ongkir: 40000, ekspedisi: 'JNE Trucking', ongkirStatus: 'Lunas', ship: 'belum',
-      checkoutDate: daysAgo(9)
-    },
-    {
-      invoice: 'INV-0006', name: 'Dewi Lestari', mitra: 'Reseller', brand: 'Greenism',
-      produk: 'Greenism Senada', varian: 'Dad Panjang L', qty: 6, nilai: 1080000,
-      dpNominal: 540000, dpStatus: 'ACC',
-      pelunasanNominal: 540000, pelunasanStatus: 'ACC',
-      ongkir: 50000, ekspedisi: 'J&T Cargo', ongkirStatus: 'Lunas', ship: 'diatur',
-      checkoutDate: daysAgo(11)
-    },
-    {
-      invoice: 'INV-0007', name: 'Budi Santoso', mitra: 'DB All', brand: 'Greenism',
-      produk: 'Greenism Senada', varian: 'Dad Panjang XL', qty: 3, nilai: 540000,
-      dpNominal: 270000, dpStatus: 'Menunggu Verifikasi',
-      dpProof: 'https://images.unsplash.com/photo-1554224155-6726b3ff858f?auto=format&fit=crop&w=600&q=80',
-      pelunasanNominal: 270000, pelunasanStatus: 'Belum Pelunasan',
-      ongkir: 25000, ekspedisi: 'Dakota Cargo', ongkirStatus: 'Menunggu', ship: 'belum',
-      checkoutDate: daysAgo(1)
-    },
-    {
-      invoice: 'INV-0008', name: 'Siti Rahma', mitra: 'Agen', brand: 'Nusaku',
-      produk: 'Tunik Alma', varian: 'Navy/L', qty: 2, nilai: 330000,
-      dpNominal: 132000, dpStatus: 'ACC',
-      pelunasanNominal: 198000, pelunasanStatus: 'ACC',
-      ongkir: 30000, ekspedisi: 'JNE', ongkirStatus: 'Lunas', ship: 'dikirim',
-      checkoutDate: daysAgo(20)
-    }
-  ]);
+  const [ordersList, setOrdersList] = useState([]);
 
-  const [depositHistory, setDepositHistory] = useState([
-    {
-      id: 'dep-1', date: daysAgo(2), name: 'Siti Rahma', mitra: 'Agen', invoice: '-', nominal: 500000, bank: 'Mandiri',
-      proof: 'https://images.unsplash.com/photo-1554224155-6726b3ff858f?auto=format&fit=crop&w=600&q=80',
-      status: 'ACC'
-    }
-  ]);
+  const [depositHistory, setDepositHistory] = useState([]);
 
-  const [ledger, setLedger] = useState([
-    { id: 'l-1', date: daysAgo(5), type: 'DP', ref: 'INV-0003', name: 'Dewi Lestari', bank: 'BCA', nominal: 198000, by: 'System' },
-    { id: 'l-2', date: daysAgo(4), type: 'DP', ref: 'INV-0001', name: 'Budi Santoso', bank: 'BCA', nominal: 437500, by: 'System' },
-    { id: 'l-3', date: daysAgo(2), type: 'Deposit', ref: '-', name: 'Siti Rahma', bank: 'Mandiri', nominal: 500000, by: 'System' },
-    { id: 'l-4', date: daysAgo(1), type: 'Ongkir', ref: 'INV-0001', name: 'Budi Santoso', bank: 'BCA', nominal: 45000, by: 'System' }
-  ]);
+  const [ledger, setLedger] = useState([]);
   const [ledgerFilter, setLedgerFilter] = useState('Semua');
 
   const [bankAccountsList, setBankAccountsList] = useState([
-    { id: 'bca', bank: 'BCA', accountNo: '1234567890', holder: 'PT Afathar Makmur / Owner', active: true },
-    { id: 'mandiri', bank: 'Mandiri', accountNo: '133-00-2998801', holder: 'Afathar Shop Official', active: true },
-    { id: 'bri', bank: 'BRI', accountNo: '987654312156', holder: 'Afathar Shop Official', active: true }
+    { id: 'bca', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
+    { id: 'mandiri', bank: 'Mandiri', accountNo: '133-00-2998801', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
+    { id: 'bri', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true }
   ]);
 
   const [courierList, setCourierList] = useState([
@@ -502,17 +413,17 @@ export default function OwnerFinanceDashboard({
 
   const [previewProofModal, setPreviewProofModal] = useState(null);
   const [isAddBankModalOpen, setIsAddBankModalOpen] = useState(false);
-  const [newBankForm, setNewBankForm] = useState({ bank: 'BCA', accountNo: '', holder: 'Afathar Shop Official' });
+  const [newBankForm, setNewBankForm] = useState({ bank: 'BCA', accountNo: '', holder: 'CV AFATHAR SHOP DISTRIBUTOR' });
   const [isAddCourierModalOpen, setIsAddCourierModalOpen] = useState(false);
   const [newCourierForm, setNewCourierForm] = useState({ name: '', note: '' });
 
   const [inputBuktiForm, setInputBuktiForm] = useState({
-    userName: 'Budi Santoso',
+    userName: '',
     paymentType: 'Pelunasan',
-    invoiceNo: 'INV-0001',
-    nominal: 437500,
+    invoiceNo: '',
+    nominal: 0,
     transferDate: todayISO,
-    targetBank: 'BCA 1234567890',
+    targetBank: '',
     proofPreviewUrl: ''
   });
 

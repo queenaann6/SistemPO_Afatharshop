@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import api from '../../services/api';
 import {
   ACCENTS,
   Badge,
@@ -77,7 +78,7 @@ import {
   waLink
 } from './poCore';
 
-const DEFAULT_USER = { id: 'u-2', name: 'Nadia Finance', role: 'finance', email: 'finance@afathar.id' };
+const DEFAULT_USER = { id: 'u-finance', name: 'Dewi Finance', role: 'finance', email: 'finance@afatharshop.com' };
 
 const VERIF_META = {
   verif_dp: {
@@ -876,6 +877,8 @@ export default function FinanceDashboard({
         ...prev
       ]);
       toast(`Deposit ${dep.mitraName} ${rp(dep.nominal)} diverifikasi. Saldo mitra bertambah.`);
+      const targetId = dep.backendId || dep.id;
+      api.management.verifyDeposit(targetId, { status: 'ACC' }).catch(() => {});
     } else {
       const o = row.order;
       patchOrder(o.invoice, {
@@ -900,6 +903,11 @@ export default function FinanceDashboard({
         ...prev
       ]);
       toast(`${verifMeta.kind} ${o.invoice} diverifikasi ACC.`);
+      const targetId = o.backendId || o.id;
+      api.management.updateOrderStatus(targetId, {
+        status: 'Produksi',
+        dpStatus: 'ACC'
+      }).catch(() => {});
     }
     setConfirmModal(null);
   };
@@ -1127,6 +1135,13 @@ export default function FinanceDashboard({
       commitMitra((prev) => prev.map((m) => (m.id === mitraModal.id ? { ...m, ...f } : m)));
       toast(`Mitra ${f.name} diperbarui.`);
       setMitraModal(null);
+      const targetId = mitraModal.backendId || mitraModal.id;
+      api.management.updateUser(targetId, {
+        nama: f.name,
+        phone: f.phone,
+        city: f.city,
+        level: f.level || 'reseller'
+      }).catch(() => {});
     } else {
       const tempPassword = `Mitra#${Math.floor(1000 + Math.random() * 9000)}`;
       const newM = {
@@ -1146,7 +1161,26 @@ export default function FinanceDashboard({
         password: tempPassword,
         note: 'Kirimkan kredensial ini ke mitra. Password hanya ditampilkan sekali.'
       });
-      toast(`Akun mitra ${f.name} berhasil dibuat.`);
+      toast(`Akun mitra ${f.name} berhasil disimpan ke database.`);
+
+      api.management.createUser({
+        nama: f.name,
+        email: String(f.email || '').trim(),
+        role: 'mitra',
+        level: f.level || 'reseller',
+        phone: f.phone,
+        city: f.city,
+        password: tempPassword,
+        is_active: true
+      }).then((res) => {
+        const serverUser = res?.data;
+        if (serverUser?.id) {
+          newM.backendId = serverUser.id;
+          commitMitra((prev) => prev.map((x) => x.id === newM.id ? { ...x, backendId: serverUser.id } : x));
+        }
+      }).catch((err) => {
+        toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
+      });
     }
   };
 
@@ -1156,6 +1190,24 @@ export default function FinanceDashboard({
     }
     commitMitra((prev) => prev.map((x) => (x.id === m.id ? { ...x, active: !x.active } : x)));
     toast(`${m.name} ${m.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
+  };
+
+  const deleteMitra = (m) => {
+    setConfirmModal({
+      title: 'Hapus Akun Mitra',
+      message: `Hapus mitra "${m.name}"? Data akan dihapus dari sistem dan database.`,
+      confirmLabel: 'Hapus Mitra',
+      danger: true,
+      onConfirm: () => {
+        commitMitra((prev) => prev.filter((x) => x.id !== m.id));
+        setConfirmModal(null);
+        toast(`Mitra ${m.name} dihapus.`, 'warning');
+        const targetId = m.backendId || (typeof m.id === 'number' ? m.id : String(m.id || '').replace(/\D/g, ''));
+        if (targetId) {
+          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
+        }
+      }
+    });
   };
 
   const saveTeam = (e) => {
@@ -1183,7 +1235,24 @@ export default function FinanceDashboard({
       password: tempPassword,
       note: `Peran: ${roleLabel(newU.role)}. Password hanya ditampilkan sekali.`
     });
-    toast(`Akun tim ${newU.name} berhasil dibuat.`);
+    toast(`Akun tim ${newU.name} berhasil disimpan ke database.`);
+
+    api.management.createUser({
+      nama: newU.name,
+      email: newU.email,
+      role: newU.role,
+      phone: newU.phone,
+      password: tempPassword,
+      is_active: true
+    }).then((res) => {
+      const serverUser = res?.data;
+      if (serverUser?.id) {
+        newU.backendId = serverUser.id;
+        commitTeam((prev) => prev.map((x) => x.id === newU.id ? { ...x, backendId: serverUser.id } : x));
+      }
+    }).catch((err) => {
+      toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
+    });
   };
 
   const toggleTeam = (u) => {
@@ -1191,6 +1260,28 @@ export default function FinanceDashboard({
     if (u.id === me.id) return toast('Tidak dapat menonaktifkan akun sendiri.', 'error');
     commitTeam((prev) => prev.map((x) => (x.id === u.id ? { ...x, active: !x.active } : x)));
     toast(`${u.name} ${u.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
+    const targetId = u.backendId || u.id;
+    api.management.updateUser(targetId, { is_active: !u.active }).catch(() => {});
+  };
+
+  const deleteTeam = (u) => {
+    if (u.role === 'owner') return toast('Akun owner tidak dapat dihapus.', 'error');
+    if (u.id === me.id || u.email === me.email) return toast('Tidak dapat menghapus akun sendiri yang sedang aktif.', 'error');
+    setConfirmModal({
+      title: 'Hapus Akun Tim Admin',
+      message: `Hapus akun "${u.name}" (${roleLabel(u.role)})? Akses pengguna akan dicabut dari sistem dan database.`,
+      confirmLabel: 'Hapus Akun',
+      danger: true,
+      onConfirm: () => {
+        commitTeam((prev) => prev.filter((x) => x.id !== u.id));
+        setConfirmModal(null);
+        toast(`Akun tim ${u.name} berhasil dihapus.`, 'warning');
+        const targetId = u.backendId || (typeof u.id === 'number' ? u.id : String(u.id || '').replace(/\D/g, ''));
+        if (targetId) {
+          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
+        }
+      }
+    });
   };
 
   const saveSettingsForm = (e) => {
@@ -1300,7 +1391,7 @@ export default function FinanceDashboard({
               <MetricCard
                 label="Kas Masuk"
                 value={rp(kasMasuk)}
-                sub={`${ledger.length} transaksi tercatat`}
+                sub={`${ledger.filter((l) => l.status === PAY.ACC).length} transaksi ACC`}
                 tone="emerald"
                 icon="card"
                 hint="Pembayaran mitra & deposit yang sudah ACC"
@@ -3021,6 +3112,13 @@ export default function FinanceDashboard({
                           >
                             {m.active ? 'Nonaktifkan' : 'Aktifkan'}
                           </Button>
+                          <Button
+                            size="xs"
+                            variant="danger"
+                            onClick={() => deleteMitra(m)}
+                          >
+                            Hapus
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -3081,14 +3179,24 @@ export default function FinanceDashboard({
                         <Badge tone={u.active ? 'emerald' : 'gray'}>{u.active ? 'Aktif' : 'Nonaktif'}</Badge>
                       </td>
                       <td className={`${TD} text-right`}>
-                        <Button
-                          size="xs"
-                          variant={u.active ? 'dangerOutline' : 'primary'}
-                          disabled={u.role === 'owner'}
-                          onClick={() => toggleTeam(u)}
-                        >
-                          {u.active ? 'Nonaktifkan' : 'Aktifkan'}
-                        </Button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            size="xs"
+                            variant={u.active ? 'dangerOutline' : 'primary'}
+                            disabled={u.role === 'owner'}
+                            onClick={() => toggleTeam(u)}
+                          >
+                            {u.active ? 'Nonaktifkan' : 'Aktifkan'}
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="danger"
+                            disabled={u.role === 'owner'}
+                            onClick={() => deleteTeam(u)}
+                          >
+                            Hapus
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}

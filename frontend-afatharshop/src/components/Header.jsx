@@ -83,18 +83,18 @@ export default function Header({
             className="flex items-center gap-2 sm:gap-3 shrink-0 group text-left cursor-pointer bg-transparent border-0 p-0"
             title="Kembali ke Beranda"
           >
-            {/* Official Afathar Shop Logo */}
+            {/* Official Afatharshop Logo */}
             <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full border-2 border-[#F0C973] overflow-hidden bg-white shadow-md group-hover:scale-105 transition-transform shrink-0">
               <img
                 src="/logo.jpg"
-                alt="Afathar Shop Logo"
+                alt="Afatharshop Logo"
                 className="w-full h-full object-cover"
               />
             </div>
             {/* Brand Text */}
             <div className="hidden sm:flex flex-col">
               <span className="font-display text-base sm:text-lg lg:text-xl font-bold tracking-wider text-[#F0C973] leading-none">
-                AFATHAR SHOP
+                AFATHARSHOP
               </span>
               <span className="text-[9px] sm:text-[10px] font-medium tracking-[0.22em] text-amber-100/90 leading-tight mt-0.5 uppercase">
                 Moslem Womens Needs
@@ -102,7 +102,7 @@ export default function Header({
             </div>
           </button>
 
-          {/* Center-Left: Kategori Button (WHITE as instructed) */}
+          {/* Center-Left: Kategori Button */}
           <div className="relative hidden md:block">
             <button
               onClick={() => setIsCategoryOpen(!isCategoryOpen)}
@@ -143,7 +143,7 @@ export default function Header({
             )}
           </div>
 
-          {/* Center: Search Bar (WHITE as instructed) */}
+          {/* Center: Search Bar */}
           <div className="hidden lg:block flex-1 min-w-0 max-w-xl mx-4">
             <div className="relative">
               <input
@@ -309,11 +309,11 @@ export default function Header({
                     <div className="w-7 h-7 rounded-full overflow-hidden bg-stone-700 shrink-0 border border-emerald-400/40">
                       <img
                         src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-                        alt={currentUser?.name || 'HENI'}
+                        alt={currentUser?.name || 'Mitra'}
                         className="w-full h-full object-cover"
                       />
                     </div>
-                    <span className="hidden sm:inline uppercase tracking-wide text-white text-xs sm:text-sm font-bold">{currentUser?.name || 'HENI'}</span>
+                    <span className="hidden sm:inline uppercase tracking-wide text-white text-xs sm:text-sm font-bold">{currentUser?.name || 'Mitra'}</span>
                     <ChevronDownIcon className={`hidden sm:block w-3.5 h-3.5 text-stone-300 transition-transform duration-200 ${isUserMenuOpen ? 'rotate-180' : ''}`} />
                   </button>
 
@@ -325,17 +325,17 @@ export default function Header({
                         <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full overflow-hidden bg-stone-700 shrink-0 ring-2 ring-emerald-500/40">
                           <img
                             src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-                            alt={currentUser?.name || 'HENI'}
+                            alt={currentUser?.name || 'Mitra'}
                             className="w-full h-full object-cover"
                           />
                         </div>
                         <div className="flex-1 min-w-0">
                           <h3 className="font-bold text-white text-sm sm:text-base tracking-wide leading-tight truncate uppercase">
-                            {currentUser?.name || 'HENI'}
+                            {currentUser?.name || 'Mitra'}
                           </h3>
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                              {currentUser?.role || 'Mitra Distributor'}
+                              {currentUser?.role || 'Mitra Agen'}
                             </span>
                           </div>
                           {currentUser?.roleId === 'mitra' && (
@@ -350,7 +350,7 @@ export default function Header({
                       {currentUser?.roleId === 'mitra' && (
                         <div className="bg-[#FFF1F2] border-y border-rose-100/80 py-2.5 px-4 text-center">
                           <p className="text-rose-600 font-semibold text-xs tracking-wide">
-                            Total Tagihan: {currentUser?.totalBill || 'Rp 3.399.145'}
+                            Total Tagihan: {currentUser?.totalBill || 'Rp 0'}
                           </p>
                         </div>
                       )}

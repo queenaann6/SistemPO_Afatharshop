@@ -7,10 +7,10 @@ export default function MitraProfileTab({
   onUpdateAvatar
 }) {
   const fileInputRef = useRef(null);
-  const [name, setName] = useState(currentUser?.name || 'HENI');
-  const [mitraId] = useState('6a348e21a218e6yuhr');
-  const [email, setEmail] = useState(currentUser?.email || 'afatharshop@maknahijab.com');
-  const [phone, setPhone] = useState(currentUser?.phone || '+6281219991888');
+  const [name, setName] = useState(currentUser?.name || 'Mitra');
+  const [mitraId] = useState(() => currentUser?.id ? `MTR-${currentUser.id}` : 'MTR-001');
+  const [email, setEmail] = useState(currentUser?.email || '');
+  const [phone, setPhone] = useState(currentUser?.phone || '');
   const [gender, setGender] = useState('Perempuan');
   const [birthDay, setBirthDay] = useState('');
   const [birthMonth, setBirthMonth] = useState('');

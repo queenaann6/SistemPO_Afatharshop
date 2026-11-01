@@ -11,10 +11,10 @@ export default function ProfileModal({
   const fileInputRef = useRef(null);
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({
-    name: currentUser?.name || 'HENI',
-    phone: currentUser?.phone || '0812-1999-1888',
-    email: currentUser?.email || 'heni.mitra@afatharshop.com',
-    address: currentUser?.address || 'Jl. Pajajaran No. 45, Baranangsiang, Kota Bogor, Jawa Barat'
+    name: currentUser?.name || 'Mitra',
+    phone: currentUser?.phone || '',
+    email: currentUser?.email || '',
+    address: currentUser?.address || ''
   });
   const [uploadSuccess, setUploadSuccess] = useState(false);
 
@@ -86,7 +86,7 @@ export default function ProfileModal({
               <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-[#F0C973] shadow-lg bg-stone-100">
                 <img
                   src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-                  alt={currentUser?.name || 'HENI'}
+                  alt={currentUser?.name || 'Mitra'}
                   className="w-full h-full object-cover"
                 />
               </div>
@@ -121,7 +121,7 @@ export default function ProfileModal({
             />
 
             <h3 className="font-bold text-lg text-stone-900 tracking-wide">
-              {currentUser?.name || 'HENI'}
+              {currentUser?.name || 'Mitra'}
             </h3>
             <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 mt-1">
               <ShieldCheckIcon className="w-3.5 h-3.5 text-emerald-600" />
@@ -169,7 +169,7 @@ export default function ProfileModal({
             <div className="bg-rose-50/80 rounded-xl p-3 border border-rose-100 text-center">
               <p className="text-[11px] text-rose-500 font-medium">Total Tagihan PO</p>
               <p className="text-base font-bold text-rose-700 mt-0.5">
-                {currentUser?.totalBill || 'Rp 3.399.145'}
+                {currentUser?.totalBill || 'Rp 0'}
               </p>
             </div>
           </div>
@@ -243,7 +243,7 @@ export default function ProfileModal({
                   </div>
                   <div>
                     <p className="text-[10px] text-stone-500 font-medium">No. WhatsApp</p>
-                    <p className="font-semibold text-stone-800">{currentUser?.phone || '0812-1999-1888'}</p>
+                    <p className="font-semibold text-stone-800">{currentUser?.phone || '-'}</p>
                   </div>
                 </div>
 
@@ -253,7 +253,7 @@ export default function ProfileModal({
                   </div>
                   <div>
                     <p className="text-[10px] text-stone-500 font-medium">Email Terdaftar</p>
-                    <p className="font-semibold text-stone-800">{currentUser?.email || 'heni.mitra@afatharshop.com'}</p>
+                    <p className="font-semibold text-stone-800">{currentUser?.email || '-'}</p>
                   </div>
                 </div>
 
@@ -264,7 +264,7 @@ export default function ProfileModal({
                   <div>
                     <p className="text-[10px] text-stone-500 font-medium">Alamat Ekspedisi Mitra</p>
                     <p className="font-medium text-stone-700 leading-relaxed">
-                      {currentUser?.address || 'Jl. Pajajaran No. 45, Baranangsiang, Kota Bogor, Jawa Barat'}
+                      {currentUser?.address || 'Belum ada alamat tersimpan'}
                     </p>
                   </div>
                 </div>

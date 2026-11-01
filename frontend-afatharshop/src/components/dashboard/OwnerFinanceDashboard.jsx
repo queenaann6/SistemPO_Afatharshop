@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import api from '../../services/api';
 import {
   ACCENTS,
   Badge,
@@ -66,7 +67,7 @@ import {
   waLink
 } from './poCore';
 
-const DEFAULT_USER = { id: 'u-1', name: 'Owner Afathar', role: 'owner', email: 'owner@afathar.id' };
+const DEFAULT_USER = { id: 'u-owner', name: 'Heny Owner', role: 'owner', email: 'owner@afatharshop.com' };
 
 const OWNER_ROLE_TONE = { owner: 'amber', finance: 'emerald', marketing: 'red' };
 
@@ -600,6 +601,11 @@ export default function OwnerFinanceDashboard({
         : `${req.code} ditolak.`,
       decision === 'ACC' ? 'success' : 'warning'
     );
+    const targetId = req.backendId || req.id;
+    api.management.updatePaymentRequest(targetId, {
+      owner_decision: decision,
+      owner_note: note
+    }).catch(() => {});
   };
 
   const approvePR = (req) => {
@@ -663,6 +669,12 @@ export default function OwnerFinanceDashboard({
     );
     setTransferModal(null);
     toast(`${req.code} ditandai sudah ditransfer. Finance dapat melihat bukti transfer.`);
+    const targetId = req.backendId || req.id;
+    api.management.updatePaymentRequest(targetId, {
+      transfer_proof: f.proof,
+      transfer_note: f.note || f.ref,
+      transfer_by: me.name
+    }).catch(() => {});
   };
 
   const toggleTeam = (u) => {
@@ -676,6 +688,29 @@ export default function OwnerFinanceDashboard({
         commitTeam((prev) => prev.map((x) => (x.id === u.id ? { ...x, active: !x.active } : x)));
         setConfirmModal(null);
         toast(`${u.name} ${u.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
+        const targetId = u.backendId || u.id;
+        api.management.updateUser(targetId, { is_active: !u.active }).catch(() => {});
+      }
+    });
+  };
+
+  const deleteTeam = (u) => {
+    if (u.role === 'owner' || u.id === me.id || u.email === me.email) {
+      return toast('Tidak dapat menghapus akun owner sendiri.', 'error');
+    }
+    setConfirmModal({
+      title: 'Hapus Akun Pengguna',
+      message: `Hapus akun "${u.name}" (${roleLabel(u.role)})? Akses login akan dicabut dan data dihapus permanen.`,
+      confirmLabel: 'Hapus Akun',
+      danger: true,
+      onConfirm: () => {
+        commitTeam((prev) => prev.filter((x) => x.id !== u.id));
+        setConfirmModal(null);
+        toast(`Akun ${u.name} berhasil dihapus.`, 'warning');
+        const targetId = u.backendId || (typeof u.id === 'number' ? u.id : String(u.id || '').replace(/\D/g, ''));
+        if (targetId) {
+          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
+        }
       }
     });
   };
@@ -704,7 +739,24 @@ export default function OwnerFinanceDashboard({
       password: tempPassword,
       note: `Peran: ${roleLabel(newU.role)}. Password hanya ditampilkan sekali.`
     });
-    toast(`Akun ${newU.name} berhasil dibuat.`);
+    toast(`Akun ${newU.name} berhasil disimpan.`);
+
+    api.management.createUser({
+      nama: newU.name,
+      email: newU.email,
+      role: newU.role,
+      phone: newU.phone,
+      password: tempPassword,
+      is_active: true
+    }).then((res) => {
+      const serverUser = res?.data;
+      if (serverUser?.id) {
+        newU.backendId = serverUser.id;
+        commitTeam((prev) => prev.map((x) => (x.id === newU.id ? { ...x, backendId: serverUser.id } : x)));
+      }
+    }).catch((err) => {
+      toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
+    });
   };
 
   const saveSettingsForm = (e) => {
@@ -1921,7 +1973,17 @@ export default function OwnerFinanceDashboard({
                         </Badge>
                       </td>
                       <td className={`${TD} text-right`}>
-                        <Switch checked={u.active} onChange={() => toggleTeam(u)} disabled={u.id === me.id} />
+                        <div className="flex items-center justify-end gap-2">
+                          <Switch checked={u.active} onChange={() => toggleTeam(u)} disabled={u.id === me.id} />
+                          <Button
+                            size="xs"
+                            variant="danger"
+                            disabled={u.id === me.id || u.role === 'owner'}
+                            onClick={() => deleteTeam(u)}
+                          >
+                            Hapus
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}

@@ -34,12 +34,12 @@ export default function InvoiceModal({
     clean(order.recipientName) ||
     withoutSuffix(order.mitraName) ||
     clean(addressObj && addressObj.recipient) ||
-    'HENI';
+    'Mitra';
   const recipientPhone =
     clean(order.recipientPhone) ||
     clean(order.phone) ||
     clean(addressObj && addressObj.phone) ||
-    '+6281219991888';
+    '-';
   const recipientAddress =
     clean(order.recipientAddress) ||
     (typeof order.address === 'string' ? clean(order.address) : '') ||
@@ -57,7 +57,7 @@ export default function InvoiceModal({
           .filter(Boolean)
           .join(', ')
       : '') ||
-    'Perumnas 1 Jl Bungur Raya Rt 12 Rw 7 No 86 Kelurahan Jakasampurna Kecamatan Bekasi Barat Kota Bekasi 17145, Jawa Barat';
+    '-';
 
   // Helper untuk membersihkan dan memperjelas varian, warna, dan ukuran
   const parseSpecs = (it) => {
@@ -284,7 +284,7 @@ export default function InvoiceModal({
               DITERBITKAN OLEH :
             </p>
             <p className="text-xs font-bold text-stone-900 mt-0.5">
-              Afatharshop official
+              Afatharshop Bekasi
             </p>
           </div>
 
@@ -399,7 +399,7 @@ export default function InvoiceModal({
             </table>
           </div>
 
-          {/* FINANCIAL SUMMARY (Right aligned matching media_1793209247887_679a2d4b.png) */}
+          {/* FINANCIAL SUMMARY */}
           <div className="flex justify-end pt-1">
             <div className="w-80 space-y-1 text-xs text-stone-800">
               <div className="flex justify-between items-center">
@@ -437,7 +437,7 @@ export default function InvoiceModal({
 
           {/* Footer Page Number */}
           <div className="pt-2 flex justify-between items-center text-[9.5px] text-stone-400 border-t border-stone-100">
-            <span>Afatharshop official store &bull; Faktur Pre-Order</span>
+            <span>Afatharshop Bekasi &bull; Faktur Pre-Order</span>
             <span>1/1</span>
           </div>
 

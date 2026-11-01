@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { WalletIcon, PlusIcon, CheckIcon, EyeIcon, CameraIcon, XIcon } from '../../Icons';
 
-export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBankAccounts = [] }) {
+export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBankAccounts = [], deposits = [] }) {
   const fileInputRef = useRef(null);
 
   // Form States
@@ -68,26 +68,43 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
       ];
 
   // Deposit Submissions History
-  const [depositHistory, setDepositHistory] = useState([
-    {
-      id: 'DEP-2026-0812',
-      date: '05 Okt 2026',
-      nominal: 1000000,
-      bank: 'Bank BCA (739-082-9988)',
-      status: 'Berhasil Masuk Saldo',
-      statusColor: 'bg-emerald-100 text-emerald-800',
-      proof: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80'
-    },
-    {
-      id: 'DEP-2026-0701',
-      date: '20 Sep 2026',
-      nominal: 500000,
-      bank: 'Bank Mandiri (133-00-2998801)',
-      status: 'Berhasil Masuk Saldo',
-      statusColor: 'bg-emerald-100 text-emerald-800',
-      proof: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80'
+  const [depositHistory, setDepositHistory] = useState([]);
+
+  const activeDepositHistory = useMemo(() => {
+    const userDeposits = (deposits || []).filter((d) => {
+      const dName = String(d.mitraName || '').toLowerCase();
+      const uName = String(currentUser?.name || 'Mitra').toLowerCase();
+      return !dName || dName.includes(uName) || uName.includes(dName);
+    });
+
+    if (userDeposits.length === 0) {
+      return depositHistory;
     }
-  ]);
+
+    const mapped = userDeposits.map((d) => {
+      const st = String(d.status || '').toLowerCase();
+      const isAcc = st === 'acc' || st.includes('berhasil') || st.includes('terbukti');
+      const isTolak = st === 'tolak' || st.includes('tolak') || st.includes('batal');
+      return {
+        id: String(d.id || '').toUpperCase().startsWith('DEP') ? d.id : `DEP-${d.id}`,
+        date: d.date || 'Hari ini',
+        nominal: Number(d.nominal || 0),
+        bank: d.bank || 'Bank BCA (739-082-9988)',
+        status: isAcc ? 'Berhasil Masuk Saldo' : isTolak ? 'Ditolak Finance' : 'Menunggu Validasi Admin Finance',
+        statusColor: isAcc
+          ? 'bg-emerald-100 text-emerald-800'
+          : isTolak
+          ? 'bg-rose-100 text-rose-800'
+          : 'bg-amber-100 text-amber-800',
+        proof: d.proof || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
+        note: d.note || ''
+      };
+    });
+
+    const existingIds = new Set(mapped.map((m) => m.id));
+    const localNew = depositHistory.filter((lh) => !existingIds.has(lh.id));
+    return [...localNew, ...mapped];
+  }, [deposits, currentUser?.name, depositHistory]);
 
   // Handle Image File Selection
   const handleImageChange = (e) => {
@@ -135,7 +152,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
       onDepositSubmit({
         id: Date.now(),
         orderNo: newDepositEntry.id,
-        mitraName: currentUser?.name || 'HENI',
+        mitraName: currentUser?.name || 'Mitra',
         title: 'Top Up Deposit Saldo Mitra',
         nominal: parseInt(nominal),
         bank: `${currentBankObj.name} (${currentBankObj.accountNumber})`,
@@ -369,7 +386,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
             </label>
             <input
               type="text"
-              placeholder="Contoh: Deposit reseller atas nama Heni Bekasi"
+              placeholder="Contoh: Deposit reseller atas nama Mitra"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               className="w-full bg-white border border-stone-300 rounded-xl px-3 py-2 text-xs text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-[#6B1416]/20"
@@ -410,31 +427,39 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100 text-stone-700">
-              {depositHistory.map((dep) => (
-                <tr key={dep.id} className="hover:bg-stone-50/50 transition">
-                  <td className="py-3 px-3 font-mono font-bold text-stone-800">{dep.id}</td>
-                  <td className="py-3 px-3 text-stone-500">{dep.date}</td>
-                  <td className="py-3 px-3 font-bold text-[#6B1416]">
-                    Rp {dep.nominal.toLocaleString('id-ID')}
-                  </td>
-                  <td className="py-3 px-3 text-stone-600 font-medium">{dep.bank}</td>
-                  <td className="py-3 px-3">
-                    <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${dep.statusColor}`}>
-                      {dep.status}
-                    </span>
-                  </td>
-                  <td className="py-3 px-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setPreviewModalImg(dep.proof)}
-                      className="text-sky-600 hover:underline font-semibold flex items-center gap-1 ml-auto cursor-pointer"
-                    >
-                      <EyeIcon className="w-3.5 h-3.5" />
-                      <span>Lihat Bukti</span>
-                    </button>
+              {activeDepositHistory.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="py-8 text-center text-stone-400">
+                    Belum ada riwayat pengajuan deposit.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                activeDepositHistory.map((dep) => (
+                  <tr key={dep.id} className="hover:bg-stone-50/50 transition">
+                    <td className="py-3 px-3 font-mono font-bold text-stone-800">{dep.id}</td>
+                    <td className="py-3 px-3 text-stone-500">{dep.date}</td>
+                    <td className="py-3 px-3 font-bold text-[#6B1416]">
+                      Rp {dep.nominal.toLocaleString('id-ID')}
+                    </td>
+                    <td className="py-3 px-3 text-stone-600 font-medium">{dep.bank}</td>
+                    <td className="py-3 px-3">
+                      <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${dep.statusColor}`}>
+                        {dep.status}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setPreviewModalImg(dep.proof)}
+                        className="text-sky-600 hover:underline font-semibold flex items-center gap-1 ml-auto cursor-pointer"
+                      >
+                        <EyeIcon className="w-3.5 h-3.5" />
+                        <span>Lihat Bukti</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

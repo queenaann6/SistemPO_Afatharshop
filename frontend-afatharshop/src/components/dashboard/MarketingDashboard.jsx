@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import api from '../../services/api';
 import {
   ACCENTS,
   Badge,
@@ -133,7 +134,7 @@ const stagesFromProduct = (product) => {
   return makeStages(3, product?.closeDate || todayISO());
 };
 
-const DEFAULT_USER = { name: 'Fajar Marketing', role: 'marketing', email: 'marketing@afathar.id' };
+const DEFAULT_USER = { name: 'Rina Marketing', role: 'marketing', email: 'marketing@afatharshop.com' };
 const PAGE_DESC =
   'Kelola katalog PO, ACC pesanan dari tim, harga & diskon brand, kuota varian, serta rekap checkout per produk.';
 
@@ -560,8 +561,20 @@ export default function MarketingDashboard({
   );
 
   /* --------------------------------------------------------------- handlers */
-  const patchOrder = (invoice, patch) =>
+  const patchOrder = (invoice, patch) => {
     commitOrders((prev) => prev.map((o) => (o.invoice === invoice ? { ...o, ...patch } : o)));
+    const matched = orders.find((o) => o.invoice === invoice);
+    const targetId = matched?.backendId || matched?.id || invoice;
+    const nextStatus = patch.marketingStatus === MKT.ACC
+      ? 'Menunggu DP'
+      : patch.marketingStatus === MKT.TOLAK
+      ? 'Batal'
+      : patch.status || patch.marketingStatus || 'Open';
+    api.management.updateOrderStatus(targetId, {
+      status: nextStatus,
+      ...patch
+    }).catch(() => {});
+  };
 
   const adjustQuota = (order, delta) => {
     if (!order?.produkId || !order?.variantId) return;
@@ -605,6 +618,14 @@ export default function MarketingDashboard({
           : o
       )
     );
+    ids.forEach((inv) => {
+      const matched = orders.find((o) => o.invoice === inv);
+      const targetId = matched?.backendId || matched?.id || inv;
+      api.management.updateOrderStatus(targetId, {
+        status: 'Menunggu DP',
+        marketingStatus: MKT.ACC
+      }).catch(() => {});
+    });
     setAccSelected([]);
     toast(`${ids.length} pesanan berhasil di-ACC.`);
   };
@@ -863,11 +884,20 @@ export default function MarketingDashboard({
     const variants = completeVariants(options, current?.variants || []);
     const variantPrices = variants.filter(hasOwnPrice).map((v) => num(v.price));
     const basePrice = variantPrices.length ? Math.min(...variantPrices) : num(current?.price);
+    const isSale = !!f.isSale;
+    const discountPercent = isSale ? (num(f.discountPercent) || 0) : 0;
+    const originalPrice = isSale
+      ? (num(f.originalPrice) || (discountPercent > 0 ? Math.round(basePrice / (1 - discountPercent / 100)) : Math.round(basePrice * 1.2)))
+      : basePrice;
     const payload = {
       title: f.title,
       brand: f.brand,
       category: f.category,
       price: basePrice,
+      image: f.image || current?.image || '',
+      isSale,
+      discountPercent,
+      originalPrice,
       openDate: f.openDate || '',
       closeDate: f.closeDate,
       closeTime: f.closeTime || '',
@@ -882,6 +912,21 @@ export default function MarketingDashboard({
       commitProducts((prev) => prev.map((p) => (p.id === current.id ? { ...p, ...payload, variants } : p)));
       toast(`Produk ${f.title} berhasil diperbarui.`);
       setProductModal(null);
+      const targetId = current.backendId || current.id;
+      api.management.updateProduct(targetId, {
+        title: f.title,
+        brand: f.brand,
+        category: f.category,
+        price: basePrice,
+        image: f.image || current?.image || '',
+        is_sale: isSale,
+        discount_percent: discountPercent,
+        original_price: originalPrice,
+        tutup_po: f.closeDate,
+        estimated_shipment: f.readyEstimate,
+        description: f.description,
+        min_dp_percent: stages[0].pct
+      }).catch(() => {});
       return;
     }
     const newId = uid('p');
@@ -889,7 +934,10 @@ export default function MarketingDashboard({
       id: newId,
       ...payload,
       status: 'open',
-      image: '',
+      image: f.image || '',
+      isSale,
+      discountPercent,
+      originalPrice,
       createdAt: todayISO(),
       variants
     };
@@ -898,9 +946,39 @@ export default function MarketingDashboard({
     setVariantModal({ productId: newId, form: { ...blankVariantForm } });
     toast(
       variants.length
-        ? `Produk ${f.title} dibuat dengan ${variants.length} varian. Lengkapi harga, tambahan & kuota tiap varian.`
-        : `Produk ${f.title} dibuat. Tambahkan varian: warna, model, size, harga, harga tambahan, kuota.`
+        ? `Produk ${f.title} dibuat dengan ${variants.length} varian dan disimpan ke database.`
+        : `Produk ${f.title} dibuat dan disimpan ke database.`
     );
+    api.management.createProduct({
+      name: f.title,
+      brand: f.brand,
+      category: f.category,
+      price: basePrice,
+      image: f.image || '',
+      is_sale: isSale,
+      discount_percent: discountPercent,
+      original_price: originalPrice,
+      tutup_po: f.closeDate,
+      estimated_shipment: f.readyEstimate,
+      description: f.description,
+      min_dp_percent: stages[0]?.pct || 25,
+      variants: variants.map((v) => ({
+        model: v.model,
+        size: v.size,
+        color: v.color,
+        sku: v.sku,
+        stock: num(v.stock) || 10,
+        price: num(v.price) || basePrice
+      }))
+    }).then((res) => {
+      const serverProduct = res?.data;
+      if (serverProduct?.id) {
+        newP.backendId = serverProduct.id;
+        commitProducts((prev) => prev.map((x) => x.id === newP.id ? { ...x, backendId: serverProduct.id } : x));
+      }
+    }).catch((err) => {
+      console.warn('Gagal simpan produk ke database:', err?.message || err);
+    });
   };
 
   const saveVariant = (e) => {
@@ -1025,6 +1103,8 @@ export default function MarketingDashboard({
         commitProducts((prev) => prev.filter((x) => x.id !== p.id));
         setConfirmModal(null);
         toast(`Produk ${p.title} dihapus.`, 'warning');
+        const targetId = p.backendId || p.id;
+        api.management.deleteProduct(targetId).catch(() => {});
       }
     });
   };
@@ -1044,12 +1124,22 @@ export default function MarketingDashboard({
       discountAgen: num(f.discountAgen),
       discountReseller: num(f.discountReseller)
     };
+    const targetBrandId = brandModal.backendId || (typeof brandModal.id === 'number' ? brandModal.id : String(brandModal.id || '').replace(/\D/g, ''));
     if (brandModal.mode === 'edit') {
       commitBrands((prev) => prev.map((b) => (b.id === brandModal.id ? { ...b, ...payload } : b)));
       toast(`Brand ${payload.name} diperbarui.`);
+      if (targetBrandId) {
+        api.management.updateBrand(targetBrandId, payload).catch((err) => toast(`Gagal simpan brand di server: ${err?.message || 'Error'}`, 'error'));
+      }
     } else {
-      commitBrands((prev) => [{ id: uid('b'), ...payload, active: true, createdAt: todayISO() }, ...prev]);
+      const newB = { id: uid('b'), ...payload, active: true, createdAt: todayISO() };
+      commitBrands((prev) => [newB, ...prev]);
       toast(`Brand ${payload.name} ditambahkan.`);
+      api.management.createBrand(payload).then((res) => {
+        if (res?.data?.id) {
+          commitBrands((prev) => prev.map((x) => x.id === newB.id ? { ...x, backendId: res.data.id } : x));
+        }
+      }).catch((err) => toast(`Gagal simpan brand di server: ${err?.message || 'Error'}`, 'error'));
     }
     setBrandModal(null);
   };
@@ -1060,13 +1150,17 @@ export default function MarketingDashboard({
     }
     setConfirmModal({
       title: 'Hapus brand',
-      message: `Hapus brand "${b.name}"?`,
+      message: `Hapus brand "${b.name}"? Data akan dihapus dari server dan database.`,
       confirmLabel: 'Hapus brand',
       danger: true,
       onConfirm: () => {
         commitBrands((prev) => prev.filter((x) => x.id !== b.id));
         setConfirmModal(null);
         toast(`Brand ${b.name} dihapus.`, 'warning');
+        const targetBrandId = b.backendId || (typeof b.id === 'number' ? b.id : String(b.id || '').replace(/\D/g, ''));
+        if (targetBrandId) {
+          api.management.deleteBrand(targetBrandId).catch((err) => toast(`Gagal hapus brand di server: ${err?.message || 'Error'}`, 'error'));
+        }
       }
     });
   };
@@ -1075,12 +1169,22 @@ export default function MarketingDashboard({
     e.preventDefault();
     const f = supplierModal.form;
     if (!f.name?.trim()) return toast('Nama supplier wajib diisi.', 'error');
+    const targetSupId = supplierModal.backendId || (typeof supplierModal.id === 'number' ? supplierModal.id : String(supplierModal.id || '').replace(/\D/g, ''));
     if (supplierModal.mode === 'edit') {
       commitSuppliers((prev) => prev.map((s) => (s.id === supplierModal.id ? { ...s, ...f } : s)));
       toast(`Supplier ${f.name} diperbarui.`);
+      if (targetSupId) {
+        api.management.updateSupplier(targetSupId, f).catch((err) => toast(`Gagal simpan supplier di server: ${err?.message || 'Error'}`, 'error'));
+      }
     } else {
-      commitSuppliers((prev) => [{ id: uid('s'), ...f, createdAt: todayISO() }, ...prev]);
+      const newS = { id: uid('s'), ...f, createdAt: todayISO() };
+      commitSuppliers((prev) => [newS, ...prev]);
       toast(`Supplier ${f.name} ditambahkan.`);
+      api.management.createSupplier(f).then((res) => {
+        if (res?.data?.id) {
+          commitSuppliers((prev) => prev.map((x) => x.id === newS.id ? { ...x, backendId: res.data.id } : x));
+        }
+      }).catch((err) => toast(`Gagal simpan supplier di server: ${err?.message || 'Error'}`, 'error'));
     }
     setSupplierModal(null);
   };
@@ -1091,13 +1195,17 @@ export default function MarketingDashboard({
     }
     setConfirmModal({
       title: 'Hapus supplier',
-      message: `Hapus supplier "${s.name}"?`,
+      message: `Hapus supplier "${s.name}"? Data akan dihapus dari server dan database.`,
       confirmLabel: 'Hapus supplier',
       danger: true,
       onConfirm: () => {
         commitSuppliers((prev) => prev.filter((x) => x.id !== s.id));
         setConfirmModal(null);
         toast(`Supplier ${s.name} dihapus.`, 'warning');
+        const targetSupId = s.backendId || (typeof s.id === 'number' ? s.id : String(s.id || '').replace(/\D/g, ''));
+        if (targetSupId) {
+          api.management.deleteSupplier(targetSupId).catch((err) => toast(`Gagal hapus supplier di server: ${err?.message || 'Error'}`, 'error'));
+        }
       }
     });
   };
@@ -1116,9 +1224,11 @@ export default function MarketingDashboard({
       commitCategories((prev) => prev.map((c) => (c === oldName ? name : c)));
       commitProducts((prev) => prev.map((p) => (p.category === oldName ? { ...p, category: name } : p)));
       toast(`Kategori diganti menjadi ${name}.`);
+      api.management.updateCategory(oldName, { name }).catch(() => {});
     } else {
       commitCategories((prev) => [...prev, name]);
       toast(`Kategori ${name} ditambahkan.`);
+      api.management.createCategory({ name }).catch(() => {});
     }
     setCategoryModal(null);
   };
@@ -1136,6 +1246,7 @@ export default function MarketingDashboard({
         commitCategories((prev) => prev.filter((c) => c !== name));
         setConfirmModal(null);
         toast(`Kategori ${name} dihapus.`, 'warning');
+        api.management.deleteCategory(name).catch(() => {});
       }
     });
   };
@@ -1199,6 +1310,13 @@ export default function MarketingDashboard({
       commitMitra((prev) => prev.map((m) => (m.id === mitraModal.id ? { ...m, ...f } : m)));
       toast(`Mitra ${f.name} diperbarui.`);
       setMitraModal(null);
+      const targetId = mitraModal.backendId || mitraModal.id;
+      api.management.updateUser(targetId, {
+        nama: f.name,
+        phone: f.phone,
+        city: f.city,
+        level: f.level || 'reseller'
+      }).catch(() => {});
     } else {
       const tempPassword = `Mitra#${Math.floor(1000 + Math.random() * 9000)}`;
       const newM = {
@@ -1218,13 +1336,50 @@ export default function MarketingDashboard({
         password: tempPassword,
         note: 'Kirimkan kredensial ini ke mitra. Password hanya ditampilkan sekali.'
       });
-      toast(`Akun mitra ${f.name} berhasil dibuat.`);
+      toast(`Akun mitra ${f.name} berhasil disimpan ke database.`);
+
+      api.management.createUser({
+        nama: f.name,
+        email: String(f.email || '').trim(),
+        role: 'mitra',
+        level: f.level || 'reseller',
+        phone: f.phone,
+        city: f.city,
+        password: tempPassword,
+        is_active: true
+      }).then((res) => {
+        const serverUser = res?.data;
+        if (serverUser?.id) {
+          newM.backendId = serverUser.id;
+          commitMitra((prev) => prev.map((x) => x.id === newM.id ? { ...x, backendId: serverUser.id } : x));
+        }
+      }).catch((err) => {
+        toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
+      });
     }
   };
 
   const toggleMitra = (m) => {
     commitMitra((prev) => prev.map((x) => (x.id === m.id ? { ...x, active: !x.active } : x)));
     toast(`${m.name} ${m.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
+  };
+
+  const deleteMitra = (m) => {
+    setConfirmModal({
+      title: 'Hapus Akun Mitra',
+      message: `Hapus mitra "${m.name}"? Akses login dan data akun akan dihapus dari sistem dan database.`,
+      confirmLabel: 'Hapus Mitra',
+      danger: true,
+      onConfirm: () => {
+        commitMitra((prev) => prev.filter((x) => x.id !== m.id));
+        setConfirmModal(null);
+        toast(`Mitra ${m.name} dihapus.`, 'warning');
+        const targetId = m.backendId || (typeof m.id === 'number' ? m.id : String(m.id || '').replace(/\D/g, ''));
+        if (targetId) {
+          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
+        }
+      }
+    });
   };
 
   const saveTeam = (e) => {
@@ -1252,7 +1407,24 @@ export default function MarketingDashboard({
       password: tempPassword,
       note: `Peran: ${roleLabel(newU.role)}. Password hanya ditampilkan sekali.`
     });
-    toast(`Akun tim ${newU.name} berhasil dibuat.`);
+    toast(`Akun tim ${newU.name} berhasil disimpan ke database.`);
+
+    api.management.createUser({
+      nama: newU.name,
+      email: newU.email,
+      role: newU.role,
+      phone: newU.phone,
+      password: tempPassword,
+      is_active: true
+    }).then((res) => {
+      const serverUser = res?.data;
+      if (serverUser?.id) {
+        newU.backendId = serverUser.id;
+        commitTeam((prev) => prev.map((x) => x.id === newU.id ? { ...x, backendId: serverUser.id } : x));
+      }
+    }).catch((err) => {
+      toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
+    });
   };
 
   const toggleTeam = (u) => {
@@ -1260,6 +1432,28 @@ export default function MarketingDashboard({
     if (u.id === me.id) return toast('Tidak dapat menonaktifkan akun sendiri.', 'error');
     commitTeam((prev) => prev.map((x) => (x.id === u.id ? { ...x, active: !x.active } : x)));
     toast(`${u.name} ${u.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
+    const targetId = u.backendId || u.id;
+    api.management.updateUser(targetId, { is_active: !u.active }).catch(() => {});
+  };
+
+  const deleteTeam = (u) => {
+    if (u.role === 'owner') return toast('Akun owner tidak dapat dihapus.', 'error');
+    if (u.id === me.id || u.email === me.email) return toast('Tidak dapat menghapus akun sendiri yang sedang aktif.', 'error');
+    setConfirmModal({
+      title: 'Hapus Akun Tim Admin',
+      message: `Hapus akun "${u.name}" (${roleLabel(u.role)})? Akses pengguna akan dicabut dari sistem dan database.`,
+      confirmLabel: 'Hapus Akun',
+      danger: true,
+      onConfirm: () => {
+        commitTeam((prev) => prev.filter((x) => x.id !== u.id));
+        setConfirmModal(null);
+        toast(`Akun tim ${u.name} berhasil dihapus.`, 'warning');
+        const targetId = u.backendId || (typeof u.id === 'number' ? u.id : String(u.id || '').replace(/\D/g, ''));
+        if (targetId) {
+          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
+        }
+      }
+    });
   };
 
   const handleProofFile = (file) => {
@@ -1392,6 +1586,10 @@ export default function MarketingDashboard({
     closeTime: '23:59',
     readyEstimate: '45 hari setelah PO tutup',
     description: '',
+    image: '',
+    isSale: false,
+    discountPercent: 15,
+    originalPrice: '',
     terminCount: 3,
     stages: makeStages(3, defaultCloseDate),
     modelsText: '',
@@ -1451,6 +1649,10 @@ export default function MarketingDashboard({
         closeTime: p.closeTime || '',
         readyEstimate: p.readyEstimate,
         description: p.description,
+        image: p.image || '',
+        isSale: !!p.isSale,
+        discountPercent: p.discountPercent || 0,
+        originalPrice: p.originalPrice || '',
         terminCount: stages.length === 2 ? 2 : 3,
         stages,
         modelsText: (p.options?.models || []).map((m) => m.name).join('\n'),
@@ -1548,6 +1750,7 @@ export default function MarketingDashboard({
     return list.reduce(
       (acc, p) => {
         acc.all += 1;
+        if (p.isSale) acc.sale += 1;
         if (p.status === 'closed') acc.closed += 1;
         else {
           acc.open += 1;
@@ -1555,7 +1758,7 @@ export default function MarketingDashboard({
         }
         return acc;
       },
-      { all: 0, open: 0, closing: 0, closed: 0 }
+      { all: 0, open: 0, closing: 0, closed: 0, sale: 0 }
     );
   }, [productSummary, catalogBrand, catalogCategory]);
 
@@ -1567,6 +1770,7 @@ export default function MarketingDashboard({
         if (catalogStatus === 'open' && p.status !== 'open') return false;
         if (catalogStatus === 'closed' && p.status !== 'closed') return false;
         if (catalogStatus === 'closing' && (p.status !== 'open' || diffDays(p.closeDate, todayISO()) > 0)) return false;
+        if (catalogStatus === 'sale' && !p.isSale) return false;
         const q = catalogSearch.trim().toLowerCase();
         if (!q) return true;
         return [p.title, p.brand, p.category, p.sku].filter(Boolean).join(' ').toLowerCase().includes(q);
@@ -2642,6 +2846,7 @@ export default function MarketingDashboard({
                     options={[
                       { value: 'all', label: 'Semua', count: catalogCounts.all },
                       { value: 'open', label: 'PO Dibuka', count: catalogCounts.open },
+                      { value: 'sale', label: '🔥 Sale', count: catalogCounts.sale },
                       { value: 'closing', label: 'Tutup Hari Ini', count: catalogCounts.closing },
                       { value: 'closed', label: 'Arsip / Ditutup', count: catalogCounts.closed }
                     ]}
@@ -2732,7 +2937,7 @@ export default function MarketingDashboard({
                   <span className="font-semibold text-gray-400">Filter Aktif:</span>
                   {catalogStatus !== 'all' && (
                     <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 px-2 py-0.5 rounded-md font-medium">
-                      Status: {catalogStatus === 'open' ? 'PO Dibuka' : catalogStatus === 'closing' ? 'Tutup Hari Ini' : 'Arsip'}
+                      Status: {catalogStatus === 'open' ? 'PO Dibuka' : catalogStatus === 'sale' ? '🔥 Sale' : catalogStatus === 'closing' ? 'Tutup Hari Ini' : 'Arsip'}
                       <button onClick={() => setCatalogStatus('all')} className="hover:text-rose-600 font-bold ml-0.5">×</button>
                     </span>
                   )}
@@ -2771,24 +2976,41 @@ export default function MarketingDashboard({
                 const quota = p.quota;
                 return (
                   <div key={p.id} className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden flex flex-col">
-                    <div className="h-24 bg-gradient-to-br from-rose-900 via-rose-800 to-amber-700 relative flex items-end p-4">
-                      <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(circle at 20% 30%, #fff 1px, transparent 1px)', backgroundSize: '18px 18px' }} />
-                      <div className="relative">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-amber-200">{p.brand}</p>
-                        <h3 className="text-base font-bold text-white leading-tight">{p.title}</h3>
+                    <div className="h-28 bg-gradient-to-br from-rose-900 via-rose-800 to-amber-700 relative flex items-end p-4 overflow-hidden">
+                      {p.image ? (
+                        <img src={p.image} alt={p.title} className="absolute inset-0 w-full h-full object-cover opacity-60 hover:scale-105 transition duration-300" />
+                      ) : (
+                        <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(circle at 20% 30%, #fff 1px, transparent 1px)', backgroundSize: '18px 18px' }} />
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
+                      <div className="relative z-10">
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-amber-200 drop-shadow-sm">{p.brand}</p>
+                        <h3 className="text-base font-bold text-white leading-tight drop-shadow-md">{p.title}</h3>
                       </div>
-                      <span className="absolute top-3 right-3">
+                      <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5">
+                        {p.isSale && (
+                          <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-sm">
+                            SALE {p.discountPercent || 0}%
+                          </span>
+                        )}
                         <Badge tone={p.status === 'open' ? 'emerald' : 'gray'}>
                           {p.status === 'open' ? 'PO Dibuka' : 'PO Ditutup'}
                         </Badge>
-                      </span>
+                      </div>
                     </div>
 
                     <div className="p-4 flex-1 space-y-3">
                       <div className="flex items-end justify-between">
                         <div>
                           <p className="text-[10px] text-gray-400 uppercase font-semibold">Harga Varian</p>
-                          <p className="text-lg font-bold text-gray-900">{priceRangeOf(p).label}</p>
+                          <div className="flex items-baseline gap-1.5 flex-wrap">
+                            <p className="text-lg font-bold text-gray-900">{priceRangeOf(p).label}</p>
+                            {p.isSale && p.originalPrice > p.price && (
+                              <span className="text-xs text-gray-400 line-through">
+                                {rp(p.originalPrice)}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="text-right space-y-0.5">
                           {p.openDate && (
@@ -3363,6 +3585,13 @@ export default function MarketingDashboard({
                           >
                             {m.active ? 'Nonaktifkan' : 'Aktifkan'}
                           </Button>
+                          <Button
+                            size="xs"
+                            variant="danger"
+                            onClick={() => deleteMitra(m)}
+                          >
+                            Hapus
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -3434,14 +3663,24 @@ export default function MarketingDashboard({
                         <Badge tone={u.active ? 'emerald' : 'gray'}>{u.active ? 'Aktif' : 'Nonaktif'}</Badge>
                       </td>
                       <td className={`${TD} text-right`}>
-                        <Button
-                          size="xs"
-                          variant={u.active ? 'dangerOutline' : 'primary'}
-                          disabled={u.role === 'owner'}
-                          onClick={() => toggleTeam(u)}
-                        >
-                          {u.active ? 'Nonaktifkan' : 'Aktifkan'}
-                        </Button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            size="xs"
+                            variant={u.active ? 'dangerOutline' : 'primary'}
+                            disabled={u.role === 'owner'}
+                            onClick={() => toggleTeam(u)}
+                          >
+                            {u.active ? 'Nonaktifkan' : 'Aktifkan'}
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="danger"
+                            disabled={u.role === 'owner'}
+                            onClick={() => deleteTeam(u)}
+                          >
+                            Hapus
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -4533,6 +4772,141 @@ export default function MarketingDashboard({
               <div className="flex items-center gap-2">
                 <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">3</span>
                 <div>
+                  <p className="text-[11px] font-bold text-gray-800">Foto / Gambar Produk Katalog</p>
+                  <p className="text-[10px] text-gray-400">Pilih file foto dari laptop/HP atau masukkan URL gambar.</p>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-4 items-start">
+                <div className="w-28 h-28 rounded-xl border border-gray-200 bg-stone-50 overflow-hidden shrink-0 flex items-center justify-center relative group">
+                  {productModal.form.image ? (
+                    <>
+                      <img src={productModal.form.image} alt="Preview" className="w-full h-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => setProductModal((prev) => ({ ...prev, form: { ...prev.form, image: '' } }))}
+                        className="absolute top-1 right-1 bg-black/70 hover:bg-black text-white rounded-full p-1 text-[10px] shadow"
+                        title="Hapus foto"
+                      >
+                        ✕
+                      </button>
+                    </>
+                  ) : (
+                    <div className="text-center p-2">
+                      <span className="text-3xl block mb-1">🖼️</span>
+                      <span className="text-[9px] text-gray-400 font-medium">Belum ada foto</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 w-full space-y-2">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">Upload File Foto</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onloadend = () => {
+                            setProductModal((prev) => ({
+                              ...prev,
+                              form: { ...prev.form, image: reader.result }
+                            }));
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      className="block w-full text-xs text-stone-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-stone-900 file:text-white hover:file:bg-black cursor-pointer border border-gray-200 rounded-lg p-1 bg-stone-50"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">Atau Masukkan URL Gambar Web</label>
+                    <Input
+                      type="url"
+                      value={productModal.form.image || ''}
+                      placeholder="https://.../gambar-produk.jpg"
+                      onChange={(e) =>
+                        setProductModal((prev) => ({ ...prev, form: { ...prev.form, image: e.target.value } }))
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-gray-200 p-3 space-y-3 bg-gradient-to-r from-red-50/40 via-amber-50/20 to-transparent">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">4</span>
+                  <div>
+                    <p className="text-[11px] font-bold text-gray-800">Status Promo & Sale Katalog</p>
+                    <p className="text-[10px] text-gray-500">Tandai apakah produk ini masuk ke etalase SALE di beranda mitra.</p>
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-xs hover:border-red-300 transition">
+                  <input
+                    type="checkbox"
+                    checked={!!productModal.form.isSale}
+                    onChange={(e) =>
+                      setProductModal((prev) => ({
+                        ...prev,
+                        form: {
+                          ...prev.form,
+                          isSale: e.target.checked,
+                          discountPercent: e.target.checked ? (prev.form.discountPercent || 15) : 0
+                        }
+                      }))
+                    }
+                    className="w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500 cursor-pointer"
+                  />
+                  <span className="text-xs font-bold text-gray-800">🔥 Aktifkan Sale</span>
+                </label>
+              </div>
+
+              {productModal.form.isSale && (
+                <div className="p-3 bg-white rounded-lg border border-red-200/80 space-y-3">
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <Field label="Diskon Sale (%)" hint="Label diskon yang tampil di badge produk.">
+                      <Input
+                        type="number"
+                        min="1"
+                        max="99"
+                        value={productModal.form.discountPercent || ''}
+                        placeholder="Contoh: 15"
+                        onChange={(e) =>
+                          setProductModal((prev) => ({
+                            ...prev,
+                            form: { ...prev.form, discountPercent: e.target.value }
+                          }))
+                        }
+                      />
+                    </Field>
+                    <Field label="Harga Coret / Normal (Rp)" hint="Harga awal sebelum diskon (opsional, otomatis dihitung jika kosong).">
+                      <Input
+                        type="number"
+                        value={productModal.form.originalPrice || ''}
+                        placeholder="Contoh: 250000"
+                        onChange={(e) =>
+                          setProductModal((prev) => ({
+                            ...prev,
+                            form: { ...prev.form, originalPrice: e.target.value }
+                          }))
+                        }
+                      />
+                    </Field>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-red-700 bg-red-50 p-2 rounded-md">
+                    <span>✨</span>
+                    <span>Produk ini otomatis tampil di <b>Bagian SALE Beranda</b>, memiliki badge <b>SALE {productModal.form.discountPercent || 0}%</b>, dan masuk dalam filter <b>Katalog Sale</b>.</span>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-xl border border-gray-200 p-3 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">5</span>
+                <div>
                   <p className="text-[11px] font-bold text-gray-800">Timeline Open & Close</p>
                   <p className="text-[10px] text-gray-400">Tanggal buka & tutup PO yang tampil di katalog dan reminder admin.</p>
                 </div>
@@ -4570,7 +4944,7 @@ export default function MarketingDashboard({
 
             <section className="rounded-xl border border-gray-200 p-3 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">4</span>
+                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">6</span>
                 <div>
                   <p className="text-[11px] font-bold text-gray-800">Termin Pembayaran</p>
                   <p className="text-[10px] text-gray-400">Pilih 2x atau 3x, lalu atur porsi & tanggal tiap termin.</p>
@@ -4643,7 +5017,7 @@ export default function MarketingDashboard({
 
             <section className="rounded-xl border border-gray-200 p-3 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">5</span>
+                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">7</span>
                 <div>
                   <p className="text-[11px] font-bold text-gray-800">Opsi & Varian Katalog</p>
                   <p className="text-[10px] text-gray-400">

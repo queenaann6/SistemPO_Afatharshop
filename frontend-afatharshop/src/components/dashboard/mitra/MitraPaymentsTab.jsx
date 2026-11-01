@@ -1,82 +1,56 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { SearchIcon, XIcon, EyeIcon } from '../../Icons';
 
-export default function MitraPaymentsTab() {
+export default function MitraPaymentsTab({ orders = [] }) {
   const [selectedProof, setSelectedProof] = useState(null);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
 
-  const paymentGroups = [
-    {
-      date: '7 Okt 2026',
-      items: [
-        {
-          id: 'pay-1',
-          inv: 'INV/26/10/MH/HENI/349',
-          title: 'Ongkos Kirim',
+  const dynamicOrderPayments = useMemo(() => {
+    const items = [];
+    (orders || []).forEach((ord) => {
+      if (ord.dpProof) {
+        items.push({
+          id: `pay-dp-${ord.orderNo || ord.id}`,
+          inv: ord.orderNo || ord.id,
+          title: `DP — ${ord.title}`,
           method: 'Transfer',
-          amount: 261000,
-          status: 'Berhasil Diverifikasi',
-          proofImage: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80'
-        },
-        {
-          id: 'pay-2',
-          inv: 'INV/26/10/MH/HENI/348',
-          title: 'PELUNASAN — KARLA',
+          amount: ord.dpNominal || 0,
+          status: ord.dpStatus === 'ACC' || ord.dpStatus === 'Lunas' ? 'Berhasil Diverifikasi' : 'Menunggu Validasi',
+          proofImage: ord.dpProof
+        });
+      }
+      if (ord.pelunasanProof) {
+        items.push({
+          id: `pay-pel-${ord.orderNo || ord.id}`,
+          inv: ord.orderNo || ord.id,
+          title: `Pelunasan — ${ord.title}`,
           method: 'Transfer',
-          amount: 63400,
-          status: 'Berhasil Diverifikasi',
-          proofImage: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80'
-        }
-      ]
-    },
-    {
-      date: '6 Okt 2026',
-      items: [
-        {
-          id: 'pay-3',
-          inv: 'feb3600c8024',
-          title: 'DP 1 — MUKENA SEKAR SASMITA',
-          method: 'Transfer',
-          amount: 270000,
-          status: 'Berhasil Diverifikasi',
-          proofImage: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80'
-        },
-        {
-          id: 'pay-4',
-          inv: 'INV/26/10/MH/HENI/319',
-          title: 'DP — SARIMBIT SEKAR SASMITA',
-          method: 'Transfer',
-          amount: 954000,
-          status: 'Berhasil Diverifikasi',
-          proofImage: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80'
-        }
-      ]
-    },
-    {
-      date: '8 Sep 2026',
-      items: [
-        {
-          id: 'pay-5',
-          inv: 'INV/26/09/MH/HENI/071',
-          title: 'Ongkos Kirim',
-          method: 'Transfer',
-          amount: 0,
-          status: 'Berhasil Diverifikasi',
-          proofImage: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80'
-        },
-        {
-          id: 'pay-6',
-          inv: 'INV/26/09/MH/HENI/070',
-          title: 'Pelunasan — ALDA MINI BAG',
-          method: 'Transfer',
-          amount: 39125,
-          status: 'Berhasil Diverifikasi',
-          proofImage: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80'
-        }
-      ]
+          amount: ord.pelunasanNominal || 0,
+          status: ord.pelunasanStatus === 'ACC' || ord.pelunasanStatus === 'Lunas' ? 'Berhasil Diverifikasi' : 'Menunggu Validasi',
+          proofImage: ord.pelunasanProof
+        });
+      }
+    });
+    return items;
+  }, [orders]);
+
+  const paymentGroups = useMemo(() => {
+    if (dynamicOrderPayments.length > 0) {
+      return [{ date: 'Hari ini (Terbaru)', items: dynamicOrderPayments }];
     }
-  ];
+    return [];
+  }, [dynamicOrderPayments]);
+
+  const allPaymentItems = useMemo(
+    () => paymentGroups.flatMap((g) => g.items || []),
+    [paymentGroups]
+  );
+  const totalPaid = useMemo(
+    () => allPaymentItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0),
+    [allPaymentItems]
+  );
+  const totalCount = allPaymentItems.length;
 
   return (
     <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-xs border border-stone-200/80 space-y-6">
@@ -85,7 +59,7 @@ export default function MitraPaymentsTab() {
         <h2 className="text-lg sm:text-xl font-bold text-stone-900 tracking-wide">
           Riwayat Pembayaran
         </h2>
-        <span className="text-xs text-stone-500 font-semibold">12 pembayaran</span>
+        <span className="text-xs text-stone-500 font-semibold">{totalCount} pembayaran</span>
       </div>
 
       {/* Top Maroon Metric Card (Matches Screenshot 5) */}
@@ -93,9 +67,9 @@ export default function MitraPaymentsTab() {
         <div>
           <p className="text-xs text-rose-100 font-medium">✓ Total Sudah Dibayar</p>
           <h3 className="text-2xl sm:text-3xl font-extrabold mt-1 tracking-tight">
-            Rp 3.178.050
+            Rp {totalPaid.toLocaleString('id-ID')}
           </h3>
-          <p className="text-xs text-rose-100/90 mt-1">20 pembayaran</p>
+          <p className="text-xs text-rose-100/90 mt-1">{totalCount} pembayaran</p>
         </div>
       </div>
 
@@ -141,79 +115,82 @@ export default function MitraPaymentsTab() {
         </button>
       </div>
 
-      {/* Grouped Payments List (Matches Screenshot 5) */}
-      <div className="space-y-6">
-        {paymentGroups.map((group) => (
-          <div key={group.date} className="space-y-3">
-            <h4 className="text-xs font-bold text-stone-500 tracking-wider">
-              {group.date}
-            </h4>
+      {/* Grouped Payments List */}
+      {paymentGroups.length === 0 ? (
+        <div className="py-12 text-center text-stone-400">
+          <p className="text-sm font-medium">Belum ada riwayat pembayaran.</p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {paymentGroups.map((group) => (
+            <div key={group.date} className="space-y-3">
+              <h4 className="text-xs font-bold text-stone-500 tracking-wider">
+                {group.date}
+              </h4>
 
-            <div className="space-y-3">
-              {group.items.map((item) => (
-                <div
-                  key={item.id}
-                  className="bg-white rounded-2xl p-4 border border-stone-200/80 hover:border-[#6B1416]/30 transition shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                >
-                  {/* Left: Icon & Info */}
-                  <div className="flex items-center gap-3.5">
-                    {/* Maroon target / radio circle */}
-                    <div className="w-8 h-8 rounded-full bg-rose-50 text-[#6B1416] border border-rose-200 flex items-center justify-center shrink-0">
-                      <div className="w-2.5 h-2.5 rounded-full bg-[#6B1416]" />
-                    </div>
+              <div className="space-y-3">
+                {group.items.map((item) => (
+                  <div
+                    key={item.id}
+                    className="bg-white rounded-2xl p-4 border border-stone-200/80 hover:border-[#6B1416]/30 transition shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    {/* Left: Icon & Info */}
+                    <div className="flex items-center gap-3.5">
+                      {/* Maroon target / radio circle */}
+                      <div className="w-8 h-8 rounded-full bg-rose-50 text-[#6B1416] border border-rose-200 flex items-center justify-center shrink-0">
+                        <div className="w-2.5 h-2.5 rounded-full bg-[#6B1416]" />
+                      </div>
 
-                    <div>
-                      <p className="text-[10px] font-mono text-stone-400">
-                        {item.inv}
-                      </p>
-                      <h5 className="font-bold text-xs text-stone-800">
-                        {item.title}
-                      </h5>
-                      <div className="flex items-center gap-2 mt-0.5 text-[11px] text-stone-500">
-                        <span>{item.method}</span>
-                        <span>•</span>
-                        <button
-                          onClick={() => setSelectedProof(item)}
-                          className="text-[#6B1416] hover:underline font-semibold flex items-center gap-1 cursor-pointer"
-                        >
-                          <EyeIcon className="w-3.5 h-3.5" />
-                          <span>Lihat Bukti</span>
-                        </button>
+                      <div>
+                        <p className="text-[10px] font-mono text-stone-400">
+                          {item.inv}
+                        </p>
+                        <h5 className="font-bold text-xs text-stone-800">
+                          {item.title}
+                        </h5>
+                        <div className="flex items-center gap-2 mt-0.5 text-[11px] text-stone-500">
+                          <span>{item.method}</span>
+                          <span>•</span>
+                          <button
+                            onClick={() => setSelectedProof(item)}
+                            className="text-[#6B1416] hover:underline font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <EyeIcon className="w-3.5 h-3.5" />
+                            <span>Lihat Bukti</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  {/* Right: Amount & Detail */}
-                  <div className="text-right sm:self-center">
-                    <p className="font-bold text-stone-900 text-sm">
-                      Rp {item.amount.toLocaleString('id-ID')}
-                    </p>
-                    <button
-                      onClick={() => setSelectedProof(item)}
-                      className="text-[11px] text-stone-400 hover:text-[#6B1416] transition font-medium cursor-pointer"
-                    >
-                      Detail &gt;
-                    </button>
+                    {/* Right: Amount & Detail */}
+                    <div className="text-right sm:self-center">
+                      <p className="font-bold text-stone-900 text-sm">
+                        Rp {item.amount.toLocaleString('id-ID')}
+                      </p>
+                      <button
+                        onClick={() => setSelectedProof(item)}
+                        className="text-[11px] text-stone-400 hover:text-[#6B1416] transition font-medium cursor-pointer"
+                      >
+                        Detail &gt;
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
-      {/* Pagination Footer (Matches Screenshot 5) */}
+      {/* Pagination Footer */}
       <div className="flex items-center justify-between pt-4 border-t border-stone-100 text-xs text-stone-500">
-        <p>Menampilkan 1 - 10 dari 20 pembayaran</p>
+        <p>Menampilkan {totalCount > 0 ? `1 - ${totalCount}` : '0'} dari {totalCount} pembayaran</p>
         <div className="flex items-center gap-1">
           <button className="px-2.5 py-1 border border-stone-200 rounded-lg hover:bg-stone-50 cursor-pointer">
             &lt;
           </button>
           <button className="px-2.5 py-1 bg-[#6B1416] text-white font-bold rounded-lg cursor-pointer">
             1
-          </button>
-          <button className="px-2.5 py-1 border border-stone-200 rounded-lg hover:bg-stone-50 cursor-pointer">
-            2
           </button>
           <button className="px-2.5 py-1 border border-stone-200 rounded-lg hover:bg-stone-50 cursor-pointer">
             &gt;

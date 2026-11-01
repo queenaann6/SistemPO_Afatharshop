@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function HeroBanner({ onSelectSale, onSelectPreOrder }) {
+export default function HeroBanner({ onSelectPreOrder }) {
   return (
     <section className="w-full px-4 pt-6 pb-2">
       <div className="max-w-7xl mx-auto">
@@ -37,15 +37,13 @@ export default function HeroBanner({ onSelectSale, onSelectPreOrder }) {
 
           {/* CTA Buttons */}
           <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 relative z-10">
-            {/* Button 1: Gold "Lihat Katalog Sale" */}
             <button
-              onClick={onSelectSale}
+              onClick={onSelectPreOrder}
               className="bg-[#F0C973] hover:bg-[#E5BC64] text-[#420C0E] font-bold text-xs sm:text-sm px-6 py-2.5 sm:py-3 rounded-lg shadow-md hover:scale-103 transition-all duration-150 cursor-pointer"
             >
-              Lihat Katalog Sale
+              Mulai Pre-Order
             </button>
 
-            {/* Button 2: WHITE "Katalog Pre-Order" (Adjusted to White as requested) */}
             <button
               onClick={onSelectPreOrder}
               className="bg-white hover:bg-stone-100 text-[#6B1416] font-bold text-xs sm:text-sm px-6 py-2.5 sm:py-3 rounded-lg shadow-md hover:scale-103 transition-all duration-150 cursor-pointer border border-white"

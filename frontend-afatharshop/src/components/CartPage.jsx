@@ -75,7 +75,7 @@ export default function CartPage({
             </div>
             <h3 className="font-bold text-stone-800 text-base">Keranjang Pre Order Kosong</h3>
             <p className="text-xs text-stone-500 max-w-sm mx-auto">
-              Anda belum menambahkan produk pre-order ke keranjang. Silakan jelajahi katalog busana muslimah syar'i kami.
+              Anda belum menambahkan produk pre-order ke keranjang. Silakan jelajahi katalog lebih lanjut.
             </p>
             <button
               onClick={onNavigateCatalog}
@@ -138,7 +138,7 @@ export default function CartPage({
                           className="w-4 h-4 rounded text-[#6B1416] focus:ring-[#6B1416] cursor-pointer"
                         />
                         <span>🏪</span>
-                        <span>{item.brand || 'AFATHAR SHOP'}</span>
+                        <span>{item.brand || 'AFATHARSHOP'}</span>
                         <span className="text-stone-400 font-normal">•</span>
                         <span className="text-stone-600 font-medium truncate">
                           {item.title}
@@ -225,8 +225,9 @@ export default function CartPage({
                 </button>
 
                 <div className="text-[11px] text-stone-500 space-y-1 pt-1 border-t border-stone-100">
-                  <p>✓ Garansi alokasi kuota pre-order pabrik resmi</p>
-                  <p>✓ Invoice resmi otomatis diteruskan ke Admin Finance</p>
+                  <p>✓ Pengiriman Barang sesuai Estimasi</p>
+                  <p>✓ Harap melakukan Pembayaran DP H-1 Close PO</p>
+                  <p>✓ Orderan & Invoice otomatis diteruskan ke Admin</p>
                 </div>
 
               </div>

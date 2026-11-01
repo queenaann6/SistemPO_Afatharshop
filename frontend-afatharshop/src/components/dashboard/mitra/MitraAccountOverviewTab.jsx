@@ -53,7 +53,7 @@ export default function MitraAccountOverviewTab({ currentUser, onSelectTab }) {
               <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden bg-white/10 ring-4 ring-white/20 shadow-lg shrink-0">
                 <img
                   src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-                  alt={currentUser?.name || 'HENI'}
+                  alt={currentUser?.name || 'Mitra'}
                   className="w-full h-full object-cover"
                 />
               </div>
@@ -65,7 +65,7 @@ export default function MitraAccountOverviewTab({ currentUser, onSelectTab }) {
             <div className="space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-xl sm:text-2xl font-bold tracking-wide">
-                  {currentUser?.name || 'HENI'}
+                  {currentUser?.name || 'Mitra'}
                 </h3>
                 <span className="bg-amber-400 text-amber-950 font-extrabold text-[10px] px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-2xs">
                   Gold Distributor
@@ -127,7 +127,7 @@ export default function MitraAccountOverviewTab({ currentUser, onSelectTab }) {
               <DocumentTextIcon className="w-4 h-4 text-rose-600" />
             </div>
             <h4 className="text-2xl font-bold text-stone-900 mt-1">
-              {currentUser?.totalBill || 'Rp 3.399.145'}
+              {currentUser?.totalBill || 'Rp 0'}
             </h4>
             <p className="text-[11px] text-stone-400 mt-0.5">Termin DP & Pelunasan</p>
           </div>
@@ -198,27 +198,27 @@ export default function MitraAccountOverviewTab({ currentUser, onSelectTab }) {
           <div className="space-y-3 text-xs">
             <div className="flex justify-between py-1 border-b border-stone-50">
               <span className="text-stone-500">Nama Lengkap:</span>
-              <span className="font-bold text-stone-900">{currentUser?.name || 'HENI'}</span>
+              <span className="font-bold text-stone-900">{currentUser?.name || 'Mitra'}</span>
             </div>
             <div className="flex justify-between py-1 border-b border-stone-50">
               <span className="text-stone-500">Nomor WhatsApp:</span>
               <span className="font-bold text-stone-900 font-mono">
-                {currentUser?.phone || '(+62) 0812-1999-1888'}
+                {currentUser?.phone || '-'}
               </span>
             </div>
             <div className="flex justify-between py-1 border-b border-stone-50">
               <span className="text-stone-500">Email Resmi:</span>
               <span className="font-bold text-stone-900">
-                {currentUser?.email || 'afatharshop@maknahijab.com'}
+                {currentUser?.email || '-'}
               </span>
             </div>
             <div className="flex justify-between py-1 border-b border-stone-50">
               <span className="text-stone-500">Peran Sistem:</span>
-              <span className="font-bold text-emerald-700">Mitra Distributor Resmi</span>
+              <span className="font-bold text-emerald-700">{currentUser?.level || 'Mitra Distributor Resmi'}</span>
             </div>
             <div className="flex justify-between py-1">
-              <span className="text-stone-500">Rekening Pengembalian Dana:</span>
-              <span className="font-bold text-stone-900 font-mono">BCA : 739-082-9988 (HENI)</span>
+              <span className="text-stone-500">Status Akun:</span>
+              <span className="font-bold text-emerald-600">Aktif & Terverifikasi</span>
             </div>
           </div>
         </div>

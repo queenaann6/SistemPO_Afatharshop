@@ -1,42 +1,104 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { DocumentTextIcon, CheckIcon } from '../../Icons';
 import { openInvoicePrintTab } from '../../../utils/printInvoice';
 
 export default function MitraBillsHistoryTab({ orders = [], currentUser, adminBankAccounts = [] }) {
-  const settledBills = [
-    {
-      id: 'settled-1',
-      orderNo: 'INV/26/10/MH/HENI/348',
-      title: 'PELUNASAN — KARLA',
-      amount: 63400,
-      settledAt: '07 Okt 2026',
-      status: 'Lunas'
-    },
-    {
-      id: 'settled-2',
-      orderNo: 'feb3600c8024',
-      title: 'DP 1 — MUKENA SEKAR SASMITA',
-      amount: 270000,
-      settledAt: '06 Okt 2026',
-      status: 'Lunas'
-    },
-    {
-      id: 'settled-3',
-      orderNo: 'INV/26/10/MH/HENI/319',
-      title: 'DP — SARIMBIT SEKAR SASMITA',
-      amount: 954000,
-      settledAt: '06 Okt 2026',
-      status: 'Lunas'
-    },
-    {
-      id: 'settled-4',
-      orderNo: 'INV/26/09/MH/HENI/070',
-      title: 'Pelunasan — ALDA MINI BAG',
-      amount: 39125,
-      settledAt: '08 Sep 2026',
-      status: 'Lunas'
-    }
-  ];
+  const initialSettledBills = [];
+
+  const settledBills = useMemo(() => {
+    const derived = [];
+    const handledKeys = new Set();
+
+    (orders || []).forEach((order) => {
+      const orderNo = order.orderNo || order.id || order.invoice;
+      if (!orderNo) return;
+
+      const isFullyLunas =
+        String(order.status || '').toLowerCase().includes('lunas') ||
+        Number(order.sisaTagihan || 0) <= 0;
+
+      // 1. DP yang sudah ACC
+      const dpIsAcc =
+        order.dpStatus === 'ACC' ||
+        order.dpStatus === 'acc' ||
+        order.dpStatus === 'Terbukti';
+      if (dpIsAcc && Number(order.dpNominal || 0) > 0) {
+        const key = `dp-${orderNo}`;
+        handledKeys.add(key);
+        derived.push({
+          id: key,
+          orderNo,
+          title: `DP — ${order.title || orderNo}`,
+          amount: Number(order.dpNominal || 0),
+          settledAt: order.dpVerifiedAt || order.date || 'Hari ini',
+          status: 'Lunas',
+          order
+        });
+      }
+
+      // 2. Pelunasan yang sudah ACC
+      const pelunasanIsAcc =
+        order.pelunasanStatus === 'ACC' ||
+        order.pelunasanStatus === 'acc' ||
+        order.pelunasanStatus === 'Terbukti';
+      if (pelunasanIsAcc && Number(order.pelunasanNominal || 0) > 0) {
+        const key = `pelunasan-${orderNo}`;
+        handledKeys.add(key);
+        derived.push({
+          id: key,
+          orderNo,
+          title: `PELUNASAN — ${order.title || orderNo}`,
+          amount: Number(order.pelunasanNominal || 0),
+          settledAt: order.pelunasanVerifiedAt || order.date || 'Hari ini',
+          status: 'Lunas',
+          order
+        });
+      }
+
+      // 3. Ongkir yang sudah ACC
+      const ongkirIsAcc =
+        order.ongkirStatus === 'ACC' ||
+        order.ongkirStatus === 'acc' ||
+        order.ongkirStatus === 'Terbukti';
+      if (ongkirIsAcc && Number(order.ongkir || 0) > 0) {
+        const key = `ongkir-${orderNo}`;
+        handledKeys.add(key);
+        derived.push({
+          id: key,
+          orderNo,
+          title: `ONGKIR — ${order.title || orderNo}`,
+          amount: Number(order.ongkir || 0),
+          settledAt: order.ongkirVerifiedAt || order.date || 'Hari ini',
+          status: 'Lunas',
+          order
+        });
+      }
+
+      // 4. Jika order berstatus Lunas tapi individual DP/pelunasan belum spesifik di-ACC
+      if (isFullyLunas && !dpIsAcc && !pelunasanIsAcc) {
+        const key = `full-${orderNo}`;
+        if (!handledKeys.has(key)) {
+          handledKeys.add(key);
+          derived.push({
+            id: key,
+            orderNo,
+            title: `LUNAS — ${order.title || orderNo}`,
+            amount: Number(order.total || 0),
+            settledAt: order.date || 'Hari ini',
+            status: 'Lunas',
+            order
+          });
+        }
+      }
+    });
+
+    return derived;
+  }, [orders]);
+
+  const totalSettledAmount = useMemo(
+    () => settledBills.reduce((sum, b) => sum + (Number(b.amount) || 0), 0),
+    [settledBills]
+  );
 
   const handleDownloadInvoice = (bill) => {
     // 1. Cari apakah ada data order lengkap yang cocok di daftar pesanan mitra
@@ -64,9 +126,9 @@ export default function MitraBillsHistoryTab({ orders = [], currentUser, adminBa
         status: 'Lunas',
         paymentStatus: 'Lunas',
         date: bill.settledAt,
-        recipientName: currentUser?.name || matchedOrder.recipientName || 'HENI',
-        recipientPhone: currentUser?.phone || matchedOrder.recipientPhone || '(+62) 0812-1999-1888',
-        recipientAddress: currentUser?.address || matchedOrder.recipientAddress
+        recipientName: currentUser?.name || matchedOrder.recipientName || 'Mitra',
+        recipientPhone: currentUser?.phone || matchedOrder.recipientPhone || '-',
+        recipientAddress: currentUser?.address || matchedOrder.recipientAddress || '-'
       }, adminBankAccounts);
       return;
     }
@@ -81,11 +143,9 @@ export default function MitraBillsHistoryTab({ orders = [], currentUser, adminBa
       date: bill.settledAt,
       status: 'Lunas',
       paymentStatus: 'Lunas',
-      recipientName: currentUser?.name || 'HENI',
-      recipientPhone: currentUser?.phone || '(+62) 0812-1999-1888',
-      recipientAddress:
-        currentUser?.address ||
-        'Perumnas 1 Jl Bungur Raya Rt 12 Rw 7 No 86 Kelurahan Jakasampurna Kecamatan Bekasi Barat Kota Bekasi 17145, Jawa Barat',
+      recipientName: currentUser?.name || 'Mitra',
+      recipientPhone: currentUser?.phone || '-',
+      recipientAddress: currentUser?.address || '-',
       items: [
         {
           id: bill.id,
@@ -109,6 +169,22 @@ export default function MitraBillsHistoryTab({ orders = [], currentUser, adminBa
           Riwayat Tagihan Selesai
         </h2>
         <span className="text-xs text-stone-500 font-semibold">{settledBills.length} tagihan lunas</span>
+      </div>
+
+      {/* Metric Summary Card */}
+      <div className="bg-gradient-to-r from-emerald-800 to-teal-700 text-white rounded-2xl p-5 shadow-xs flex items-center justify-between">
+        <div>
+          <p className="text-xs text-emerald-100 font-medium">Total Pembayaran Terverifikasi (Lunas)</p>
+          <h3 className="text-2xl sm:text-3xl font-extrabold mt-1 tracking-tight tabular-nums">
+            Rp {totalSettledAmount.toLocaleString('id-ID')}
+          </h3>
+          <p className="text-xs text-emerald-100/90 mt-1">
+            {settledBills.length} transaksi telah diverifikasi Admin Finance
+          </p>
+        </div>
+        <div className="w-11 h-11 rounded-2xl bg-white/20 flex items-center justify-center">
+          <CheckIcon className="w-6 h-6 text-white" />
+        </div>
       </div>
 
       <div className="overflow-x-auto">

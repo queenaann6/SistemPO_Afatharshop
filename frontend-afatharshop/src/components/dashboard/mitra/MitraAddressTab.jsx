@@ -1,12 +1,23 @@
 import React, { useState } from 'react';
 import { PlusIcon } from '../../Icons';
 import AddressFormModal from '../../AddressFormModal';
-import { getStoredAddresses, saveStoredAddresses } from './mitraAddressBook';
+import {
+  deleteAddressBookItem,
+  getStoredAddresses,
+  pushAddressBookItem,
+  saveStoredAddresses,
+  setDefaultAddressItem
+} from './mitraAddressBook';
 
 export default function MitraAddressTab() {
   const [addresses, setAddresses] = useState(() => getStoredAddresses());
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAddress, setEditingAddress] = useState(null);
+
+  // Hasil sinkronisasi backend menggantikan cache lokal; null berarti offline.
+  const applyServerBook = (book) => {
+    if (Array.isArray(book) && book.length) setAddresses(book);
+  };
 
   const handleSetDefault = (id) => {
     setAddresses((prev) => {
@@ -18,6 +29,7 @@ export default function MitraAddressTab() {
       saveStoredAddresses(next);
       return next;
     });
+    setDefaultAddressItem(id).then(applyServerBook);
   };
 
   const handleDelete = (id) => {
@@ -27,6 +39,7 @@ export default function MitraAddressTab() {
         saveStoredAddresses(next);
         return next;
       });
+      deleteAddressBookItem(id).then(applyServerBook);
     }
   };
 
@@ -62,6 +75,7 @@ export default function MitraAddressTab() {
         return next;
       });
     }
+    pushAddressBookItem(savedAddr, editingAddress?.id).then(applyServerBook);
     setIsModalOpen(false);
   };
 

@@ -38,9 +38,9 @@ export default function AddressFormModal({
   currentUser = null
 }) {
   const [formData, setFormData] = useState({
-    name: 'HENI',
+    name: '',
     phone: '',
-    email: 'afatharshop@maknahijab.com',
+    email: '',
     address: '',
     province: '',
     city: '',
@@ -65,7 +65,7 @@ export default function AddressFormModal({
       setFormData({
         name: editingAddress.recipient || editingAddress.name || '',
         phone: cleanPhone,
-        email: editingAddress.email || currentUser?.email || 'afatharshop@maknahijab.com',
+        email: editingAddress.email || currentUser?.email || '',
         address: editingAddress.street || editingAddress.address || '',
         province: editingAddress.province || '',
         city: editingAddress.city || '',
@@ -77,12 +77,11 @@ export default function AddressFormModal({
       setIsCustomDistrict(false);
       setIsCustomSubdistrict(false);
     } else {
-      // Default initial state matching screenshot exactly:
-      // Nama: HENI (or current user name), Email: afatharshop@maknahijab.com, others empty placeholders
+      // Default initial state: use current logged-in user name & email if available, else blank
       setFormData({
-        name: currentUser?.name || 'HENI',
-        phone: '',
-        email: currentUser?.email || 'afatharshop@maknahijab.com',
+        name: currentUser?.name || '',
+        phone: currentUser?.phone || '',
+        email: currentUser?.email || '',
         address: '',
         province: '',
         city: '',

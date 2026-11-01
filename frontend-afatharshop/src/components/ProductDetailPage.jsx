@@ -34,6 +34,11 @@ export default function ProductDetailPage({
   const [qty, setQty] = useState(1);
   const [isWishlist, setIsWishlist] = useState(false);
 
+  const isProductClosedPO =
+    product.status === 'closed_po' ||
+    product.status === 'closed' ||
+    product.isClosedPO === true;
+
   // Formatting helpers
   const formatRupiah = (val) => {
     return new Intl.NumberFormat('id-ID', {
@@ -113,11 +118,10 @@ export default function ProductDetailPage({
   const descriptionText = product.description || product.descriptionDetailed?.summary || '';
 
   const store = product.store || {
-    name: 'afatharshop',
+    name: 'Afatharshop',
     badge: 'Official',
-    city: 'KOTA BOGOR',
-    productsCount: 1203,
-    processTime: '± 1-2 hari'
+    city: 'Bekasi, Jawa Barat',
+    processTime: 'Sesuai Timeline PO',
   };
 
   return (
@@ -159,11 +163,11 @@ export default function ProductDetailPage({
 
                 {/* Top Badges */}
                 <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2 pointer-events-none z-10">
-                  <span className="bg-[#1C3D26] text-white text-[11px] font-bold px-3 py-1 rounded-full flex items-center gap-1.5 shadow-md">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                    OPEN PRE-ORDER
+                  <span className={`${isProductClosedPO ? 'bg-stone-700' : 'bg-[#1C3D26]'} text-white text-[11px] font-bold px-3 py-1 rounded-full flex items-center gap-1.5 shadow-md`}>
+                    {!isProductClosedPO && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>}
+                    {isProductClosedPO ? 'PRE-ORDER DITUTUP' : 'OPEN PRE-ORDER'}
                   </span>
-                  {product.isSale && (
+                  {product.isSale && !isProductClosedPO && (
                     <span className="bg-[#8B1E21] text-white text-[11px] font-bold px-3 py-1 rounded-full shadow-md">
                       SALE PO {product.discountPercent}%
                     </span>
@@ -422,36 +426,45 @@ export default function ProductDetailPage({
                 </div>
               </div>
 
-              {/* Action Buttons: Beli Sekarang & + Keranjang (Matches Screenshot 1 & 2) */}
-              <div className="flex items-center gap-3 pt-3">
-                <button
-                  onClick={() => handleActionClick('buy_now')}
-                  className="flex-1 py-3 px-6 rounded-xl bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
-                >
-                  <span>⚡</span>
-                  <span>Beli Sekarang</span>
-                </button>
+              {/* Action Buttons: Beli Sekarang & + Keranjang (Jika PO ditutup, tombol pesan dinonaktifkan) */}
+              {isProductClosedPO ? (
+                <div className="pt-3">
+                  <div className="p-4 bg-stone-100 border border-stone-300 rounded-2xl text-center text-xs text-stone-600 font-bold flex items-center justify-center gap-2">
+                    <span>🔒</span>
+                    <span>Pre-Order Telah Ditutup &mdash; Batch PO ini tidak lagi menerima pesanan baru.</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 pt-3">
+                  <button
+                    onClick={() => handleActionClick('buy_now')}
+                    className="flex-1 py-3 px-6 rounded-xl bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
+                  >
+                    <span>⚡</span>
+                    <span>Beli Sekarang</span>
+                  </button>
 
-                <button
-                  onClick={() => handleActionClick('cart')}
-                  className="flex-1 py-3 px-6 rounded-xl bg-white hover:bg-stone-50 border border-[#6B1416] text-[#6B1416] font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
-                >
-                  <CartIcon className="w-4 h-4 text-[#6B1416]" />
-                  <span>+ Keranjang</span>
-                </button>
+                  <button
+                    onClick={() => handleActionClick('cart')}
+                    className="flex-1 py-3 px-6 rounded-xl bg-white hover:bg-stone-50 border border-[#6B1416] text-[#6B1416] font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
+                  >
+                    <CartIcon className="w-4 h-4 text-[#6B1416]" />
+                    <span>+ Keranjang</span>
+                  </button>
 
-                <button
-                  onClick={() => setIsWishlist(!isWishlist)}
-                  className={`p-3 rounded-xl border transition cursor-pointer ${
-                    isWishlist
-                      ? 'bg-rose-50 border-rose-300 text-rose-600'
-                      : 'bg-white border-stone-300 text-stone-400 hover:text-stone-700'
-                  }`}
-                  title="Simpan ke Wishlist"
-                >
-                  <span className="text-base">{isWishlist ? '♥' : '♡'}</span>
-                </button>
-              </div>
+                  <button
+                    onClick={() => setIsWishlist(!isWishlist)}
+                    className={`p-3 rounded-xl border transition cursor-pointer ${
+                      isWishlist
+                        ? 'bg-rose-50 border-rose-300 text-rose-600'
+                        : 'bg-white border-stone-300 text-stone-400 hover:text-stone-700'
+                    }`}
+                    title="Simpan ke Wishlist"
+                  >
+                    <span className="text-base">{isWishlist ? '♥' : '♡'}</span>
+                  </button>
+                </div>
+              )}
 
               {/* Value Propositions Strip */}
               <div className="grid grid-cols-3 gap-2 pt-3 border-t border-stone-100 text-[11px] text-stone-600 text-center">

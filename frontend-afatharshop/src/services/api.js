@@ -48,7 +48,26 @@ const buildQuery = (params) => {
   return `?${new URLSearchParams(entries).toString()}`;
 };
 
-async function request(path, { method = 'GET', body, auth = true } = {}) {
+const inFlightGets = new Map();
+
+// StrictMode/remount ganda tidak perlu menembak endpoint GET yang sama dua kali.
+function request(path, options = {}) {
+  const method = options.method || 'GET';
+  if (method !== 'GET') return performRequest(path, options);
+
+  const key = `${tokenStore.get() || 'guest'}|${path}`;
+  const pending = inFlightGets.get(key);
+  if (pending) return pending;
+
+  const task = performRequest(path, options).finally(() => inFlightGets.delete(key));
+  inFlightGets.set(key, task);
+  return task;
+}
+
+async function performRequest(
+  path,
+  { method = 'GET', body, auth = true, signal, timeout = DEFAULT_TIMEOUT } = {}
+) {
   const headers = { Accept: 'application/json' };
 
   if (body !== undefined) {
@@ -61,7 +80,12 @@ async function request(path, { method = 'GET', body, auth = true } = {}) {
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT);
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const abortFromOutside = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', abortFromOutside, { once: true });
+  }
 
   let response;
   try {
@@ -79,6 +103,7 @@ async function request(path, { method = 'GET', body, auth = true } = {}) {
     );
   } finally {
     clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', abortFromOutside);
   }
 
   const raw = await response.text();
@@ -142,6 +167,7 @@ export const api = {
   },
 
   // --- Katalog ---
+  catalog: () => request('/catalog'),
   products: (params) => request(`/products${buildQuery(params)}`),
   product: (id) => request(`/products/${id}`),
   brands: () => request('/brands', { auth: false }),
@@ -153,7 +179,99 @@ export const api = {
   // --- Transaksi ---
   orders: () => request('/orders'),
   order: (id) => request(`/orders/${id}`),
-  createOrder: (payload) => request('/orders', { method: 'POST', body: payload })
+  createOrder: (payload) => request('/orders', { method: 'POST', body: payload }),
+
+  // --- Data mitra yang sedang login ---
+  my: {
+    deposits: () => request('/my/deposits'),
+    payments: () => request('/my/payments'),
+    notifications: () => request('/my/notifications'),
+    addresses: () => request('/my/addresses'),
+    createAddress: (payload) => request('/my/addresses', { method: 'POST', body: payload }),
+    updateAddress: (id, payload) =>
+      request(`/my/addresses/${id}`, { method: 'PUT', body: payload }),
+    deleteAddress: (id) => request(`/my/addresses/${id}`, { method: 'DELETE' })
+  },
+
+  // --- Data lintas modul untuk dashboard owner/finance/marketing ---
+  management: {
+    bootstrap: (options) => request('/management/bootstrap', options),
+
+    orders: (options) => request('/management/orders', options),
+    updateOrderStatus: (id, payload) =>
+      request(`/management/orders/${id}/status`, { method: 'PATCH', body: payload }),
+    updateOrder: (id, payload) =>
+      request(`/management/orders/${id}`, { method: 'PUT', body: payload }),
+
+    batches: (options) => request('/management/batches', options),
+    createBatch: (payload) =>
+      request('/management/batches', { method: 'POST', body: payload }),
+    updateBatch: (id, payload) =>
+      request(`/management/batches/${id}`, { method: 'PUT', body: payload }),
+    deleteBatch: (id) =>
+      request(`/management/batches/${id}`, { method: 'DELETE' }),
+
+    createProduct: (payload) =>
+      request('/management/products', { method: 'POST', body: payload }),
+    updateProduct: (id, payload) =>
+      request(`/management/products/${id}`, { method: 'PUT', body: payload }),
+    deleteProduct: (id) =>
+      request(`/management/products/${id}`, { method: 'DELETE' }),
+
+    users: (options) => request('/management/users', options),
+    createUser: (payload) =>
+      request('/management/users', { method: 'POST', body: payload }),
+    updateUser: (id, payload) =>
+      request(`/management/users/${id}`, { method: 'PUT', body: payload }),
+    deleteUser: (id) =>
+      request(`/management/users/${id}`, { method: 'DELETE' }),
+
+    deposits: (options) => request('/management/deposits', options),
+    createDeposit: (payload) =>
+      request('/management/deposits', { method: 'POST', body: payload }),
+    verifyDeposit: (id, payload) =>
+      request(`/management/deposits/${id}/verify`, { method: 'PATCH', body: payload }),
+
+    payments: (options) => request('/management/payments', options),
+    createPayment: (payload) =>
+      request('/management/payments', { method: 'POST', body: payload }),
+    verifyPayment: (id, payload) =>
+      request(`/management/payments/${id}/verify`, { method: 'PATCH', body: payload }),
+
+    paymentRequests: (options) => request('/management/payment-requests', options),
+    createPaymentRequest: (payload) =>
+      request('/management/payment-requests', { method: 'POST', body: payload }),
+    updatePaymentRequest: (id, payload) =>
+      request(`/management/payment-requests/${id}`, { method: 'PATCH', body: payload }),
+
+    suppliers: (options) => request('/management/suppliers', options),
+    createSupplier: (payload) =>
+      request('/management/suppliers', { method: 'POST', body: payload }),
+    updateSupplier: (id, payload) =>
+      request(`/management/suppliers/${id}`, { method: 'PUT', body: payload }),
+    deleteSupplier: (id) =>
+      request(`/management/suppliers/${id}`, { method: 'DELETE' }),
+
+    brands: (options) => request('/management/brands', options),
+    createBrand: (payload) =>
+      request('/management/brands', { method: 'POST', body: payload }),
+    updateBrand: (id, payload) =>
+      request(`/management/brands/${id}`, { method: 'PUT', body: payload }),
+    deleteBrand: (id) =>
+      request(`/management/brands/${id}`, { method: 'DELETE' }),
+
+    categories: (options) => request('/management/categories', options),
+    createCategory: (payload) =>
+      request('/management/categories', { method: 'POST', body: payload }),
+    updateCategory: (id, payload) =>
+      request(`/management/categories/${id}`, { method: 'PUT', body: payload }),
+    deleteCategory: (id) =>
+      request(`/management/categories/${id}`, { method: 'DELETE' }),
+
+    activityLogs: (options) => request('/management/activity-logs', options),
+    notifications: (options) => request('/management/notifications', options),
+    settings: (options) => request('/management/settings', options)
+  }
 };
 
 export default api;

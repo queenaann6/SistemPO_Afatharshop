@@ -9,7 +9,7 @@ import {
   PlusIcon
 } from './Icons';
 import AddressFormModal from './AddressFormModal';
-import { getStoredAddresses, saveStoredAddresses } from './dashboard/mitra/mitraAddressBook';
+import { getStoredAddresses, pushAddressBookItem, saveStoredAddresses } from './dashboard/mitra/mitraAddressBook';
 
 export default function CheckoutPage({
   checkoutItems = [],
@@ -34,7 +34,7 @@ export default function CheckoutPage({
             weight: 0.999,
             image:
               'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=400&q=80',
-            store: 'maknahijab',
+            store: 'Afathar Shop',
             storeCity: 'KOTA BOGOR'
           }
         ];
@@ -135,6 +135,9 @@ export default function CheckoutPage({
       });
       setSelectedAddressId(newAddress.id);
     }
+    pushAddressBookItem(savedAddr, editingAddress?.id).then((book) => {
+      if (Array.isArray(book) && book.length) setAddresses(book);
+    });
     setIsAddressFormOpen(false);
   };
 
@@ -187,7 +190,8 @@ export default function CheckoutPage({
         month: 'short',
         year: 'numeric'
       }),
-      status: 'Pesanan Dibuat',
+      status: 'Menunggu ACC Admin',
+      marketingStatus: 'PENDING',
       statusColor: 'bg-amber-100 text-amber-800',
       total: grandTotal,
       isClosedPO: false,
@@ -201,6 +205,8 @@ export default function CheckoutPage({
       recipientName: activeAddress.name,
       recipientPhone: activeAddress.phoneDisplay || `(+62) ${activeAddress.phone}`,
       recipientAddress: activeAddress.address,
+      recipientCity: activeAddress.city || '',
+      addressId: activeAddress.backendId || activeAddress.id || null,
       courier: selectedCourier,
       aturSebelumKirim,
       notes,
@@ -374,9 +380,9 @@ export default function CheckoutPage({
               {/* Store Identity */}
               <div className="flex items-center gap-2 pb-3 border-b border-stone-100">
                 <span className="text-base">🏪</span>
-                <span className="text-xs font-bold text-stone-900">maknahijab</span>
+                <span className="text-xs font-bold text-stone-900">Afathar Shop</span>
                 <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider ml-1">
-                  KOTA BOGOR
+                  DISTRIBUTOR RESMI
                 </span>
               </div>
 

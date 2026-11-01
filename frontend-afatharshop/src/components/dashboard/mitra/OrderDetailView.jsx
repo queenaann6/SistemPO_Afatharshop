@@ -24,13 +24,35 @@ export default function OrderDetailView({
   onBack,
   onSelectTab,
   onUploadPayment,
+  onPayWithDeposit,
+  currentUser,
   isClosedPOProp,
   adminBankAccounts = [],
   orderInvoice,
   onUpdateOrder
 }) {
   // PO open/close status is strictly determined by Admin (not toggleable by Mitra)
-  const isClosedPO = typeof isClosedPOProp === 'boolean' ? isClosedPOProp : (order?.isClosedPO ?? false);
+  const statusStr = String(order?.status || '').toLowerCase();
+  const isStatusClosed =
+    statusStr.includes('siap kirim') ||
+    statusStr.includes('dikirim') ||
+    statusStr.includes('selesai') ||
+    statusStr.includes('batal') ||
+    statusStr.includes('closed') ||
+    statusStr.includes('ditutup');
+
+  const isClosedPO =
+    typeof isClosedPOProp === 'boolean'
+      ? isClosedPOProp || isStatusClosed
+      : (order?.isClosedPO ?? isStatusClosed);
+
+  const userBalance = Number(String(currentUser?.balance || '').replace(/[^0-9]/g, '')) || 0;
+  const userBalanceFormatted = currentUser?.balance || 'Rp 0';
+
+  const isPendingAcc =
+    order?.marketingStatus === 'PENDING' ||
+    order?.stage === 'baru' ||
+    String(order?.status || '').toLowerCase().includes('menunggu acc');
 
   // Dynamic products list inside this order
   const [items, setItems] = useState(
@@ -80,10 +102,10 @@ export default function OrderDetailView({
         holder: b.holder
       }))
     : [
-        { id: 'mandiri', name: 'MANDIRI : 1234567890123 (a.n Erna Susiyanti)', bank: 'MANDIRI', accountNo: '1234567890123', holder: 'Erna Susiyanti' },
-        { id: 'bca', name: 'BCA : 87654321 (a.n Erna Susiyanti)', bank: 'BCA', accountNo: '87654321', holder: 'Erna Susiyanti' },
-        { id: 'bri', name: 'BRI : 987654312156 (a.n Erna Susiyanti)', bank: 'BRI', accountNo: '987654312156', holder: 'Erna Susiyanti' },
-        { id: 'bsi', name: 'BSI Syariah : 7149021821 (a.n Erna Susiyanti)', bank: 'BSI', accountNo: '7149021821', holder: 'Erna Susiyanti' }
+        { id: 'bca', name: 'BCA : 739-082-9988 a.n CV AFATHAR SHOP DISTRIBUTOR', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR' },
+        { id: 'mandiri', name: 'Bank Mandiri : 133-00-2998801 a.n CV AFATHAR SHOP DISTRIBUTOR', bank: 'Bank Mandiri', accountNo: '133-00-2998801', holder: 'CV AFATHAR SHOP DISTRIBUTOR' },
+        { id: 'bsi', name: 'BSI Syariah : 718-002-9988 a.n CV AFATHAR SHOP DISTRIBUTOR', bank: 'BSI Syariah', accountNo: '718-002-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR' },
+        { id: 'bri', name: 'Bank BRI : 0120-01-002998-50-2 a.n CV AFATHAR SHOP DISTRIBUTOR', bank: 'Bank BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHAR SHOP DISTRIBUTOR' }
       ];
 
   // Modal States
@@ -131,7 +153,7 @@ export default function OrderDetailView({
         address: allocationAddress,
         qty,
         weight: qty * (Number(item.unitWeight) || 300),
-        senderName: base.senderName || 'HENI',
+        senderName: base.senderName || currentUser?.name || 'Afathar Shop',
         senderPhone: base.senderPhone || '(+62)',
         senderNotes: base.senderNotes || '',
         courier: addressCourier
@@ -227,6 +249,7 @@ export default function OrderDetailView({
 
   // Proof Upload Modal States (Exact match to Info Pembayaran mockup)
   const [isUploadProofOpen, setIsUploadProofOpen] = useState(false);
+  const [payMethod, setPayMethod] = useState('deposit');
   const [proofTitle, setProofTitle] = useState('');
   const [proofAmount, setProofAmount] = useState('156000');
   const [proofBank, setProofBank] = useState('');
@@ -240,21 +263,79 @@ export default function OrderDetailView({
   const proofFileRef = useRef(null);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
 
-  // Status pembayaran termin lokal (DP, Pelunasan, Ongkir)
-  const [localPayments, setLocalPayments] = useState(() => {
+  // Helper untuk membaca bukti dan status pembayaran dari objek order
+  const buildPaymentsFromOrder = (ord) => {
     const map = {};
-    if (order?.status === 'Selesai' || order?.paymentStatus === 'Lunas' || order?.dpStatus === 'Lunas') {
+    if (!ord) return map;
+
+    // Check DP
+    const isDpAcc =
+      ord.dpStatus === 'ACC' ||
+      ord.dpStatus === 'Lunas' ||
+      ord.status === 'Selesai' ||
+      (typeof ord.paymentStatus === 'string' && ord.paymentStatus.includes('Lunas'));
+    const isDpMenunggu =
+      ord.dpStatus === 'Menunggu Verifikasi' ||
+      ord.dpStatus === 'Menunggu Validasi' ||
+      ord.dpStatus === 'menunggu';
+    const hasDpProof = !!ord.dpProof;
+
+    if (hasDpProof || isDpAcc || isDpMenunggu) {
       map.dp = {
         title: 'DP',
-        nominal: Number(order?.dpNominal) || 82800,
-        bank: 'BCA (PT Afathar Niaga Indonesia)',
-        status: 'Lunas',
-        image: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
-        date: order?.date || '27 Okt 2026'
+        nominal: Number(ord.dpNominal) || 0,
+        bank: ord.dpBank || 'BCA (PT Afathar Niaga Indonesia)',
+        status: isDpAcc ? 'Lunas' : 'Menunggu Validasi',
+        image: ord.dpProof || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
+        date: ord.dpSubmittedAt || ord.date || '27 Okt 2026',
+        note: ord.dpNote || ''
       };
     }
+
+    // Check Pelunasan
+    const isPelunasanAcc =
+      ord.pelunasanStatus === 'ACC' ||
+      ord.pelunasanStatus === 'Lunas' ||
+      ord.status === 'Selesai';
+    const isPelunasanMenunggu =
+      ord.pelunasanStatus === 'Menunggu Verifikasi' ||
+      ord.pelunasanStatus === 'Menunggu Validasi' ||
+      ord.pelunasanStatus === 'menunggu';
+    const hasPelunasanProof = !!ord.pelunasanProof;
+
+    if (hasPelunasanProof || isPelunasanAcc || isPelunasanMenunggu) {
+      map.pelunasan = {
+        title: 'Pelunasan',
+        nominal: Number(ord.pelunasanNominal) || 0,
+        bank: ord.pelunasanBank || 'BCA (PT Afathar Niaga Indonesia)',
+        status: isPelunasanAcc ? 'Lunas' : 'Menunggu Validasi',
+        image: ord.pelunasanProof || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
+        date: ord.pelunasanSubmittedAt || ord.date || '27 Okt 2026',
+        note: ord.pelunasanNote || ''
+      };
+    }
+
     return map;
-  });
+  };
+
+  // Status pembayaran termin lokal (DP, Pelunasan, Ongkir)
+  const [localPayments, setLocalPayments] = useState(() => buildPaymentsFromOrder(order));
+
+  // Sinkronkan status pembayaran & bukti saat props order diupdate dari parent/Admin
+  useEffect(() => {
+    setLocalPayments((prev) => {
+      const fromOrder = buildPaymentsFromOrder(order);
+      return { ...fromOrder, ...prev };
+    });
+  }, [
+    order?.dpStatus,
+    order?.dpProof,
+    order?.pelunasanStatus,
+    order?.pelunasanProof,
+    order?.status,
+    order?.orderNo,
+    order?.id
+  ]);
 
   // Sinkronkan daftar produk saat Admin Finance mengubah invoice
   useEffect(() => {
@@ -272,14 +353,33 @@ export default function OrderDetailView({
     Number(order?.dpPct) || Math.round((dpNominal / Math.max(1, totalItemsPrice)) * 100);
   const pelunasanNominal = Math.max(0, totalItemsPrice - dpNominal);
   const pelunasanPct = Math.max(0, 100 - dpPct);
-  const buyerName = String(order?.mitraName || 'HENI').split(' (')[0];
+  const buyerName = String(order?.mitraName || currentUser?.name || 'Mitra').split(' (')[0];
   const buyerAddress =
-    order?.address || 'Perumnas 1 Jl Bungur Raya Rt 12 Rw 7 No 86, Bekasi';
+    order?.address || order?.alamat || '-';
   const dpDue =
     order?.dpDueDate ||
     (order?.closeDate && order.closeDate !== '-' ? order.closeDate : '27 Oktober 2026');
   const pelunasanDue =
     order?.pelunasanDueDate || items[0]?.dueDate || '10 Januari 2027';
+
+  // Sinkronisasi status ACC DP dan Pelunasan untuk perhitungan rincian tagihan
+  const isDpAcc =
+    order?.dpStatus === 'ACC' ||
+    order?.dpStatus === 'Lunas' ||
+    localPayments?.dp?.status === 'Lunas';
+  const isPelunasanAcc =
+    order?.pelunasanStatus === 'ACC' ||
+    order?.pelunasanStatus === 'Lunas' ||
+    localPayments?.pelunasan?.status === 'Lunas';
+
+  const dpPaid = isDpAcc ? (Number(localPayments?.dp?.nominal) || dpNominal) : 0;
+  const pelunasanPaid = isPelunasanAcc ? (Number(localPayments?.pelunasan?.nominal) || pelunasanNominal) : 0;
+  const nominalTerbayar = dpPaid + pelunasanPaid;
+  const sisaPembayaran = Math.max(0, totalItemsPrice - nominalTerbayar);
+  const totalTagihanTahap =
+    parseInt(proofAmount, 10) ||
+    ((proofTitle || '').toLowerCase().includes('pelunasan') ? pelunasanNominal : dpNominal) ||
+    sisaPembayaran;
 
   // Copy Rekening to clipboard handler
   const handleCopyRekening = (text, bankLabel) => {
@@ -319,7 +419,8 @@ export default function OrderDetailView({
     setProofImage(null);
     setProofFileName('');
     setProofNote('');
-    setProofBank('');
+    setProofBank(bankAccountsList[0]?.name || '');
+    setPayMethod('deposit');
     setUploadSuccess(false);
     setIsUploadProofOpen(true);
   };
@@ -336,6 +437,48 @@ export default function OrderDetailView({
     }
   };
 
+  const handlePayWithDepositSubmit = () => {
+    const amountToPay = parseInt(proofAmount || '0', 10) || totalTagihanTahap;
+    if (userBalance < amountToPay) {
+      alert(`Saldo deposit Anda (${userBalanceFormatted}) tidak mencukupi untuk tagihan ini (Rp ${amountToPay.toLocaleString('id-ID')}).`);
+      return;
+    }
+    const orderNum = order?.orderNo || order?.invoice || orderInvoice || order?.id || 'PO-ORDER';
+    const isDp = (proofTitle || '').toLowerCase().includes('dp');
+    const todayDate = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+
+    if (onPayWithDeposit) {
+      onPayWithDeposit({
+        orderNo: orderNum,
+        billTitle: proofTitle || (isDp ? 'DP PO' : 'Pelunasan PO'),
+        amount: amountToPay,
+        billType: isDp ? 'dp' : 'pelunasan'
+      });
+    }
+
+    setLocalPayments((prev) => ({
+      ...prev,
+      [isDp ? 'dp' : 'pelunasan']: {
+        title: isDp ? 'DP' : 'Pelunasan',
+        nominal: amountToPay,
+        bank: 'Saldo Deposit Mitra',
+        status: 'Lunas',
+        date: todayDate,
+        note: 'Lunas via Saldo Deposit'
+      }
+    }));
+
+    if (onUpdateOrder) {
+      onUpdateOrder({
+        ...(isDp
+          ? { dpStatus: 'ACC', dpBank: 'Saldo Deposit Mitra', dpNote: 'Lunas via Saldo Deposit' }
+          : { pelunasanStatus: 'ACC', pelunasanBank: 'Saldo Deposit Mitra', pelunasanNote: 'Lunas via Saldo Deposit' })
+      });
+    }
+
+    setUploadSuccess(true);
+  };
+
   const handleUploadProofSubmit = (e) => {
     e.preventDefault();
     if (!proofImage) {
@@ -350,8 +493,8 @@ export default function OrderDetailView({
     if (onUploadPayment) {
       onUploadPayment({
         id: Date.now(),
-        orderNo: order?.orderNo || 'INV-20261018-0146',
-        mitraName: 'HENI',
+        orderNo: order?.orderNo || order?.invoice || (order?.id ? String(order.id) : '-'),
+        mitraName: currentUser?.name || buyerName || 'Mitra',
         title: proofTitle || 'Pembayaran Termin PO',
         nominal: parseInt(proofAmount || '0', 10),
         bank: proofBank,
@@ -363,18 +506,40 @@ export default function OrderDetailView({
     }
 
     const key = (proofTitle || '').toLowerCase().includes('dp') ? 'dp' : 'pelunasan';
+    const paymentEntry = {
+      title: proofTitle || (key === 'dp' ? 'DP' : 'Pelunasan'),
+      nominal: parseInt(proofAmount || '0', 10),
+      bank: proofBank,
+      note: proofNote,
+      image: proofImage,
+      date: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
+      status: 'Menunggu Validasi'
+    };
+
     setLocalPayments((prev) => ({
       ...prev,
-      [key]: {
-        title: proofTitle || (key === 'dp' ? 'DP' : 'Pelunasan'),
-        nominal: parseInt(proofAmount || '0', 10),
-        bank: proofBank,
-        note: proofNote,
-        image: proofImage,
-        date: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
-        status: 'Menunggu Validasi'
-      }
+      [key]: paymentEntry
     }));
+
+    if (onUpdateOrder) {
+      if (key === 'dp') {
+        onUpdateOrder({
+          dpProof: proofImage,
+          dpStatus: 'Menunggu Verifikasi',
+          dpBank: proofBank,
+          dpNote: proofNote,
+          dpNominal: parseInt(proofAmount || '0', 10)
+        });
+      } else {
+        onUpdateOrder({
+          pelunasanProof: proofImage,
+          pelunasanStatus: 'Menunggu Verifikasi',
+          pelunasanBank: proofBank,
+          pelunasanNote: proofNote,
+          pelunasanNominal: parseInt(proofAmount || '0', 10)
+        });
+      }
+    }
 
     setUploadSuccess(true);
     setTimeout(() => {
@@ -433,14 +598,14 @@ export default function OrderDetailView({
           <div>
             <p className="text-[11px] text-stone-500 font-medium">Nomor pesanan:</p>
             <h3 className="text-base sm:text-lg font-mono font-bold text-stone-900 mt-0.5">
-              {order?.orderNo || 'INV-20261018-0146'}
+              {order?.orderNo || order?.invoice || (order?.id ? String(order.id) : '-')}
             </h3>
           </div>
 
           <div>
             <p className="text-[11px] text-stone-500 font-medium">Tanggal Pembelian</p>
             <p className="text-xs font-semibold text-stone-800 mt-0.5">
-              {order?.date || '18 Oct 2026'}, 02:46 WIB
+              {order?.date || new Date().toLocaleDateString('id-ID')}
             </p>
           </div>
 
@@ -481,6 +646,15 @@ export default function OrderDetailView({
             <span>Pesanan Dibuat</span>
             <CheckIcon className="w-4 h-4 text-emerald-600" />
           </div>
+
+          {isPendingAcc && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs text-amber-800 flex items-start gap-2">
+              <span className="text-amber-600 font-bold">⏳</span>
+              <div className="leading-snug">
+                <span className="font-bold">Menunggu ACC Admin:</span> Pesanan sedang diverifikasi oleh Admin Marketing. Pembayaran DP akan dibuka setelah pesanan disetujui.
+              </div>
+            </div>
+          )}
 
           {/* Biaya Platform */}
           <div className="space-y-0.5">
@@ -539,6 +713,13 @@ export default function OrderDetailView({
                 <EyeIcon className="w-3.5 h-3.5 text-[#6B1416]" />
                 <span>Lihat Bukti</span>
               </button>
+            ) : isPendingAcc ? (
+              <span
+                className="bg-stone-100 border border-stone-200 text-stone-500 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 flex items-center gap-1 cursor-not-allowed shadow-2xs"
+                title="Menunggu persetujuan Admin Marketing sebelum pembayaran DP"
+              >
+                <span>⏳ Menunggu ACC Admin</span>
+              </span>
             ) : (
               <button
                 onClick={() =>
@@ -791,15 +972,12 @@ export default function OrderDetailView({
             <div className="flex items-center gap-2">
               <span className="text-[#2563EB] font-bold flex items-center gap-1.5">
                 <MapPinIcon className="w-4 h-4 text-[#2563EB]" />
-                <span className="text-sm">Alamat Lain</span>
+                <span className="text-sm">Alamat Pengiriman Tambahan (Split Alamat)</span>
               </span>
               <span className="px-2.5 py-0.5 rounded-full bg-stone-100 text-stone-600 font-bold text-[10px]">
                 {addressGroups.length} Alamat
               </span>
             </div>
-            <p className="text-[11px] text-stone-500 mt-1">
-              Alamat Pengiriman Utama: <strong className="text-stone-700">{buyerName}</strong> &mdash; {buyerAddress}
-            </p>
           </div>
 
           {!isClosedPO && (
@@ -940,28 +1118,9 @@ export default function OrderDetailView({
 
       </div>
 
-      {/* Bottom 2 Cards: Alamat Pengiriman & Rincian Pembayaran (Matches Screenshot 2 & 5) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        
-        {/* Left Card: Alamat Pengiriman */}
-        <div className="bg-white rounded-3xl p-6 shadow-xs border border-stone-200/80 space-y-3">
-          <h4 className="font-bold text-xs sm:text-sm text-stone-800">
-            Alamat Pengiriman Utama
-          </h4>
-          <p className="text-xs text-stone-600">
-            {buyerName}
-            {order?.phone ? ` (${order.phone})` : ''} &mdash; {buyerAddress}
-          </p>
-          <button
-            onClick={() => onSelectTab?.('alamat')}
-            className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs px-4 py-2 rounded-xl transition cursor-pointer"
-          >
-            Ubah Alamat Pengiriman
-          </button>
-        </div>
-
-        {/* Right Card: Rincian Pembayaran (No fixed ongkir amount as requested) */}
-        <div className="bg-white rounded-3xl p-6 shadow-xs border border-stone-200/80 space-y-2.5 text-xs text-stone-700">
+      {/* Bottom Card: Rincian Pembayaran (Tanpa Alamat Pengiriman Utama Sesuai Arahan) */}
+      <div className="flex justify-end">
+        <div className="bg-white rounded-3xl p-6 sm:p-7 shadow-xs border border-stone-200/80 space-y-3 text-xs text-stone-700 w-full md:max-w-md">
           <h4 className="font-bold text-xs sm:text-sm text-stone-800 mb-1">
             Rincian Pembayaran
           </h4>
@@ -979,14 +1138,13 @@ export default function OrderDetailView({
               Dihitung setelah penimbangan koli di gudang
             </span>
           </div>
-          <div className="pt-2 border-t border-stone-200 flex justify-between items-center">
+          <div className="pt-2.5 border-t border-stone-200 flex justify-between items-center">
             <span className="font-bold text-stone-900">Total Tagihan Produk</span>
             <span className="font-extrabold text-base text-stone-900">
               Rp {totalItemsPrice.toLocaleString('id-ID')}
             </span>
           </div>
         </div>
-
       </div>
 
       {/* MODAL 1: Tambah / Edit Produk (Image 4) */}
@@ -1250,69 +1408,61 @@ export default function OrderDetailView({
             ) : (
               <div className="space-y-4">
                 
-                {/* 1. TOP CARD: Info Pembayaran! (Red Border Card from Mockup) */}
-                <div className="border border-red-300 rounded-xl p-4 bg-white shadow-xs space-y-2.5">
-                  <h4 className="text-red-500 font-bold text-sm tracking-tight">
-                    Info Pembayaran!
-                  </h4>
-
-                  {/* Atas Nama */}
-                  <p className="text-xs font-semibold text-stone-700 flex items-center gap-1">
-                    <span>💳 Atas Nama Erna Susiyanti</span>
-                  </p>
-
-                  {/* Rekening Mandiri, BCA, BRI */}
-                  <div className="flex flex-wrap items-center justify-between text-xs text-stone-800 gap-y-1">
-                    <div className="flex items-center gap-1.5">
-                      <span>MANDIRI : <strong className="font-mono">1234567890123</strong></span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyRekening('1234567890123', 'MANDIRI')}
-                        title="Salin No Rekening Mandiri"
-                        className="text-stone-400 hover:text-stone-800 p-0.5 rounded cursor-pointer transition"
-                      >
-                        <CopyIcon className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <span>BCA : <strong className="font-mono">87654321</strong></span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyRekening('87654321', 'BCA')}
-                        title="Salin No Rekening BCA"
-                        className="text-stone-400 hover:text-stone-800 p-0.5 rounded cursor-pointer transition"
-                      >
-                        <CopyIcon className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                {/* 1. TOP CARD: Info Pembayaran! (Dinamis & Terintegrasi dengan Admin & Rekening Resmi) */}
+                <div className="border border-red-300 rounded-xl p-4 bg-white shadow-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-red-600 font-bold text-sm tracking-tight flex items-center gap-1.5">
+                      <span>ℹ️</span>
+                      <span>Info Pembayaran!</span>
+                    </h4>
+                    <span className="text-[11px] bg-red-50 text-red-700 px-2.5 py-0.5 rounded-full font-semibold border border-red-200">
+                      Rekening Resmi Distributor
+                    </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 text-xs text-stone-800">
-                    <span>BRI : <strong className="font-mono">987654312156</strong></span>
-                    <button
-                      type="button"
-                      onClick={() => handleCopyRekening('987654312156', 'BRI')}
-                      title="Salin No Rekening BRI"
-                      className="text-stone-400 hover:text-stone-800 p-0.5 rounded cursor-pointer transition"
-                    >
-                      <CopyIcon className="w-3.5 h-3.5" />
-                    </button>
+                  {/* Atas Nama Pemilik Rekening Resmi */}
+                  <p className="text-xs font-bold text-stone-800 flex items-center gap-1.5 bg-stone-50 px-2.5 py-1.5 rounded-lg border border-stone-200/70">
+                    <span>💳 Atas Nama:</span>
+                    <span className="text-[#6B1416] font-semibold">{bankAccountsList[0]?.holder || 'CV AFATHAR SHOP DISTRIBUTOR'}</span>
+                  </p>
+
+                  {/* Daftar Rekening Bank Dinamis dengan Tombol Copy */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-stone-800">
+                    {bankAccountsList.map((acc) => (
+                      <div
+                        key={acc.id}
+                        className="flex items-center justify-between bg-stone-50 border border-stone-200 px-2.5 py-1.5 rounded-lg hover:border-stone-300 transition"
+                      >
+                        <div className="truncate mr-1">
+                          <span className="font-bold text-stone-700">{acc.bank}</span> :{' '}
+                          <strong className="font-mono text-stone-900">{acc.accountNo}</strong>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyRekening(acc.accountNo, acc.bank)}
+                          title={`Salin No Rekening ${acc.bank}`}
+                          className="text-stone-400 hover:text-[#6B1416] p-1 rounded cursor-pointer transition shrink-0"
+                        >
+                          <CopyIcon className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
 
                   {copyFeedback && (
-                    <div className="p-1.5 bg-emerald-50 rounded text-[11px] text-emerald-700 font-semibold animate-in fade-in">
-                      ✓ {copyFeedback}
+                    <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 font-semibold animate-in fade-in flex items-center gap-1.5">
+                      <span>✓</span>
+                      <span>{copyFeedback}</span>
                     </div>
                   )}
 
-                  {/* Rincian Tagihan */}
-                  <div className="pt-2 border-t border-red-100">
-                    <p className="text-xs font-semibold text-stone-700 mb-1.5 flex items-center gap-1">
+                  {/* Rincian Tagihan Akurat & Dinamis */}
+                  <div className="pt-2 border-t border-red-100 space-y-2">
+                    <p className="text-xs font-semibold text-stone-700 flex items-center gap-1">
                       <span>📋 Rincian Tagihan</span>
                     </p>
 
-                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs bg-stone-50/70 p-2.5 rounded-lg border border-stone-200/60">
                       <div className="flex justify-between items-center">
                         <span className="text-stone-600">Total Pesanan :</span>
                         <span className="font-bold text-stone-900">
@@ -1321,32 +1471,39 @@ export default function OrderDetailView({
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-stone-600">Nominal Terbayar :</span>
-                        <span className="font-bold text-stone-900">Rp 0</span>
+                        <span className="font-bold text-emerald-700">
+                          Rp {nominalTerbayar.toLocaleString('id-ID')}
+                        </span>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-stone-600">Total Tagihan :</span>
-                        <span className="font-bold text-stone-900">
-                          Rp {(parseInt(proofAmount, 10) || totalItemsPrice).toLocaleString('id-ID')}
+                        <span className="font-bold text-[#6B1416]">
+                          Rp {totalTagihanTahap.toLocaleString('id-ID')}
                         </span>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-stone-600">Sisa Pembayaran :</span>
                         <span className="font-bold text-stone-900">
-                          Rp {totalItemsPrice.toLocaleString('id-ID')}
+                          Rp {sisaPembayaran.toLocaleString('id-ID')}
                         </span>
                       </div>
                     </div>
 
-                    {/* Sisa Deposit & Top Up Button */}
-                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-red-100 text-xs">
-                      <span className="text-emerald-600 font-bold">Sisa Deposit : Rp 0</span>
+                    {/* Sisa Deposit Dinamis & Tombol Top Up */}
+                    <div className="flex items-center justify-between pt-1 text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-stone-600 font-medium">Sisa Deposit :</span>
+                        <span className="text-emerald-700 font-bold font-mono text-sm">
+                          {userBalanceFormatted}
+                        </span>
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
                           setIsUploadProofOpen(false);
                           if (onSelectTab) onSelectTab('deposit');
                         }}
-                        className="bg-black hover:bg-stone-800 text-white text-[11px] font-bold px-3 py-0.5 rounded cursor-pointer transition shadow-2xs"
+                        className="bg-black hover:bg-stone-800 text-white text-[11px] font-bold px-3 py-1 rounded cursor-pointer transition shadow-2xs"
                       >
                         Top Up
                       </button>
@@ -1354,119 +1511,260 @@ export default function OrderDetailView({
                   </div>
                 </div>
 
-                {/* 2. FORM: Upload Bukti, Jumlah Bayar, Bank Tujuan, Catatan */}
-                <form onSubmit={handleUploadProofSubmit} className="space-y-3.5 text-xs text-stone-700">
-                  
-                  {/* Bukti Transfer Box (Large dropzone matching mockup) */}
-                  <div className="space-y-1">
-                    <label className="block text-xs font-bold text-stone-800">
-                      Bukti Transfer :
-                    </label>
-                    <div
-                      onClick={() => proofFileRef.current?.click()}
-                      className="border border-stone-300 rounded-lg p-6 sm:p-7 flex flex-col items-center justify-center bg-white hover:bg-stone-50 cursor-pointer transition"
-                    >
-                      {proofImage ? (
-                        <div className="flex items-center gap-3">
-                          <img
-                            src={proofImage}
-                            alt="Bukti Transfer"
-                            className="w-14 h-14 object-cover rounded-md border border-stone-200"
-                          />
-                          <div className="text-left">
-                            <p className="font-semibold text-stone-800 text-xs truncate max-w-[220px]">
-                              {proofFileName || 'bukti_transfer.jpg'}
-                            </p>
-                            <p className="text-[11px] text-stone-400 mt-0.5">
-                              Klik untuk mengganti foto
-                            </p>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="py-2">
-                          <span className="px-4 py-1.5 bg-white border border-stone-300 rounded text-xs text-stone-700 font-medium hover:bg-stone-100 shadow-2xs pointer-events-none">
-                            Pilih File
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                    <input
-                      type="file"
-                      ref={proofFileRef}
-                      onChange={handleProofImageChange}
-                      accept="image/*"
-                      className="hidden"
-                    />
-                  </div>
-
-                  {/* Jumlah Bayar */}
-                  <div className="space-y-1">
-                    <label className="block text-xs font-bold text-stone-800">
-                      Jumlah Bayar :
-                    </label>
-                    <input
-                      type="number"
-                      value={proofAmount}
-                      onChange={(e) => setProofAmount(e.target.value)}
-                      className="w-full bg-white border border-stone-300 rounded-md px-3 py-2 text-stone-800 font-semibold text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                      required
-                    />
-                  </div>
-
-                  {/* Bank Tujuan (Blue outline matching mockup) */}
-                  <div className="space-y-1">
-                    <label className="block text-xs font-bold text-stone-800">
-                      Bank Tujuan :
-                    </label>
-                    <select
-                      value={proofBank}
-                      onChange={(e) => setProofBank(e.target.value)}
-                      className="w-full bg-white border border-blue-400 focus:ring-2 focus:ring-blue-300 rounded-md px-3 py-2 text-stone-700 font-medium text-xs outline-none cursor-pointer"
-                      required
-                    >
-                      <option value="">-- Pilih Bank --</option>
-                      {bankAccountsList.map((b) => (
-                        <option key={b.id} value={`${b.bank} : ${b.accountNo} (a.n ${b.holder})`}>
-                          {b.bank} : {b.accountNo} (a.n {b.holder})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Catatan */}
-                  <div className="space-y-1">
-                    <label className="block text-xs font-bold text-stone-800">
-                      Catatan :
-                    </label>
-                    <input
-                      type="text"
-                      value={proofNote}
-                      onChange={(e) => setProofNote(e.target.value)}
-                      placeholder="Catatan pembayaran (opsional)"
-                      className="w-full bg-white border border-stone-300 rounded-md px-3 py-2 text-stone-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                    />
-                  </div>
-
-                  {/* Buttons: Upload (Black) and Close (Slate Grey) */}
-                  <div className="flex justify-end items-center gap-2 pt-3">
-                    <button
-                      type="submit"
-                      className="bg-black hover:bg-stone-800 text-white font-bold px-5 py-2 rounded-md text-xs transition cursor-pointer shadow-xs"
-                    >
-                      Upload
-                    </button>
+                {/* 2. OPSI METODE PEMBAYARAN: SALDO DEPOSIT vs TRANSFER BANK */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-stone-800">
+                    Pilih Metode Pembayaran :
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        setIsUploadProofOpen(false);
-                        setUploadSuccess(false);
-                      }}
-                      className="bg-[#64748B] hover:bg-[#475569] text-white font-bold px-5 py-2 rounded-md text-xs transition cursor-pointer shadow-xs"
+                      onClick={() => setPayMethod('deposit')}
+                      className={`p-3 rounded-xl border text-xs font-bold transition flex flex-col items-center justify-center gap-1 cursor-pointer text-center ${
+                        payMethod === 'deposit'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-800 ring-2 ring-emerald-200'
+                          : 'bg-stone-50 border-stone-200 text-stone-600 hover:bg-stone-100'
+                      }`}
                     >
-                      Close
+                      <div className="flex items-center gap-1.5">
+                        <span>💰</span>
+                        <span>Saldo Deposit</span>
+                      </div>
+                      <span className="text-[11px] font-mono text-emerald-700">
+                        Saldo: {userBalanceFormatted}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setPayMethod('transfer')}
+                      className={`p-3 rounded-xl border text-xs font-bold transition flex flex-col items-center justify-center gap-1 cursor-pointer text-center ${
+                        payMethod === 'transfer'
+                          ? 'bg-blue-50 border-blue-500 text-blue-800 ring-2 ring-blue-200'
+                          : 'bg-stone-50 border-stone-200 text-stone-600 hover:bg-stone-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>🏦</span>
+                        <span>Transfer Bank</span>
+                      </div>
+                      <span className="text-[10px] font-normal text-stone-500">
+                        Upload Bukti Transfer
+                      </span>
                     </button>
                   </div>
-                </form>
+                </div>
+
+                {/* 3. KONTEN METODE PEMBAYARAN */}
+                {payMethod === 'deposit' ? (
+                  /* OPSI A: BAYAR DENGAN SALDO DEPOSIT (INSTAN TANPA MENUNGGU ACC) */
+                  <div className="bg-emerald-50/70 border border-emerald-300 rounded-xl p-4 space-y-3.5 animate-in fade-in">
+                    <div className="flex items-start gap-2.5">
+                      <div className="w-7 h-7 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 text-xs font-bold mt-0.5">
+                        ✓
+                      </div>
+                      <div className="text-xs space-y-0.5">
+                        <h5 className="font-bold text-stone-900">Pembayaran Instan via Saldo Deposit</h5>
+                        <p className="text-stone-600 leading-relaxed text-[11px]">
+                          Tagihan pesanan akan langsung berstatus <strong className="text-emerald-700">Lunas / Terverifikasi</strong> otomatis dipotong dari saldo deposit Anda tanpa perlu kirim foto struk.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="bg-white border border-emerald-200 rounded-lg p-3 space-y-2 text-xs">
+                      <div className="flex justify-between items-center text-stone-600">
+                        <span>Tagihan yang Dibayar:</span>
+                        <span className="font-bold text-[#6B1416]">
+                          Rp {totalTagihanTahap.toLocaleString('id-ID')}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center text-stone-600">
+                        <span>Saldo Deposit Anda:</span>
+                        <span className="font-bold text-emerald-700 font-mono">
+                          {userBalanceFormatted}
+                        </span>
+                      </div>
+                      <div className="border-t border-stone-100 pt-1.5 flex justify-between items-center">
+                        <span className="font-semibold text-stone-800">Sisa Saldo Setelah Bayar:</span>
+                        <span
+                          className={`font-bold font-mono ${
+                            userBalance >= totalTagihanTahap ? 'text-stone-900' : 'text-rose-600'
+                          }`}
+                        >
+                          Rp {Math.max(0, userBalance - totalTagihanTahap).toLocaleString('id-ID')}
+                        </span>
+                      </div>
+                    </div>
+
+                    {userBalance < totalTagihanTahap ? (
+                      <div className="space-y-2.5">
+                        <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3 rounded-lg flex items-center gap-2">
+                          <span className="text-base">⚠️</span>
+                          <div>
+                            <span className="font-bold block">Saldo Deposit Tidak Mencukupi</span>
+                            <span className="text-[11px] text-rose-600">
+                              Kurang Rp {(totalTagihanTahap - userBalance).toLocaleString('id-ID')} untuk menyelesaikan tagihan ini.
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsUploadProofOpen(false);
+                              if (onSelectTab) onSelectTab('deposit');
+                            }}
+                            className="flex-1 bg-emerald-700 hover:bg-emerald-800 text-white font-bold py-2.5 rounded-lg text-xs transition cursor-pointer"
+                          >
+                            + Top Up Deposit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPayMethod('transfer')}
+                            className="flex-1 bg-stone-800 hover:bg-stone-900 text-white font-bold py-2.5 rounded-lg text-xs transition cursor-pointer"
+                          >
+                            Gunakan Transfer Bank
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex justify-end items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsUploadProofOpen(false);
+                            setUploadSuccess(false);
+                          }}
+                          className="bg-[#64748B] hover:bg-[#475569] text-white font-bold px-4 py-2 rounded-md text-xs transition cursor-pointer shadow-xs"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handlePayWithDepositSubmit}
+                          className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold px-5 py-2 rounded-md text-xs transition cursor-pointer shadow-xs flex items-center gap-1.5"
+                        >
+                          <span>Bayar Sekarang via Saldo Deposit</span>
+                          <span>&rarr;</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* OPSI B: FORM UPLOAD BUKTI TRANSFER BANK MANUAL */
+                  <form onSubmit={handleUploadProofSubmit} className="space-y-3.5 text-xs text-stone-700">
+                    
+                    {/* Bukti Transfer Box */}
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-stone-800">
+                        Bukti Transfer :
+                      </label>
+                      <div
+                        onClick={() => proofFileRef.current?.click()}
+                        className="border border-stone-300 rounded-lg p-6 sm:p-7 flex flex-col items-center justify-center bg-white hover:bg-stone-50 cursor-pointer transition"
+                      >
+                        {proofImage ? (
+                          <div className="flex items-center gap-3">
+                            <img
+                              src={proofImage}
+                              alt="Bukti Transfer"
+                              className="w-14 h-14 object-cover rounded-md border border-stone-200"
+                            />
+                            <div className="text-left">
+                              <p className="font-semibold text-stone-800 text-xs truncate max-w-[220px]">
+                                {proofFileName || 'bukti_transfer.jpg'}
+                              </p>
+                              <p className="text-[11px] text-stone-400 mt-0.5">
+                                Klik untuk mengganti foto
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="py-2">
+                            <span className="px-4 py-1.5 bg-white border border-stone-300 rounded text-xs text-stone-700 font-medium hover:bg-stone-100 shadow-2xs pointer-events-none">
+                              Pilih File
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <input
+                        type="file"
+                        ref={proofFileRef}
+                        onChange={handleProofImageChange}
+                        accept="image/*"
+                        className="hidden"
+                      />
+                    </div>
+
+                    {/* Jumlah Bayar */}
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-stone-800">
+                        Jumlah Bayar :
+                      </label>
+                      <input
+                        type="number"
+                        value={proofAmount}
+                        onChange={(e) => setProofAmount(e.target.value)}
+                        className="w-full bg-white border border-stone-300 rounded-md px-3 py-2 text-stone-800 font-semibold text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                        required
+                      />
+                    </div>
+
+                    {/* Bank Tujuan */}
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-stone-800">
+                        Bank Tujuan :
+                      </label>
+                      <select
+                        value={proofBank}
+                        onChange={(e) => setProofBank(e.target.value)}
+                        className="w-full bg-white border border-blue-400 focus:ring-2 focus:ring-blue-300 rounded-md px-3 py-2 text-stone-700 font-medium text-xs outline-none cursor-pointer"
+                        required
+                      >
+                        <option value="">-- Pilih Bank --</option>
+                        {bankAccountsList.map((b) => (
+                          <option key={b.id} value={`${b.bank} : ${b.accountNo} (a.n ${b.holder})`}>
+                            {b.bank} : {b.accountNo} (a.n {b.holder})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Catatan */}
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-stone-800">
+                        Catatan :
+                      </label>
+                      <input
+                        type="text"
+                        value={proofNote}
+                        onChange={(e) => setProofNote(e.target.value)}
+                        placeholder="Catatan pembayaran (opsional)"
+                        className="w-full bg-white border border-stone-300 rounded-md px-3 py-2 text-stone-800 text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                      />
+                    </div>
+
+                    {/* Buttons: Upload (Black) and Close (Slate Grey) */}
+                    <div className="flex justify-end items-center gap-2 pt-3">
+                      <button
+                        type="submit"
+                        className="bg-black hover:bg-stone-800 text-white font-bold px-5 py-2 rounded-md text-xs transition cursor-pointer shadow-xs"
+                      >
+                        Upload
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsUploadProofOpen(false);
+                          setUploadSuccess(false);
+                        }}
+                        className="bg-[#64748B] hover:bg-[#475569] text-white font-bold px-5 py-2 rounded-md text-xs transition cursor-pointer shadow-xs"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </form>
+                )}
 
               </div>
             )}

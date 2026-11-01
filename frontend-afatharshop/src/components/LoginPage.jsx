@@ -7,17 +7,17 @@ import { mapApiUser, roleIdFromApiUser } from '../services/adapters';
 export const REGISTERED_ACCOUNTS = [
   {
     roleId: 'mitra',
-    roleName: 'Mitra Distributor',
-    email: 'afatharshop@maknahijab.com',
-    phone: '0812-1999-1888',
+    roleName: 'Mitra Agen',
+    email: 'Silakan masukkan email terdaftar Anda',
+    phone: 'Nomor HP terdaftar Anda',
     username: 'mitra',
-    displayName: 'HENI',
+    displayName: 'Mitra Distributor',
     dashboardPage: 'mitra_dashboard',
     dashboardName: 'Dashboard Mitra',
     avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80',
     balance: 'Rp 0',
-    totalBill: 'Rp 3.399.145',
-    address: 'Perumnas 1 Jl Bungur Raya Rt 12 Rw 7 No 86, Bekasi Barat'
+    totalBill: 'Rp 0',
+    address: ''
   },
   {
     roleId: 'marketing',
@@ -121,26 +121,26 @@ export function resolveAccountByCredentials(identifier) {
   }
 
   // 5. Default: Mitra Distributor (All standard accounts or newly registered members are Mitra)
-  const isHeni = clean.includes('@afatharshop.com') || clean.includes('heni');
-  const derivedName = isHeni
+  const isHeny = clean.includes('heni');
+  const derivedName = isHeny
     ? 'Heny'
     : clean.includes('@')
-    ? clean.split('@')[0].toUpperCase()
-    : 'MITRA';
+    ? clean.split('@')[0].replace(/[^a-zA-Z0-9]/g, ' ').trim().replace(/\b\w/g, (c) => c.toUpperCase())
+    : 'Mitra';
 
   return {
     roleId: 'mitra',
     roleName: 'Mitra',
-    email: clean.includes('@') ? clean : '@afatharshop.com',
-    phone: digits.length >= 8 ? identifier : '0812-1999-1888',
-    username: 'mitra',
+    email: clean.includes('@') ? clean : `${clean}@afatharshop.com`,
+    phone: digits.length >= 8 ? identifier : '',
+    username: clean.includes('@') ? clean.split('@')[0] : clean || 'mitra',
     displayName: derivedName,
     dashboardPage: 'mitra_dashboard',
     dashboardName: 'Dashboard Mitra',
     avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80',
     balance: 'Rp 0',
-    totalBill: 'Rp 3.399.145',
-    address: 'Perumnas 1 Jl Bungur Raya Rt 12 Rw 7 No 86, Bekasi Barat'
+    totalBill: 'Rp 0',
+    address: ''
   };
 }
 
@@ -149,8 +149,8 @@ export default function LoginPage({
   onNavigateRegister,
   onNavigateHome
 }) {
-  const [identifier, setIdentifier] = useState('afatharshop@maknahijab.com');
-  const [password, setPassword] = useState('password123');
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [loginResult, setLoginResult] = useState(null);

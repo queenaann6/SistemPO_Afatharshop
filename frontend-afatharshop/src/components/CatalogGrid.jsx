@@ -103,10 +103,12 @@ export default function CatalogGrid({
           <div className="bg-white rounded-2xl p-12 text-center border border-stone-200">
             <p className="text-stone-500 text-sm">Tidak ada produk yang sesuai dengan filter ini.</p>
             <button
-              onClick={() => setStatusFilter('all')}
+              onClick={() => {
+                setStatusFilter('all');
+              }}
               className="mt-3 text-xs font-semibold text-[#6B1416] underline cursor-pointer"
             >
-              Lihat semua status produk
+              Lihat semua status produk & reset filter
             </button>
           </div>
         )}

@@ -20,7 +20,7 @@ import MitraDashboard from './components/dashboard/mitra/MitraDashboard';
 import MarketingDashboard from './components/dashboard/MarketingDashboard';
 import FinanceDashboard from './components/dashboard/FinanceDashboard';
 import OwnerDashboard from './components/dashboard/OwnerFinanceDashboard';
-import { createSeedData } from './components/dashboard/poCore';
+import { createSeedData, PAY } from './components/dashboard/poCore';
 import { openInvoicePrintTab } from './utils/printInvoice';
 import {
   alignCoreOrdersToProducts,
@@ -44,24 +44,36 @@ import {
   buildOrderPayload,
   mapApiUser,
   mapBankAccount,
+  mapBatchToCore,
   mapBrands,
+  mapBrandToCore,
   mapCategoryNames,
   mapCourier,
+  mapDepositToCore,
+  mapNotificationToHeader,
   mapOrderToProjectOrder,
-  mapProducts
+  mapPaymentRequestToCore,
+  mapPaymentToLedger,
+  mapProducts,
+  mapSettings,
+  mapSupplier,
+  mapUserToMitra,
+  mapUserToTeam,
+  roleIdFromApiUser
 } from './services/adapters';
+import { syncAddressBookFromApi } from './components/dashboard/mitra/mitraAddressBook';
 
 const DEFAULT_USER = {
-  name: 'HENI',
+  name: 'Mitra',
   role: 'Mitra Distributor',
   roleId: 'mitra',
   avatar: (typeof window !== 'undefined' && localStorage.getItem('afatharshop_user_avatar')) ||
     'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80',
   balance: 'Rp 0',
-  totalBill: 'Rp 3.399.145',
-  phone: '(+62) 0812-1999-1888',
-  email: 'afatharshop@maknahijab.com',
-  address: 'Perumnas 1 Jl Bungur Raya Rt 12 Rw 7 No 86 Kelurahan Jakasampurna Kecamatan Bekasi Barat Kota Bekasi 17145'
+  totalBill: 'Rp 0',
+  phone: '',
+  email: '',
+  address: ''
 };
 
 export default function App() {
@@ -69,7 +81,9 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(() => {
     if (typeof window !== 'undefined') {
       const savedPage = localStorage.getItem('afathar_current_page');
-      if (savedPage) return savedPage;
+      if (savedPage && savedPage !== 'login' && savedPage !== 'logout_success') {
+        return savedPage;
+      }
     }
     return 'home';
   });
@@ -153,35 +167,7 @@ export default function App() {
   });
 
   // Header Notifications (read/unread + navigation target)
-  const [notifications, setNotifications] = useState([
-    {
-      id: 'dp',
-      title: 'Validasi DP Berhasil',
-      sub: 'DP pesanan PO Anda telah berhasil di-ACC oleh Admin Finance.',
-      time: '10 menit yang lalu',
-      tone: 'emerald',
-      read: false,
-      target: 'tagihan'
-    },
-    {
-      id: 'katalog',
-      title: 'Katalog Pre-Order Dibuka',
-      sub: 'Batch Sarimbit Kartika Raya telah dibuka untuk pemesanan kuota mitra.',
-      time: '1 jam yang lalu',
-      tone: 'amber',
-      read: false,
-      target: 'katalog'
-    },
-    {
-      id: 'ekspedisi',
-      title: 'Update Ekspedisi Kargo',
-      sub: 'JNE Trucking dan J&T Cargo kini aktif untuk rute pengiriman pesanan Anda.',
-      time: 'Kemarin',
-      tone: 'blue',
-      read: true,
-      target: 'alamat'
-    }
-  ]);
+  const [notifications, setNotifications] = useState([]);
 
   // Filter States
   const [selectedBrand, setSelectedBrand] = useState('all');
@@ -195,204 +181,13 @@ export default function App() {
   const [onlySaleFilter, setOnlySaleFilter] = useState(false);
 
   // Cart Items State
-  const [cartItems, setCartItems] = useState([
-    {
-      id: 1,
-      title: 'SAFIYYA PREMIUM ABAYA SET',
-      brand: 'COVERME HIJAB',
-      price: 90000,
-      qty: 1,
-      selectedModel: 'MOM DRESS ONLY STYLE 1',
-      selectedSize: 'M',
-      selectedColor: 'NOIR MATTE',
-      image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=800&q=80'
-    }
-  ]);
+  const [cartItems, setCartItems] = useState([]);
 
   // Selected items for Checkout Page
   const [checkoutItems, setCheckoutItems] = useState([]);
 
-  // Initial project orders — converted once into the shared PO model below
-  const [initialMitraOrders] = useState([
-    {
-      id: 1,
-      orderNo: 'INV-20261018-0146',
-      mitraName: 'HENI (Bekasi)',
-      mitraLevel: 'DB All',
-      title: 'NARARYA SARIMBIT KARTIKA RAYA BATCH 2',
-      brand: 'Coverme Hijab',
-      date: '18 Oct 2026',
-      status: 'Pesanan Dibuat',
-      statusColor: 'bg-amber-100 text-amber-800',
-      total: 482000,
-      dpNominal: 192800,
-      sisaTagihan: 289200,
-      courier: 'JNE Trucking',
-      isClosedPO: false,
-      closeDate: '25 Oktober 2026',
-      image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=400&q=80',
-      items: [
-        {
-          id: 101,
-          title: 'SARIMBIT KARTIKA RAYA BATCH 2',
-          variant: 'SCARF MOM ALL : IVORY',
-          variation: 'SCARF MOM',
-          size: 'ALL',
-          color: 'IVORY',
-          price: 92000,
-          qty: 1,
-          subtotal: 92000,
-          dueDate: '20 Jan 2027',
-          image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=400&q=80'
-        },
-        {
-          id: 102,
-          title: 'SARIMBIT KARTIKA RAYA BATCH 2',
-          variant: 'MOM DRESS B ONLY L : SANGRIA',
-          variation: 'MOM DRESS B ONLY',
-          size: 'L',
-          color: 'SANGRIA',
-          price: 390000,
-          qty: 1,
-          subtotal: 390000,
-          dueDate: '20 Jan 2027',
-          image: 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=400&q=80'
-        }
-      ]
-    },
-    {
-      id: 2,
-      orderNo: 'INV-20261012-0088',
-      mitraName: 'HENI (Bekasi)',
-      mitraLevel: 'DB All',
-      title: 'NAKKA ALORA BAG - BATCH 3',
-      brand: 'Coverme Hijab',
-      date: '12 Oct 2026',
-      status: 'Pesanan Dibuat',
-      statusColor: 'bg-amber-100 text-amber-800',
-      total: 82800,
-      dpNominal: 33120,
-      sisaTagihan: 49680,
-      courier: 'J&T Cargo',
-      isClosedPO: false,
-      closeDate: '28 November 2026',
-      image: 'https://images.unsplash.com/photo-1548036328-c9fa89d128fa?auto=format&fit=crop&w=400&q=80',
-      items: [
-        {
-          id: 201,
-          title: 'NAKKA ALORA BAG',
-          variant: 'ALL VARIAN',
-          variation: 'ALORA BAG',
-          size: 'ALL',
-          color: 'MOCCA',
-          price: 82800,
-          qty: 1,
-          subtotal: 82800,
-          dueDate: '10 Feb 2027',
-          image: 'https://images.unsplash.com/photo-1548036328-c9fa89d128fa?auto=format&fit=crop&w=400&q=80'
-        }
-      ]
-    },
-    {
-      id: 3,
-      orderNo: 'INV-20261020-0001',
-      mitraName: 'Budi Santoso (Bandung)',
-      mitraLevel: 'DB All',
-      title: 'NARARYA MUKENA SEKAR SASMITA',
-      brand: 'Isa Luxury',
-      date: '20 Oct 2026',
-      status: 'DP Terbayar (Validasi Selesai)',
-      statusColor: 'bg-emerald-100 text-emerald-800',
-      total: 875000,
-      dpNominal: 437500,
-      sisaTagihan: 437500,
-      courier: 'JNE Trucking',
-      isClosedPO: true,
-      closeDate: '30 September 2026 (Telah Ditutup)',
-      image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=400&q=80',
-      items: [
-        {
-          id: 301,
-          title: 'Gamis Almira Dusty Pink/Syari/M',
-          variant: 'Dusty Pink / M',
-          variation: 'Syari',
-          size: 'M',
-          color: 'Dusty Pink',
-          price: 175000,
-          qty: 5,
-          subtotal: 875000,
-          dueDate: '15 Des 2026',
-          image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=400&q=80'
-        }
-      ]
-    },
-    {
-      id: 4,
-      orderNo: 'INV-20261022-0002',
-      mitraName: 'Siti Rahma (Surabaya)',
-      mitraLevel: 'Agen',
-      title: 'COVERME SARIMBIT SAFIYYA 2027',
-      brand: 'Coverme Hijab',
-      date: '22 Oct 2026',
-      status: 'Pesanan Dibuat',
-      statusColor: 'bg-amber-100 text-amber-800',
-      total: 400000,
-      dpNominal: 200000,
-      sisaTagihan: 200000,
-      courier: 'J&T Cargo',
-      isClosedPO: false,
-      closeDate: '02 November 2026',
-      image: 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=400&q=80',
-      items: [
-        {
-          id: 401,
-          title: 'Gamis Almira Navy/Syari/L',
-          variant: 'Navy / L',
-          variation: 'Syari',
-          size: 'L',
-          color: 'Navy',
-          price: 200000,
-          qty: 2,
-          subtotal: 400000,
-          dueDate: '15 Des 2026',
-          image: 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=400&q=80'
-        }
-      ]
-    },
-    {
-      id: 5,
-      orderNo: 'INV-20261018-0003',
-      mitraName: 'Dewi Lestari (Medan)',
-      mitraLevel: 'Reseller',
-      title: 'KAEN BOUTIQUE PRAYER SET MEWAH',
-      brand: 'Kaen Boutique',
-      date: '18 Oct 2026',
-      status: 'Lunas (Siap Kirim)',
-      statusColor: 'bg-green-100 text-green-800',
-      total: 5737500,
-      dpNominal: 2868750,
-      sisaTagihan: 0,
-      courier: 'Dakota Cargo',
-      isClosedPO: true,
-      closeDate: '15 Oktober 2026 (Telah Ditutup)',
-      image: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-      items: [
-        {
-          id: 501,
-          title: 'Tunik Alma Sage Green/Casual/All',
-          variant: 'Sage Green / All Size',
-          variation: 'Casual',
-          size: 'ALL',
-          color: 'Sage Green',
-          price: 114750,
-          qty: 50,
-          subtotal: 5737500,
-          dueDate: '20 Des 2026',
-          image: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'
-        }
-      ]
-    }
-  ]);
+  // Initial project orders — empty for real data testing
+  const [initialMitraOrders] = useState([]);
 
   // Shared PO model: semua dashboard & tampilan mitra membaca state yang sama
   const poSeed = useMemo(() => createSeedData(), []);
@@ -414,60 +209,53 @@ export default function App() {
   const [poSettings, setPoSettings] = useState(poSeed.settings);
   const mitraOrders = useMemo(() => coreOrdersToProject(coreOrders), [coreOrders]);
 
-  // Global PO Batches State (Controlled strictly by Admin Marketing - NOT Mitra)
-  const [poBatches, setPoBatches] = useState([
-    {
-      id: 1,
-      orderNo: 'INV-20261018-0146',
-      title: 'NARARYA SARIMBIT KARTIKA RAYA BATCH 2',
-      brand: 'Coverme Hijab',
-      status: 'open',
-      closeDate: '25 Oktober 2026',
-      closeTime: '23:59 WIB',
-      quotaTarget: 1500,
-      quotaFilled: 1120
-    },
-    {
-      id: 2,
-      orderNo: 'INV-20261012-0088',
-      title: 'NAKKA ALORA BAG - BATCH 3',
-      brand: 'Coverme Hijab',
-      status: 'open',
-      closeDate: '28 November 2026',
-      closeTime: '20:00 WIB',
-      quotaTarget: 800,
-      quotaFilled: 450
-    },
-    {
-      id: 3,
-      orderNo: 'INV-20260926-0248',
-      title: 'NARARYA MUKENA SEKAR SASMITA',
-      brand: 'Isa Luxury',
-      status: 'closed',
-      closeDate: '30 September 2026 (Telah Ditutup)',
-      closeTime: '18:00 WIB',
-      quotaTarget: 1000,
-      quotaFilled: 1000
-    },
-    {
-      id: 4,
-      orderNo: 'INV-20260926-1039',
-      title: 'COVERME SARIMBIT SAFIYYA 2027',
-      brand: 'Coverme Hijab',
-      status: 'open',
-      closeDate: '02 November 2026',
-      closeTime: '23:59 WIB',
-      quotaTarget: 2500,
-      quotaFilled: 1840
+  // Live synchronous balance & total bill computation for the active user
+  const computedUserBalance = useMemo(() => {
+    if (activeRole?.id && activeRole.id !== 'mitra') return 'Rp 0';
+    const m = poMitra.find(
+      (x) => x.name.toLowerCase() === (currentUser?.name || 'Mitra').toLowerCase()
+    );
+    if (m && m.deposit !== undefined && Number(m.deposit) > 0) {
+      return `Rp ${Math.round(Number(m.deposit)).toLocaleString('id-ID')}`;
     }
-  ]);
+    const userAccDeposits = (poDeposits || [])
+      .filter((d) => {
+        const dName = String(d.mitraName || '').toLowerCase();
+        const uName = String(currentUser?.name || 'Mitra').toLowerCase();
+        const isMatch = dName.includes(uName) || uName.includes(dName);
+        const st = String(d.status || '').toLowerCase();
+        return isMatch && (st === 'acc' || (PAY && d.status === PAY.ACC) || st.includes('berhasil') || st.includes('terbukti'));
+      })
+      .reduce((sum, d) => sum + (Number(d.nominal) || 0), 0);
+    return `Rp ${Math.round(userAccDeposits).toLocaleString('id-ID')}`;
+  }, [poMitra, poDeposits, currentUser?.name, activeRole?.id]);
+
+  const computedUserTotalBill = useMemo(() => {
+    if (activeRole?.id && activeRole.id !== 'mitra') return 'Rp 0';
+    const userOrders = mitraOrders.filter(
+      (o) =>
+        !o.mitraName ||
+        o.mitraName.toUpperCase().includes((currentUser?.name || 'Mitra').toUpperCase())
+    );
+    const sumOutstanding = userOrders.reduce((sum, o) => sum + (Number(o.sisaTagihan) || 0), 0);
+    return `Rp ${Math.round(sumOutstanding).toLocaleString('id-ID')}`;
+  }, [mitraOrders, currentUser?.name, activeRole?.id]);
+
+  const synchronizedUser = useMemo(() => ({
+    ...currentUser,
+    balance: computedUserBalance,
+    totalBill: computedUserTotalBill
+  }), [currentUser, computedUserBalance, computedUserTotalBill]);
+
+  // Global PO Batches State (Controlled strictly by Admin Marketing - NOT Mitra)
+  const [poBatches, setPoBatches] = useState([]);
 
   // Global Bank Accounts (Updated strictly by Admin Finance)
   const [adminBankAccounts, setAdminBankAccounts] = useState([
-    { id: 'mandiri', bank: 'MANDIRI', accountNo: '1234567890123', holder: 'Erna Susiyanti', active: true },
-    { id: 'bca', bank: 'BCA', accountNo: '87654321', holder: 'Erna Susiyanti', active: true },
-    { id: 'bri', bank: 'BRI', accountNo: '987654312156', holder: 'Erna Susiyanti', active: true },
-    { id: 'bsi', bank: 'BSI Syariah', accountNo: '7149021821', holder: 'Erna Susiyanti', active: true }
+    { id: 'bca', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
+    { id: 'mandiri', bank: 'MANDIRI', accountNo: '133-00-2998801', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
+    { id: 'bri', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
+    { id: 'bsi', bank: 'BSI Syariah', accountNo: '718-002-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true }
   ]);
 
   // Global Couriers (Updated strictly by Admin Finance)
@@ -499,6 +287,59 @@ export default function App() {
     });
   };
 
+  // Mitra Membayar Tagihan menggunakan Saldo Deposit (Potong Saldo & Langsung ACC)
+  const handlePayWithDeposit = ({ orderNo, billTitle, amount, billType }) => {
+    const uName = String(currentUser?.name || 'Mitra').toLowerCase();
+    setPoMitra((prev) =>
+      prev.map((m) => {
+        if (m.name.toLowerCase().includes(uName) || uName.includes(m.name.toLowerCase())) {
+          return { ...m, deposit: Math.max(0, (Number(m.deposit) || 0) - Number(amount)) };
+        }
+        return m;
+      })
+    );
+    setCoreOrders((prev) =>
+      prev.map((order) => {
+        if (order.invoice !== orderNo && !orderNo.includes(order.invoice)) return order;
+        const patch = {};
+        const title = String(billTitle || '').toLowerCase();
+        if (title.includes('dp')) {
+          patch.dpStatus = 'ACC';
+          patch.dpBank = 'Saldo Deposit Mitra';
+          patch.dpNote = 'Lunas otomatis via Saldo Deposit';
+          patch.dpPaidAt = new Date().toISOString().slice(0, 10);
+        } else if (title.includes('pelunasan') || title.includes('lunas')) {
+          patch.pelunasanStatus = 'ACC';
+          patch.pelunasanBank = 'Saldo Deposit Mitra';
+          patch.pelunasanNote = 'Lunas otomatis via Saldo Deposit';
+          patch.pelunasanPaidAt = new Date().toISOString().slice(0, 10);
+        } else {
+          patch.ongkirStatus = 'ACC';
+          patch.ongkirBank = 'Saldo Deposit Mitra';
+          patch.ongkirNote = 'Lunas otomatis via Saldo Deposit';
+          patch.ongkirPaidAt = new Date().toISOString().slice(0, 10);
+        }
+        return { ...order, ...patch };
+      })
+    );
+    setPoLedger((prev) => [
+      {
+        id: `l-${Date.now()}`,
+        date: new Date().toISOString().slice(0, 10),
+        type: 'Pembayaran PO (Deposit)',
+        ref: orderNo,
+        mitraName: currentUser?.name || 'Mitra',
+        nominal: Number(amount) || 0,
+        account: 'Deposit Mitra'
+      },
+      ...prev
+    ]);
+    setToast({
+      show: true,
+      message: `Tagihan ${orderNo} berhasil dilunasi via Saldo Deposit!`
+    });
+  };
+
   // Sinkronisasi Produk & Brand antara katalog toko dan dashboard Marketing
   const handleChangePoProducts = (nextProducts) => {
     setPoProducts(nextProducts);
@@ -526,9 +367,31 @@ export default function App() {
   // Sync core auth and page state to localStorage for robust refresh resilience
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('afathar_current_page', currentPage);
+      if (currentPage !== 'login' && currentPage !== 'logout_success') {
+        localStorage.setItem('afathar_current_page', currentPage);
+      } else {
+        localStorage.setItem('afathar_current_page', 'home');
+      }
     }
   }, [currentPage]);
+
+  // Clean stale login state on mount so opening link never lands on login card
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('afathar_current_page');
+      if (saved === 'login' || saved === 'logout_success') {
+        localStorage.setItem('afathar_current_page', 'home');
+        setCurrentPage('home');
+      }
+    }
+  }, []);
+
+  // If already logged in, redirect away from login screen to home
+  useEffect(() => {
+    if (isLoggedIn && (currentPage === 'login' || currentPage === 'logout_success')) {
+      setCurrentPage('home');
+    }
+  }, [isLoggedIn, currentPage]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -594,18 +457,13 @@ export default function App() {
 
     const syncCatalog = async () => {
       try {
-        const [productResponse, brandResponse, categoryResponse, courierResponse, bankResponse] =
-          await Promise.all([
-            api.products(),
-            api.brands(),
-            api.categories(),
-            api.couriers(),
-            api.bankAccounts()
-          ]);
+        // Satu permintaan snapshot katalog; server dev PHP hanya satu worker.
+        const response = await api.catalog();
+        const snapshot = response?.data || {};
 
         if (cancelled) return;
 
-        const remoteProducts = mapProducts(productResponse);
+        const remoteProducts = mapProducts({ data: snapshot.products || [] });
         if (remoteProducts.length) {
           setProducts(remoteProducts);
           setPoProducts(projectProductsToCore(remoteProducts));
@@ -614,19 +472,19 @@ export default function App() {
           );
         }
 
-        const remoteBrands = mapBrands(brandResponse?.data || []);
+        const remoteBrands = mapBrands(snapshot.brands || []);
         if (remoteBrands.length > 1) {
           setBrands(remoteBrands);
           setPoBrands(projectBrandsToCore(remoteBrands));
         }
 
-        const remoteCategories = mapCategoryNames(categoryResponse?.data || []);
+        const remoteCategories = mapCategoryNames(snapshot.categories || []);
         if (remoteCategories.length) setPoCategories(remoteCategories);
 
-        const remoteCouriers = (courierResponse?.data || []).map(mapCourier);
+        const remoteCouriers = (snapshot.couriers || []).map(mapCourier);
         if (remoteCouriers.length) setAdminCouriers(remoteCouriers);
 
-        const remoteBanks = (bankResponse?.data || []).map(mapBankAccount);
+        const remoteBanks = (snapshot.bank_accounts || []).map(mapBankAccount);
         if (remoteBanks.length) setAdminBankAccounts(remoteBanks);
       } catch (error) {
         if (!cancelled) {
@@ -644,7 +502,8 @@ export default function App() {
 
   // Tarik riwayat pesanan mitra dari backend setiap sesi JWT aktif
   useEffect(() => {
-    if (!sessionToken) return undefined;
+    // Admin memakai endpoint manajemen; endpoint /orders hanya untuk mitra.
+    if (!sessionToken || currentUser?.roleId !== 'mitra') return undefined;
 
     let cancelled = false;
 
@@ -682,7 +541,151 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [sessionToken]);
+  }, [sessionToken, currentUser?.roleId]);
+
+  // Seluruh data operasional dashboard admin berasal dari tabel backend
+  // (pesanan lintas mitra, pengguna, deposit, pembayaran, supplier, batch,
+  // pengajuan, notifikasi, pengaturan). Fallback demo dipakai bila kosong/offline.
+  useEffect(() => {
+    const roleId = currentUser?.roleId;
+    const isAdminRole = ['owner', 'finance', 'marketing'].includes(roleId);
+    if (!sessionToken || !isAdminRole) return undefined;
+
+    let cancelled = false;
+    const options = { timeout: 25000 };
+
+    const syncManagement = async () => {
+      let snapshot = null;
+      try {
+        const response = await api.management.bootstrap(options);
+        snapshot = response?.data || null;
+      } catch {
+        snapshot = null;
+      }
+      if (cancelled || !snapshot) return;
+
+      const remoteOrders = snapshot.orders || [];
+      if (remoteOrders.length) {
+        const projectOrders = remoteOrders.map((order) =>
+          mapOrderToProjectOrder(order, currentUser || {})
+        );
+        setCoreOrders(
+          alignCoreOrdersToProducts(
+            projectOrdersToCore(projectOrders, {
+              currentUser,
+              seedMitra: poSeed.mitra,
+              products
+            }),
+            projectProductsToCore(products)
+          )
+        );
+      }
+
+      const remoteUsers = snapshot.users || [];
+      if (Array.isArray(snapshot.users)) {
+        const mitraUsers = remoteUsers
+          .filter((user) => roleIdFromApiUser(user) === 'mitra')
+          .map(mapUserToMitra);
+        const teamUsers = remoteUsers
+          .filter((user) => roleIdFromApiUser(user) !== 'mitra')
+          .map(mapUserToTeam);
+        setPoMitra(mitraUsers);
+        setPoTeam(teamUsers);
+      }
+
+      const remoteDeposits = snapshot.deposits || [];
+      const coreDeposits = remoteDeposits.map(mapDepositToCore);
+      if (coreDeposits.length) setPoDeposits(coreDeposits);
+
+      const remotePayments = snapshot.payments || [];
+      if (remotePayments.length || coreDeposits.length) {
+        // Deposit ACC ikut tercatat sebagai kas masuk di buku kas.
+        const depositRows = coreDeposits.map((deposit) => ({
+          id: `l-${deposit.id}`,
+          backendId: deposit.backendId,
+          date: deposit.date,
+          type: 'Deposit',
+          ref: 'Deposit saldo',
+          mitraName: deposit.mitraName,
+          nominal: deposit.nominal,
+          bank: deposit.bank,
+          by: deposit.verifiedBy,
+          status: deposit.status,
+          note: deposit.note
+        }));
+        setPoLedger([...remotePayments.map(mapPaymentToLedger), ...depositRows]);
+      }
+
+      const remoteSuppliers = snapshot.suppliers || [];
+      if (Array.isArray(snapshot.suppliers)) {
+        setPoSuppliers(remoteSuppliers.map(mapSupplier));
+      }
+
+      const remoteBrands = snapshot.brands || [];
+      if (Array.isArray(snapshot.brands) && remoteBrands.length) {
+        const coreBrands = remoteBrands.map(mapBrandToCore);
+        setPoBrands(coreBrands);
+        setBrands(coreBrandsToProject(coreBrands));
+      }
+
+      const remoteCategories = snapshot.categories || [];
+      if (Array.isArray(snapshot.categories) && remoteCategories.length) {
+        setPoCategories(remoteCategories.map((c) => c.name || c));
+      }
+
+      const remoteProducts = snapshot.products || [];
+      if (Array.isArray(snapshot.products)) {
+        const projectProds = mapProducts({ data: remoteProducts });
+        setProducts(projectProds);
+        setPoProducts(projectProductsToCore(projectProds));
+      }
+
+      const remoteBatches = snapshot.batches || [];
+      if (remoteBatches.length) setPoBatches(remoteBatches.map(mapBatchToCore));
+
+      const remoteRequests = snapshot.payment_requests || [];
+      if (remoteRequests.length) {
+        setPoPaymentRequests(remoteRequests.map(mapPaymentRequestToCore));
+      }
+
+      const remoteNotifs = snapshot.notifications || [];
+      if (remoteNotifs.length) setNotifications(remoteNotifs.map(mapNotificationToHeader));
+
+      if (snapshot.settings) {
+        setPoSettings((prev) => ({ ...prev, ...mapSettings(snapshot.settings) }));
+      }
+    };
+
+    syncManagement();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken, currentUser?.roleId]);
+
+  // Notifikasi dan buku alamat mitra mengikuti akun JWT aktif.
+  useEffect(() => {
+    if (!sessionToken || currentUser?.roleId !== 'mitra') return undefined;
+
+    let cancelled = false;
+
+    const syncMitraProfile = async () => {
+      const [notifResponse] = await Promise.all([
+        api.my.notifications().catch(() => null),
+        syncAddressBookFromApi()
+      ]);
+      if (cancelled) return;
+
+      const remoteNotifs = notifResponse?.data || [];
+      if (remoteNotifs.length) setNotifications(remoteNotifs.map(mapNotificationToHeader));
+    };
+
+    syncMitraProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken, currentUser?.roleId]);
 
   // Setelah login, muat ulang katalog agar harga sesuai level mitra (token terkirim)
   useEffect(() => {
@@ -846,7 +849,8 @@ export default function App() {
       ...newOrder,
       mitraName: currentUser?.name || 'HENI (Bekasi)',
       mitraLevel: currentUser?.role || 'Mitra Distributor',
-      mitraCity: 'Bekasi',
+      mitraCity: newOrder.recipientCity || 'Bekasi',
+      mitraAddress: newOrder.recipientAddress || '',
       mitraPhone: currentUser?.phone || '0812-1999-1888',
       dpPct: schemeDpPct,
       dpNominal,
@@ -869,7 +873,7 @@ export default function App() {
     // Show celebration notification
     setToast({
       show: true,
-      message: `Pesanan Pre-Order ${newOrder.orderNo} berhasil dibuat! Faktur invoice siap dicetak di dashboard mitra.`
+      message: `Pesanan Pre-Order ${newOrder.orderNo} berhasil dibuat dan diteruskan ke Admin Marketing untuk di-ACC! Setelah di-ACC, pembayaran DP dapat dilakukan.`
     });
 
     // Kirim pesanan ke backend Laravel bila sesi JWT aktif
@@ -913,7 +917,8 @@ export default function App() {
     if (!invoice) return;
     setCoreOrders((prev) =>
       prev.map((o) => {
-        if (o.invoice !== invoice) return o;
+        if (o.invoice !== invoice && !String(invoice).includes(o.invoice)) return o;
+        let updated = { ...o, ...patch };
         if (patch.items) {
           const items = patch.items;
           const qty = items.reduce((s, it) => s + (Number(it.qty) || 1), 0);
@@ -921,8 +926,8 @@ export default function App() {
             (s, it) => s + (Number(it.subtotal) || (Number(it.price) || 0) * (Number(it.qty) || 1)),
             0
           );
-          return {
-            ...o,
+          updated = {
+            ...updated,
             qty,
             subtotal,
             pelunasanNominal: Math.max(0, subtotal - (Number(o.dpNominal) || 0)),
@@ -930,8 +935,8 @@ export default function App() {
             _projectMeta: { ...(o._projectMeta || {}), items }
           };
         }
-        if (patch.ekspedisi) return { ...o, ekspedisi: patch.ekspedisi };
-        return o;
+        if (patch.ekspedisi) updated.ekspedisi = patch.ekspedisi;
+        return updated;
       })
     );
   };
@@ -1005,15 +1010,15 @@ export default function App() {
     const roleName = role?.name || 'Mitra Distributor';
 
     const userObj = {
-      name: userData?.name || (roleId === 'mitra' ? 'HENI' : roleName),
+      name: userData?.name || (roleId === 'mitra' ? 'Mitra' : roleName),
       role: roleName,
       roleId: roleId,
       avatar: savedAvatar || userData?.avatar || DEFAULT_USER.avatar,
       balance: userData?.balance || 'Rp 0',
-      totalBill: userData?.totalBill || (roleId === 'mitra' ? 'Rp 3.399.145' : 'Rp 0'),
-      phone: userData?.phone || '(+62) 0812-1999-1888',
-      email: userData?.email || 'afatharshop@maknahijab.com',
-      address: userData?.address || DEFAULT_USER.address
+      totalBill: userData?.totalBill || 'Rp 0',
+      phone: userData?.phone || '',
+      email: userData?.email || '',
+      address: userData?.address || ''
     };
 
     setCurrentUser(userObj);
@@ -1056,7 +1061,7 @@ export default function App() {
           ? 'DEWI FINANCE'
           : roleId === 'owner'
           ? 'OWNER AFATHAR'
-          : 'HENI'
+          : 'Mitra'
     });
   };
 
@@ -1076,6 +1081,9 @@ export default function App() {
 
   // FULL-PAGE AUTH VIEWS (LOGIN, REGISTER, LOGOUT SUCCESS)
   if (currentPage === 'logout_success') {
+    if (isLoggedIn) {
+      return null;
+    }
     return (
       <LogoutSuccessPage
         onNavigateLogin={() => setCurrentPage('login')}
@@ -1085,6 +1093,9 @@ export default function App() {
   }
 
   if (currentPage === 'login') {
+    if (isLoggedIn) {
+      return null;
+    }
     return (
       <LoginPage
         onLoginSuccess={handleLoginSuccess}
@@ -1153,7 +1164,7 @@ export default function App() {
         onNavigateHome={handleNavigateHome}
         onSearchSubmit={handleGlobalSearchSubmit}
         isLoggedIn={isLoggedIn}
-        currentUser={currentUser}
+        currentUser={synchronizedUser}
         onLogout={handleLogout}
         onOpenProfile={() => handleNavigateDashboard('profil')}
         onOpenOrderForm={handleNavigateCatalog}
@@ -1263,6 +1274,8 @@ export default function App() {
               onSelectProduct={handleSelectProduct}
               statusFilter={statusFilter}
               setStatusFilter={setStatusFilter}
+              onlySaleFilter={onlySaleFilter}
+              setOnlySaleFilter={setOnlySaleFilter}
               onNavigateHome={handleNavigateHome}
               selectedCategory={selectedCategory}
               onSelectCategory={handleSelectCategory}
@@ -1299,7 +1312,7 @@ export default function App() {
         {currentPage === 'checkout' && (
           <CheckoutPage
             checkoutItems={checkoutItems.length > 0 ? checkoutItems : cartItems}
-            currentUser={currentUser}
+            currentUser={synchronizedUser}
             onNavigateHome={handleNavigateHome}
             onNavigateCart={() => setCurrentPage('cart')}
             onCompleteOrder={handleCompleteOrder}
@@ -1313,19 +1326,22 @@ export default function App() {
           <MitraDashboard
             activeTab={mitraActiveTab}
             onSelectTab={(tab) => setMitraActiveTab(tab)}
-            currentUser={currentUser}
+            currentUser={synchronizedUser}
             onUpdateUser={handleUpdateUser}
             onUpdateAvatar={handleUpdateAvatar}
             onLogout={handleLogout}
             onNavigateCatalog={handleNavigateCatalog}
             onNavigateHome={handleNavigateHome}
             poBatches={poBatches}
+            products={products}
+            deposits={poDeposits}
             onUploadPayment={handleUploadPayment}
             onDepositSubmit={handleDepositSubmit}
+            onPayWithDeposit={handlePayWithDeposit}
             orders={mitraOrders.filter(
               (o) =>
                 !o.mitraName ||
-                o.mitraName.toUpperCase().includes((currentUser?.name || 'HENI').toUpperCase())
+                o.mitraName.toUpperCase().includes((currentUser?.name || 'Mitra').toUpperCase())
             )}
             adminBankAccounts={adminBankAccounts}
             adminCouriers={adminCouriers}
@@ -1336,7 +1352,7 @@ export default function App() {
         {/* VIEW 6: MARKETING DASHBOARD (ACC pesanan, katalog, brand, supplier, tim) */}
         {currentPage === 'marketing_dashboard' && (
           <MarketingDashboard
-            currentUser={{ ...currentUser, role: 'marketing' }}
+            currentUser={{ ...synchronizedUser, role: 'marketing' }}
             onNavigateStore={handleNavigateHome}
             onLogout={handleLogout}
             orders={coreOrders}
@@ -1370,7 +1386,7 @@ export default function App() {
         {/* VIEW 7: FINANCE DASHBOARD (verifikasi 3 tahap, ongkir, resi, pengajuan dana) */}
         {currentPage === 'finance_dashboard' && (
           <FinanceDashboard
-            currentUser={{ ...currentUser, role: 'finance' }}
+            currentUser={{ ...synchronizedUser, role: 'finance' }}
             onNavigateStore={handleNavigateHome}
             onLogout={handleLogout}
             orders={coreOrders}
@@ -1400,7 +1416,7 @@ export default function App() {
         {/* VIEW 8: OWNER DASHBOARD (approval akhir & transfer pengajuan dana) */}
         {currentPage === 'owner_dashboard' && (
           <OwnerDashboard
-            currentUser={{ ...currentUser, role: 'owner' }}
+            currentUser={{ ...synchronizedUser, role: 'owner' }}
             onNavigateStore={handleNavigateHome}
             onLogout={handleLogout}
             orders={coreOrders}
@@ -1450,7 +1466,7 @@ export default function App() {
       <ProfileModal
         isOpen={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
-        currentUser={currentUser}
+        currentUser={synchronizedUser}
         onUpdateUser={handleUpdateUser}
         onUpdateAvatar={handleUpdateAvatar}
       />
@@ -1460,6 +1476,7 @@ export default function App() {
         isOpen={isOrdersModalOpen}
         onClose={() => setIsOrdersModalOpen(false)}
         onNavigateProduct={handleSelectProduct}
+        orders={mitraOrders}
       />
 
     </div>

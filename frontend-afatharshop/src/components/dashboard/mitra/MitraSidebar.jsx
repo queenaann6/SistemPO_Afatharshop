@@ -38,13 +38,13 @@ export default function MitraSidebar({
           <div className="w-10 h-10 rounded-full overflow-hidden bg-stone-100 ring-2 ring-emerald-500/30 shrink-0">
             <img
               src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-              alt={currentUser?.name || 'HENI'}
+              alt={currentUser?.name || 'Mitra'}
               className="w-full h-full object-cover"
             />
           </div>
           <div className="min-w-0">
             <h4 className="font-bold text-stone-900 text-sm tracking-wide truncate uppercase">
-              {currentUser?.name || 'HENI'}
+              {currentUser?.name || 'Mitra'}
             </h4>
             <p className="text-emerald-500 font-semibold text-xs mt-0.5">
               {currentUser?.balance || 'Rp 0'}
