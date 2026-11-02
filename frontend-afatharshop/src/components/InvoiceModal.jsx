@@ -198,10 +198,16 @@ export default function InvoiceModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-xs animate-in fade-in overflow-y-auto">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-xs animate-in fade-in overflow-y-auto"
+    >
       
       {/* Outer Modal Container */}
-      <div className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-stone-200 overflow-hidden my-auto animate-in zoom-in-95">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-stone-200 overflow-hidden my-auto animate-in zoom-in-95"
+      >
         
         {/* Modal Top Control Bar */}
         <div className="bg-stone-900 text-white px-5 py-3 flex items-center justify-between gap-3 border-b border-stone-800">

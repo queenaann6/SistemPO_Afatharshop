@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '../../services/api';
+import { dbId } from '../../services/adapters';
+import BankAccountModal from './BankAccountModal';
 import {
   ACCENTS,
   Badge,
@@ -62,6 +64,7 @@ import {
   num,
   orderOutstanding,
   orderPaid,
+  orderPatchToServer,
   orderStage,
   poClosingToday,
   prSteps,
@@ -219,12 +222,22 @@ export default function FinanceDashboard({
   const [prForm, setPrForm] = useState({
     purpose: '',
     amount: '',
-    bankId: seed.bankAccounts[0]?.id || '',
+    bankId: seed.bankAccounts.find((b) => b.type === 'pengajuan')?.id || seed.bankAccounts[0]?.id || '',
     ref: '',
     note: ''
   });
+  const [prTab, setPrTab] = useState('pengajuan'); // 'pengajuan' | 'rekening_vendor'
   const [prFilter, setPrFilter] = useState('all');
   const [prDetailId, setPrDetailId] = useState(null);
+
+  useEffect(() => {
+    if (!prForm.bankId || !bankAccounts.some((b) => b.id === prForm.bankId && b.type === 'pengajuan')) {
+      const firstPengajuan = bankAccounts.find((b) => b.type === 'pengajuan' && b.active);
+      if (firstPengajuan) {
+        setPrForm((prev) => ({ ...prev, bankId: firstPengajuan.id }));
+      }
+    }
+  }, [bankAccounts]);
 
   // Pesanan
   const [stageFilter, setStageFilter] = useState('all');
@@ -247,8 +260,10 @@ export default function FinanceDashboard({
   const [teamModal, setTeamModal] = useState(null);
   const [credential, setCredential] = useState(null);
 
-  // Pengaturan
-  const [settingsTab, setSettingsTab] = useState('rekening');
+  // Master Bank & Ekspedisi
+  const [bankTab, setBankTab] = useState('public'); // 'public' | 'pengajuan'
+  const [inlineBankId, setInlineBankId] = useState(null);
+  const [inlineBankForm, setInlineBankForm] = useState({ bank: '', accountNo: '', holder: '', purpose: '', brands: [], active: true });
   const [bankModal, setBankModal] = useState(null);
   const [courierModal, setCourierModal] = useState(null);
   const [settingsForm, setSettingsForm] = useState({ ...seed.settings });
@@ -341,7 +356,7 @@ export default function FinanceDashboard({
         ref: o.invoice,
         mitraName: o.mitraName,
         level: o.level,
-        produk: `${o.produk} · ${o.variant}`,
+        produk: `${o.produk}  ·  ${o.variant}`,
         amount: num(o[verifMeta.nominalKey]),
         status: o[verifMeta.statusKey],
         proof: o[verifMeta.proofKey],
@@ -527,35 +542,35 @@ export default function FinanceDashboard({
       ...closingPo.map((p) => ({
         id: `po-close-${p.id}`,
         title: `${p.title} ${p.daysLeft === 0 ? 'tutup PO hari ini' : `lewat jadwal ${Math.abs(p.daysLeft)} hari`}`,
-        sub: `${p.brand} · ${fmtDate(p.closeDate)}`,
+        sub: `${p.brand}  ·  ${fmtDate(p.closeDate)}`,
         tone: 'red',
         onClick: () => setActiveMenu('reminder')
       })),
       ...pendingDp.slice(0, 4).map((o) => ({
         id: `dp-${o.invoice}`,
         title: `DP ${o.invoice} menunggu verifikasi`,
-        sub: `${o.mitraName} · ${rp(o.dpNominal)}`,
+        sub: `${o.mitraName}  ·  ${rp(o.dpNominal)}`,
         tone: 'blue',
         onClick: () => setActiveMenu('verif_dp')
       })),
       ...pendingPelunasan.slice(0, 3).map((o) => ({
         id: `pl-${o.invoice}`,
         title: `Pelunasan ${o.invoice} menunggu verifikasi`,
-        sub: `${o.mitraName} · ${rp(o.pelunasanNominal)}`,
+        sub: `${o.mitraName}  ·  ${rp(o.pelunasanNominal)}`,
         tone: 'violet',
         onClick: () => setActiveMenu('verif_pelunasan')
       })),
       ...pendingOngkir.slice(0, 3).map((o) => ({
         id: `og-${o.invoice}`,
         title: `Ongkir ${o.invoice} menunggu verifikasi`,
-        sub: `${o.mitraName} · ${rp(o.ongkir)}`,
+        sub: `${o.mitraName}  ·  ${rp(o.ongkir)}`,
         tone: 'orange',
         onClick: () => setActiveMenu('verif_ongkir')
       })),
       ...pendingPr.slice(0, 3).map((r) => ({
         id: `pr-${r.id}`,
-        title: `${r.code} · ${r.status}`,
-        sub: `${rp(r.amount)} · ${r.purpose}`,
+        title: `${r.code}  ·  ${r.status}`,
+        sub: `${rp(r.amount)}  ·  ${r.purpose}`,
         tone: 'amber',
         onClick: () => {
           setPrDetailId(r.id);
@@ -650,14 +665,43 @@ export default function FinanceDashboard({
           { id: 'tim', label: 'Tim Admin', title: 'Manajemen Tim Admin', icon: 'shield' }
         ]
       },
-      { id: 'pengaturan', label: 'Pengaturan', title: 'Rekening, Ekspedisi & Tempo', icon: 'file' }
+      {
+        group: 'master',
+        label: 'Master Bank & Ekspedisi',
+        children: [
+          { id: 'rekening', label: 'Rekening Bank', title: 'Master Rekening Bank', icon: 'card' },
+          { id: 'ekspedisi', label: 'Ekspedisi Pengiriman', title: 'Master Ekspedisi Pengiriman', icon: 'truck' }
+        ]
+      }
     ],
     [pendingDp.length, pendingPelunasan.length, pendingOngkir.length, pendingDeposit.length, needOngkir.length, readyToShip.length, pendingPr.length]
   );
 
   /* --------------------------------------------------------------- handlers */
-  const patchOrder = (invoice, patch) =>
-    commitOrders((prev) => prev.map((o) => (o.invoice === invoice ? { ...o, ...patch } : o)));
+  const serverFail = (err, action) =>
+    toast(`${action} gagal: ${err?.message || 'server tidak merespons.'}`, 'error');
+
+  const notOnServer = (label) =>
+    toast(`${label} ini belum tersimpan di server. Tambahkan lewat portal lebih dulu.`, 'error');
+
+  const patchOrder = async (invoice, patch) => {
+    const matched = orders.find((o) => o.invoice === invoice);
+    if (!matched) return false;
+
+    const targetId = dbId(matched) || matched.invoice;
+    const body = orderPatchToServer(patch);
+
+    try {
+      if (Object.keys(body).length) {
+        await api.management.updateOrderStatus(targetId, body);
+      }
+      commitOrders((prev) => prev.map((o) => (o.invoice === invoice ? { ...o, ...patch } : o)));
+      return true;
+    } catch (err) {
+      serverFail(err, `Perubahan status ${invoice}`);
+      return false;
+    }
+  };
 
   const openInvoiceEditor = (o) => {
     const stage = orderStage(o);
@@ -821,7 +865,7 @@ export default function FinanceDashboard({
 
     patchOrder(target.invoice, {
       produk: items[0].title,
-      variant: items.length === 1 ? items[0].variant : items.map((it) => it.variant).join(' · '),
+      variant: items.length === 1 ? items[0].variant : items.map((it) => it.variant).join('  ·  '),
       qty: totalQty,
       price: items[0].price,
       discountPct: weightedDiscPct,
@@ -903,11 +947,14 @@ export default function FinanceDashboard({
         ...prev
       ]);
       toast(`${verifMeta.kind} ${o.invoice} diverifikasi ACC.`);
-      const targetId = o.backendId || o.id;
-      api.management.updateOrderStatus(targetId, {
-        status: 'Produksi',
-        dpStatus: 'ACC'
-      }).catch(() => {});
+      const targetId = dbId(o) || o.backendId || o.invoice;
+      const statusPayload =
+        verifMeta.kind === 'DP'
+          ? { status: 'Produksi', dpStatus: 'ACC' }
+          : verifMeta.kind === 'Pelunasan'
+            ? { status: 'Siap Kirim', pelunasanStatus: 'ACC' }
+            : { ongkirStatus: 'ACC' };
+      api.management.updateOrderStatus(targetId, statusPayload).catch(() => {});
     }
     setConfirmModal(null);
   };
@@ -1081,47 +1128,238 @@ export default function FinanceDashboard({
     });
   };
 
-  const saveBank = (e) => {
-    e.preventDefault();
-    const f = bankModal.form;
-    if (!f.bank?.trim() || !f.accountNo?.trim() || !f.holder?.trim()) {
+  const saveBank = async (formData) => {
+    const f = formData || bankModal?.form;
+    if (!f || !f.bank?.trim() || !f.accountNo?.trim() || !f.holder?.trim()) {
       return toast('Bank, nomor rekening, dan atas nama wajib diisi.', 'error');
     }
+    const type = f.type || bankTab || 'public';
+    const purpose = f.purpose?.trim() || (type === 'public' ? 'Penerimaan Pembayaran Mitra' : '');
+    const brandsList = Array.isArray(f.brands) ? f.brands : [];
+    const serverPayload = {
+      bank_name: f.bank.trim(),
+      account_number: f.accountNo.trim(),
+      account_holder: f.holder.trim(),
+      type,
+      purpose,
+      brands: brandsList,
+      is_active: f.active !== false
+    };
+
     if (bankModal.mode === 'edit') {
-      commitBankAccounts((prev) => prev.map((b) => (b.id === bankModal.id ? { ...b, ...f } : b)));
+      const targetId = dbId(bankAccounts.find((b) => b.id === bankModal.id)) || dbId(bankModal);
+      if (!targetId) return notOnServer(`Rekening ${f.bank}`);
+      try {
+        await api.management.updateBankAccount(targetId, serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menyimpan rekening ${f.bank}`);
+      }
+      commitBankAccounts((prev) =>
+        prev.map((b) =>
+          b.id === bankModal.id
+            ? { ...b, ...f, type, purpose, brands: brandsList }
+            : b
+        )
+      );
       toast(`Rekening ${f.bank} diperbarui.`);
     } else {
-      commitBankAccounts((prev) => [...prev, { id: uid('bk'), ...f, active: true }]);
-      toast(`Rekening ${f.bank} ditambahkan.`);
+      let created;
+      try {
+        created = await api.management.createBankAccount(serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menambahkan rekening ${f.bank}`);
+      }
+      const row = created?.data;
+      const newId = row?.id != null ? String(row.id) : uid('bk');
+      commitBankAccounts((prev) => [
+        ...prev,
+        {
+          ...f,
+          type,
+          purpose,
+          brands: brandsList,
+          id: newId,
+          backendId: row?.id ?? null,
+          active: f.active !== false
+        }
+      ]);
+      if (type === 'pengajuan') {
+        setPrForm((prev) => ({ ...prev, bankId: newId }));
+      }
+      toast(`Rekening ${f.bank} (${type === 'pengajuan' ? 'Pengajuan Owner' : 'Publik Toko'}) ditambahkan.`);
     }
     setBankModal(null);
   };
 
-  const toggleBank = (b) => {
+  const deleteBank = (b) => {
+    setConfirmModal({
+      title: 'Hapus Rekening Bank',
+      message: `Hapus rekening "${b.bank} - ${b.accountNo}" (a/n ${b.holder})? Tindakan ini akan menghapus rekening dari database sistem.`,
+      confirmLabel: 'Hapus Rekening',
+      danger: true,
+      onConfirm: async () => {
+        const targetId = dbId(b) || (num(b.id) > 0 ? num(b.id) : null);
+        if (!targetId) {
+          commitBankAccounts((prev) => prev.filter((x) => x.id !== b.id));
+          setConfirmModal(null);
+          return notOnServer(`Rekening ${b.bank}`);
+        }
+        try {
+          await api.management.deleteBankAccount(targetId);
+        } catch (err) {
+          return serverFail(err, `Menghapus rekening ${b.bank}`);
+        }
+        commitBankAccounts((prev) => prev.filter((x) => x.id !== b.id));
+        setConfirmModal(null);
+        toast(`Rekening ${b.bank} (${b.accountNo}) berhasil dihapus.`, 'warning');
+      }
+    });
+  };
+
+  const startInlineEditBank = (b) => {
+    setInlineBankId(b.id);
+    setInlineBankForm({
+      bank: b.bank || '',
+      accountNo: b.accountNo || '',
+      holder: b.holder || '',
+      purpose: b.purpose || '',
+      brands: b.brands || [],
+      active: b.active !== false
+    });
+  };
+
+  const saveInlineEditBank = async (b) => {
+    if (!inlineBankForm.bank.trim() || !inlineBankForm.accountNo.trim() || !inlineBankForm.holder.trim()) {
+      return toast('Bank, nomor rekening, dan atas nama wajib diisi.', 'error');
+    }
+    const targetId = dbId(b) || (num(b.id) > 0 ? num(b.id) : null);
+    const serverPayload = {
+      bank_name: inlineBankForm.bank.trim(),
+      account_number: inlineBankForm.accountNo.trim(),
+      account_holder: inlineBankForm.holder.trim(),
+      type: b.type || bankTab || 'public',
+      purpose: inlineBankForm.purpose.trim(),
+      brands: inlineBankForm.brands || [],
+      is_active: inlineBankForm.active !== false
+    };
+    if (targetId) {
+      try {
+        await api.management.updateBankAccount(targetId, serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menyimpan rekening ${inlineBankForm.bank}`);
+      }
+    }
+    commitBankAccounts((prev) =>
+      prev.map((item) =>
+        item.id === b.id
+          ? {
+              ...item,
+              bank: inlineBankForm.bank.trim(),
+              accountNo: inlineBankForm.accountNo.trim(),
+              holder: inlineBankForm.holder.trim(),
+              purpose: inlineBankForm.purpose.trim(),
+              brands: inlineBankForm.brands || [],
+              active: inlineBankForm.active !== false
+            }
+          : item
+      )
+    );
+    setInlineBankId(null);
+    toast(`Rekening ${inlineBankForm.bank} berhasil disimpan.`);
+  };
+
+  const toggleBank = async (b) => {
+    const targetId = dbId(b);
+    if (!targetId) return notOnServer(`Rekening ${b.bank}`);
+    try {
+      await api.management.updateBankAccount(targetId, { is_active: !b.active });
+    } catch (err) {
+      return serverFail(err, `Mengubah status rekening ${b.bank}`);
+    }
     commitBankAccounts((prev) => prev.map((x) => (x.id === b.id ? { ...x, active: !x.active } : x)));
     toast(`Rekening ${b.bank} ${b.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
   };
 
-  const saveCourier = (e) => {
+  const saveCourier = async (e) => {
     e.preventDefault();
     const f = courierModal.form;
     if (!f.name?.trim()) return toast('Nama ekspedisi wajib diisi.', 'error');
+    const serverPayload = {
+      name: f.name.trim(),
+      code: f.code || f.name.trim().slice(0, 3).toUpperCase(),
+      description: f.note || '',
+      is_active: f.active !== false
+    };
+
     if (courierModal.mode === 'edit') {
+      const targetId =
+        dbId(couriers.find((c) => c.id === courierModal.id)) || dbId(courierModal);
+      if (!targetId) return notOnServer(`Ekspedisi ${f.name}`);
+      try {
+        await api.management.updateCourier(targetId, serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menyimpan ekspedisi ${f.name}`);
+      }
       commitCouriers((prev) => prev.map((c) => (c.id === courierModal.id ? { ...c, ...f } : c)));
       toast(`Ekspedisi ${f.name} diperbarui.`);
     } else {
+      let created;
+      try {
+        created = await api.management.createCourier(serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menambahkan ekspedisi ${f.name}`);
+      }
+      const row = created?.data;
       commitCouriers((prev) => [
         ...prev,
-        { id: uid('c'), ...f, code: f.code || f.name.slice(0, 3).toUpperCase(), createdAt: todayISO() }
+        {
+          ...serverPayload,
+          id: row?.id != null ? `c-${row.id}` : uid('c'),
+          backendId: row?.id ?? null,
+          active: true,
+          createdAt: todayISO()
+        }
       ]);
       toast(`Ekspedisi ${f.name} ditambahkan.`);
     }
     setCourierModal(null);
   };
 
-  const toggleCourier = (c) => {
+  const toggleCourier = async (c) => {
+    const targetId = dbId(c);
+    if (!targetId) return notOnServer(`Ekspedisi ${c.name}`);
+    try {
+      await api.management.updateCourier(targetId, { is_active: !c.active });
+    } catch (err) {
+      return serverFail(err, `Mengubah status ekspedisi ${c.name}`);
+    }
     commitCouriers((prev) => prev.map((x) => (x.id === c.id ? { ...x, active: !x.active } : x)));
     toast(`${c.name} ${c.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
+  };
+
+  const deleteCourier = (c) => {
+    setConfirmModal({
+      title: 'Hapus Ekspedisi',
+      message: `Hapus ekspedisi "${c.name}"? Ekspedisi yang sudah terhubung dengan data pesanan tidak dapat dihapus (silakan nonaktifkan).`,
+      confirmLabel: 'Hapus Ekspedisi',
+      danger: true,
+      onConfirm: async () => {
+        const targetId = dbId(c) || (num(c.id) > 0 ? num(c.id) : null);
+        if (!targetId) {
+          commitCouriers((prev) => prev.filter((x) => x.id !== c.id));
+          setConfirmModal(null);
+          return notOnServer(`Ekspedisi ${c.name}`);
+        }
+        try {
+          await api.management.deleteCourier(targetId);
+        } catch (err) {
+          return serverFail(err, `Menghapus ekspedisi ${c.name}`);
+        }
+        commitCouriers((prev) => prev.filter((x) => x.id !== c.id));
+        setConfirmModal(null);
+        toast(`Ekspedisi ${c.name} berhasil dihapus.`, 'warning');
+      }
+    });
   };
 
   const saveMitra = (e) => {
@@ -1386,7 +1624,7 @@ export default function FinanceDashboard({
                 tone="blue"
                 icon="wallet"
                 badge={totalPendingDocs > 0 ? <Badge tone="blue">Perlu tindakan</Badge> : null}
-                hint={`${pendingDp.length} DP · ${pendingPelunasan.length} pelunasan · ${pendingOngkir.length} ongkir · ${pendingDeposit.length} deposit`}
+                hint={`${pendingDp.length} DP  ·  ${pendingPelunasan.length} pelunasan  ·  ${pendingOngkir.length} ongkir  ·  ${pendingDeposit.length} deposit`}
               />
               <MetricCard
                 label="Kas Masuk"
@@ -1456,7 +1694,7 @@ export default function FinanceDashboard({
                       </div>
                       <div className="text-right shrink-0">
                         <p className="text-xs font-bold text-gray-900">{rp(amount)}</p>
-                        <p className="text-[10px] text-sky-700 font-semibold">Periksa →</p>
+                        <p className="text-[10px] text-sky-700 font-semibold">Periksa  → </p>
                       </div>
                     </button>
                   ))}
@@ -1495,7 +1733,7 @@ export default function FinanceDashboard({
                     <div>
                       <p className="text-[11px] font-bold text-amber-800">Pengajuan aktif</p>
                       <p className="text-[10px] text-amber-700/70">
-                        {approvedPr.length} disetujui owner · menunggu transfer
+                        {approvedPr.length} disetujui owner  ·  menunggu transfer
                       </p>
                     </div>
                     <span className="text-lg font-bold text-amber-700">{pendingPr.length}</span>
@@ -1524,10 +1762,10 @@ export default function FinanceDashboard({
                     <div key={o.invoice} className="px-4 py-2.5 flex items-center justify-between gap-2">
                       <div className="min-w-0">
                         <p className="text-[11px] font-semibold text-gray-900">
-                          {o.invoice} <span className="font-normal text-gray-500">· {o.mitraName}</span>
+                          {o.invoice} <span className="font-normal text-gray-500"> ·  {o.mitraName}</span>
                         </p>
                         <p className="text-[10px] text-gray-400">
-                          Jatuh tempo {fmtDate(o.due)} {o.late > 0 ? `· terlambat ${o.late} hari` : ''}
+                          Jatuh tempo {fmtDate(o.due)} {o.late > 0 ? ` ·  terlambat ${o.late} hari` : ''}
                         </p>
                       </div>
                       <div className="text-right shrink-0">
@@ -1662,7 +1900,7 @@ export default function FinanceDashboard({
                   <SearchBox
                     value={verifSearch}
                     onChange={setVerifSearch}
-                    placeholder="Cari invoice, mitra, produk…"
+                    placeholder="Cari invoice, mitra, produk..."
                   />
                 </div>
               </div>
@@ -1721,7 +1959,7 @@ export default function FinanceDashboard({
                             <p className="text-[10px] text-gray-400">{fmtDate(row.date)}</p>
                           </>
                         ) : (
-                          <span className="text-[11px] text-gray-400">—</span>
+                          <span className="text-[11px] text-gray-400"> — </span>
                         )}
                       </td>
                       <td className={`${TD} text-right`}>
@@ -1733,7 +1971,7 @@ export default function FinanceDashboard({
                               onClick={() =>
                                 setReasonModal({
                                   title: `Tolak ${verifMeta.kind}`,
-                                  subtitle: `${row.ref} · ${row.mitraName} · ${rp(row.amount)}`,
+                                  subtitle: `${row.ref}  ·  ${row.mitraName}  ·  ${rp(row.amount)}`,
                                   label: 'Alasan penolakan',
                                   placeholder: 'Contoh: nominal tidak sesuai mutasi / bukti tidak terbaca',
                                   confirmLabel: 'Tolak pembayaran',
@@ -1817,12 +2055,12 @@ export default function FinanceDashboard({
                           setProofForm((prev) => ({ ...prev, mitraId: e.target.value, invoice: '' }))
                         }
                       >
-                        <option value="">Pilih mitra…</option>
+                        <option value="">Pilih mitra...</option>
                         {mitra
                           .filter((m) => m.active)
                           .map((m) => (
                             <option key={m.id} value={m.id}>
-                              {m.name} · {m.level}
+                              {m.name} - {m.level}
                             </option>
                           ))}
                       </Select>
@@ -1874,7 +2112,7 @@ export default function FinanceDashboard({
                           setProofForm((prev) => ({ ...prev, invoice, nominal: suggested || '' }));
                         }}
                       >
-                        <option value="">Pilih invoice…</option>
+                        <option value="">Pilih invoice...</option>
                         {orders
                           .filter((o) => o.mitraId === proofForm.mitraId && orderStage(o) !== 'ditolak')
                           .filter((o) => {
@@ -1885,7 +2123,7 @@ export default function FinanceDashboard({
                           })
                           .map((o) => (
                             <option key={o.invoice} value={o.invoice}>
-                              {o.invoice} · {o.produk} · sisa {rp(orderOutstanding(o))}
+                              {o.invoice} - {o.produk} - sisa {rp(orderOutstanding(o))}
                             </option>
                           ))}
                       </Select>
@@ -1921,7 +2159,7 @@ export default function FinanceDashboard({
                           .filter((b) => b.active)
                           .map((b) => (
                             <option key={b.id} value={b.id}>
-                              {b.bank} · {b.accountNo}
+                              {b.bank} - {b.accountNo}
                             </option>
                           ))}
                       </Select>
@@ -2003,10 +2241,10 @@ export default function FinanceDashboard({
                       <div key={row.key} className="px-4 py-2.5 flex items-center justify-between gap-2">
                         <div className="min-w-0">
                           <p className="text-[11px] font-semibold text-gray-900 truncate">
-                            {row.invoice} · {row.mitra}
+                            {row.invoice}  ·  {row.mitra}
                           </p>
                           <p className="text-[10px] text-gray-400">
-                            {row.kind} · {rp(row.amount)}
+                            {row.kind}  ·  {rp(row.amount)}
                           </p>
                         </div>
                         <ProofThumb
@@ -2089,11 +2327,11 @@ export default function FinanceDashboard({
                       </td>
                       <td className={TD}>
                         <p className="font-semibold text-gray-900">{o.mitraName}</p>
-                        <p className="text-[10px] text-gray-400">{o.level} · {o.phone}</p>
+                        <p className="text-[10px] text-gray-400">{o.level}  ·  {o.phone}</p>
                       </td>
                       <td className={TD}>
                         <p className="text-gray-800">{o.produk}</p>
-                        <p className="text-[10px] text-gray-400">{o.variant} · {o.qty} pcs</p>
+                        <p className="text-[10px] text-gray-400">{o.variant}  ·  {o.qty} pcs</p>
                       </td>
                       <td className={`${TD} max-w-[260px] text-[11px] text-gray-600`}>{addressText(o)}</td>
                       <td className={`${TD} text-right`}>
@@ -2160,8 +2398,8 @@ export default function FinanceDashboard({
                           <p className="text-[10px] text-gray-400">{o.produk}</p>
                         </td>
                         <td className={TD}>{o.mitraName}</td>
-                        <td className={TD}>{o.ekspedisi || '—'}</td>
-                        <td className={`${TD} text-right`}>{o.weight ? `${o.weight} kg` : '—'}</td>
+                        <td className={TD}>{o.ekspedisi || ' — '}</td>
+                        <td className={`${TD} text-right`}>{o.weight ? `${o.weight} kg` : ' — '}</td>
                         <td className={`${TD} text-right font-bold text-gray-900`}>{rp(o.ongkir)}</td>
                         <td className={TD}>
                           <PayBadge status={o.ongkirStatus} />
@@ -2252,7 +2490,7 @@ export default function FinanceDashboard({
                         >
                           {o.invoice}
                         </button>
-                        <p className="text-[10px] text-gray-400">{o.produk} · {o.qty} pcs</p>
+                        <p className="text-[10px] text-gray-400">{o.produk}  ·  {o.qty} pcs</p>
                       </td>
                       <td className={TD}>
                         <p className="font-semibold text-gray-900">{o.mitraName}</p>
@@ -2260,8 +2498,8 @@ export default function FinanceDashboard({
                       </td>
                       <td className={`${TD} max-w-[240px] text-[11px] text-gray-600`}>{addressText(o)}</td>
                       <td className={TD}>
-                        <p className="text-gray-800">{o.ekspedisi || '—'}</p>
-                        <p className="text-[10px] text-gray-400">{o.ongkir ? rp(o.ongkir) : '—'} · {o.weight ? `${o.weight} kg` : '—'}</p>
+                        <p className="text-gray-800">{o.ekspedisi || ' — '}</p>
+                        <p className="text-[10px] text-gray-400">{o.ongkir ? rp(o.ongkir) : ' — '}  ·  {o.weight ? `${o.weight} kg` : ' — '}</p>
                       </td>
                       <td className={TD}>
                         {o.resi ? (
@@ -2355,7 +2593,7 @@ export default function FinanceDashboard({
             <Card>
               <div className="px-4 py-3 border-b border-gray-100 flex flex-wrap items-center gap-2">
                 <div className="w-full sm:w-72">
-                  <SearchBox value={listSearch} onChange={setListSearch} placeholder="Cari invoice, mitra, produk…" />
+                  <SearchBox value={listSearch} onChange={setListSearch} placeholder="Cari invoice, mitra, produk..." />
                 </div>
                 <Select value={listBrand} onChange={(e) => setListBrand(e.target.value)} className="w-36">
                   <option value="all">Semua brand</option>
@@ -2442,7 +2680,7 @@ export default function FinanceDashboard({
           <>
             <PageHead
               title="Pengajuan Pembayaran ke Owner"
-              desc="Ajukan kebutuhan dana produksi, ongkir, atau operasional. Alur approval: Purchasing → Owner → Transfer."
+              desc="Ajukan kebutuhan dana produksi, ongkir, atau operasional. Alur approval: Purchasing  →  Owner  →  Transfer."
               badge={<Badge tone="amber">{pendingPr.length} pengajuan aktif</Badge>}
             />
 
@@ -2482,9 +2720,47 @@ export default function FinanceDashboard({
             <div className="grid lg:grid-cols-3 gap-4">
               <Card title="Buat Pengajuan" subtitle="Dana akan ditransfer owner ke rekening tujuan">
                 <form onSubmit={savePR} className="p-4 space-y-3">
+                  <Field label="Pilih Brand Terkait (Ambil dari Brand)" hint="Otomatis menyaring rekening bank vendor terkait">
+                    <Select
+                      value={prForm.brand || ''}
+                      onChange={(e) => {
+                        const selectedBrandName = e.target.value;
+                        setPrForm((prev) => {
+                          const next = { ...prev, brand: selectedBrandName };
+                          if (selectedBrandName) {
+                            const matchedBank = bankAccounts.find(
+                              (b) =>
+                                b.type === 'pengajuan' &&
+                                b.active &&
+                                Array.isArray(b.brands) &&
+                                b.brands.includes(selectedBrandName)
+                            );
+                            if (matchedBank) {
+                              next.bankId = matchedBank.id;
+                            }
+                            if (!prev.purpose) {
+                              next.purpose = `Pembayaran produksi brand ${selectedBrandName}`;
+                            }
+                          }
+                          return next;
+                        });
+                      }}
+                    >
+                      <option value="">-- Pilih Brand (Semua) --</option>
+                      {brands.map((br) => {
+                        const bName = typeof br === 'object' ? br.name : br;
+                        return (
+                          <option key={bName} value={bName}>
+                            {bName}
+                          </option>
+                        );
+                      })}
+                    </Select>
+                  </Field>
+
                   <Field label="Tujuan Pembayaran" required>
                     <Input
-                      placeholder="Contoh: DP produksi supplier Hana Textile"
+                      placeholder="Contoh: DP produksi supplier / konveksi"
                       value={prForm.purpose}
                       onChange={(e) => setPrForm((prev) => ({ ...prev, purpose: e.target.value }))}
                     />
@@ -2498,20 +2774,70 @@ export default function FinanceDashboard({
                       onChange={(e) => setPrForm((prev) => ({ ...prev, amount: e.target.value }))}
                     />
                   </Field>
-                  <Field label="Rekening Tujuan" required>
-                    <Select
-                      value={prForm.bankId}
-                      onChange={(e) => setPrForm((prev) => ({ ...prev, bankId: e.target.value }))}
-                    >
-                      {bankAccounts
-                        .filter((b) => b.active)
-                        .map((b) => (
-                          <option key={b.id} value={b.id}>
-                            {b.bank} · {b.accountNo} · {b.holder}
-                          </option>
-                        ))}
-                    </Select>
-                  </Field>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-gray-700">
+                        Rekening Tujuan (Vendor) <span className="text-rose-500">*</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBankModal({
+                            mode: 'create',
+                            form: {
+                              bank: '',
+                              accountNo: '',
+                              holder: '',
+                              type: 'pengajuan',
+                              brands: prForm.brand ? [prForm.brand] : [],
+                              purpose: prForm.brand ? `Brand: ${prForm.brand}` : '',
+                              active: true
+                            }
+                          })
+                        }
+                        className="text-[11px] font-semibold text-rose-700 hover:text-rose-900 hover:underline flex items-center gap-1"
+                      >
+                        + Rekening Baru
+                      </button>
+                    </div>
+
+                    {bankAccounts.filter((b) => b.type === 'pengajuan' && b.active).length > 0 ? (
+                      <Select
+                        value={prForm.bankId}
+                        onChange={(e) => setPrForm((prev) => ({ ...prev, bankId: e.target.value }))}
+                      >
+                        {bankAccounts
+                          .filter((b) => b.type === 'pengajuan' && b.active)
+                          .map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.bank} · {b.accountNo} · {b.holder}{' '}
+                              {b.brands?.length ? `[Brand: ${b.brands.join(', ')}]` : b.purpose ? `(${b.purpose})` : ''}
+                            </option>
+                          ))}
+                      </Select>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-amber-300 bg-amber-50/70 p-3 text-xs text-amber-900">
+                        <p className="font-semibold">Belum Ada Rekening Pengajuan</p>
+                        <p className="text-[11px] text-amber-800 mt-0.5">
+                          Rekening untuk pengajuan dana ke Owner dipisahkan dari rekening toko.
+                        </p>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          className="mt-2 w-full"
+                          icon="plus"
+                          onClick={() =>
+                            setBankModal({
+                              mode: 'create',
+                              form: { bank: '', accountNo: '', holder: '', type: 'pengajuan', purpose: '', active: true }
+                            })
+                          }
+                        >
+                          Daftarkan Rekening Vendor Sekarang
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                   <Field label="Referensi / Terkait">
                     <Input
                       placeholder="PO Gamis Almira / Batch Oktober"
@@ -2534,11 +2860,11 @@ export default function FinanceDashboard({
                     <p className="text-[10px] font-bold uppercase text-gray-400 mb-1">Alur Approval</p>
                     <div className="flex items-center gap-1.5 text-[10px] text-gray-600 flex-wrap">
                       <span className="px-1.5 py-0.5 rounded bg-white border border-gray-200">Finance</span>
-                      <span className="text-gray-300">→</span>
+                      <span className="text-gray-300"> → </span>
                       <span className="px-1.5 py-0.5 rounded bg-white border border-gray-200">Purchasing</span>
-                      <span className="text-gray-300">→</span>
+                      <span className="text-gray-300"> → </span>
                       <span className="px-1.5 py-0.5 rounded bg-white border border-gray-200">Owner</span>
-                      <span className="text-gray-300">→</span>
+                      <span className="text-gray-300"> → </span>
                       <span className="px-1.5 py-0.5 rounded bg-white border border-gray-200">Transfer</span>
                     </div>
                   </div>
@@ -2605,7 +2931,7 @@ export default function FinanceDashboard({
                               />
                             ))}
                           </div>
-                          <p className="text-[10px] text-gray-400 mt-1">{r.bank} · {r.accountNo}</p>
+                          <p className="text-[10px] text-gray-400 mt-1">{r.bank}  ·  {r.accountNo}</p>
                         </td>
                         <td className={TD}>
                           <Badge tone={preqTone(r.status)}>{r.status}</Badge>
@@ -2654,7 +2980,7 @@ export default function FinanceDashboard({
               <MetricCard
                 label="Arus Kas Bersih"
                 value={rp(kasMasuk - kasKeluar)}
-                sub="Masuk − keluar"
+                sub="Masuk  -  keluar"
                 tone={kasMasuk - kasKeluar >= 0 ? 'blue' : 'red'}
                 icon="file"
               />
@@ -2713,11 +3039,11 @@ export default function FinanceDashboard({
                       </td>
                       <td className={TD}>{l.mitraName}</td>
                       <td className={`${TD} text-right font-bold ${l.direction === 'out' ? 'text-rose-600' : 'text-emerald-700'}`}>
-                        {l.direction === 'out' ? '−' : '+'}
+                        {l.direction === 'out' ? ' - ' : '+'}
                         {rp(l.nominal)}
                       </td>
-                      <td className={TD}>{l.bank || '—'}</td>
-                      <td className={TD}>{l.by || '—'}</td>
+                      <td className={TD}>{l.bank || ' — '}</td>
+                      <td className={TD}>{l.by || ' — '}</td>
                       <td className={TD}>
                         <Badge tone={l.status === PREQ.TRANSFERRED || l.status === 'Transfer' ? 'teal' : l.status === PAY.ACC ? 'emerald' : 'amber'}>
                           {l.status}
@@ -2753,7 +3079,7 @@ export default function FinanceDashboard({
                 icon="alert"
               />
               <MetricCard
-                label="Jatuh Tempo ≤ 3 Hari"
+                label="Jatuh Tempo  ≤  3 Hari"
                 value={agingRows.filter((o) => o.late === 0 && diffDays(o.due, todayISO()) <= 3).length}
                 sub="Segera ditagihkan"
                 tone="amber"
@@ -2777,7 +3103,7 @@ export default function FinanceDashboard({
                     <SearchBox
                       value={closingSearch}
                       onChange={setClosingSearch}
-                      placeholder="Cari produk / brand…"
+                      placeholder="Cari produk / brand..."
                     />
                   </div>
                   <Segmented
@@ -2859,7 +3185,7 @@ export default function FinanceDashboard({
               title="Daftar Piutang"
               action={
                 <div className="w-full sm:w-64">
-                  <SearchBox value={reminderSearch} onChange={setReminderSearch} placeholder="Cari invoice / mitra…" />
+                  <SearchBox value={reminderSearch} onChange={setReminderSearch} placeholder="Cari invoice / mitra..." />
                 </div>
               }
             >
@@ -3051,7 +3377,7 @@ export default function FinanceDashboard({
               title="Daftar Mitra"
               action={
                 <div className="w-full sm:w-64">
-                  <SearchBox value={mitraSearch} onChange={setMitraSearch} placeholder="Cari nama / email / WhatsApp…" />
+                  <SearchBox value={mitraSearch} onChange={setMitraSearch} placeholder="Cari nama / email / WhatsApp..." />
                 </div>
               }
             >
@@ -3080,13 +3406,13 @@ export default function FinanceDashboard({
                         >
                           {m.name}
                         </button>
-                        <p className="text-[10px] text-gray-400">{m.email || '—'}</p>
+                        <p className="text-[10px] text-gray-400">{m.email || ' — '}</p>
                         <p className="text-[10px] text-gray-400">{m.phone}</p>
                       </td>
                       <td className={TD}>
                         <Badge tone={levelTone(m.level)}>{m.level}</Badge>
                       </td>
-                      <td className={TD}>{m.city || '—'}</td>
+                      <td className={TD}>{m.city || ' — '}</td>
                       <td className={`${TD} text-right`}>{m.invoiceCount}</td>
                       <td className={`${TD} text-right font-semibold`}>{rp(m.omzet)}</td>
                       <td className={`${TD} text-right ${m.outstanding > 0 ? 'text-rose-600 font-semibold' : 'text-gray-400'}`}>
@@ -3173,7 +3499,7 @@ export default function FinanceDashboard({
                           {roleLabel(u.role)}
                         </Badge>
                       </td>
-                      <td className={TD}>{u.phone || '—'}</td>
+                      <td className={TD}>{u.phone || ' — '}</td>
                       <td className={TD}>{fmtDate(u.createdAt)}</td>
                       <td className={TD}>
                         <Badge tone={u.active ? 'emerald' : 'gray'}>{u.active ? 'Aktif' : 'Nonaktif'}</Badge>
@@ -3206,216 +3532,296 @@ export default function FinanceDashboard({
           </>
         )}
 
-        {/* ============================ PENGATURAN ========================== */}
-        {activeMenu === 'pengaturan' && (
-          <>
-            <PageHead
-              title="Pengaturan Finance"
-              desc="Kelola rekening resmi, master ekspedisi, dan tempo pembayaran."
-              badge={<Badge tone="emerald">{roleLabel('finance')}</Badge>}
-            />
+        {/* ============================ REKENING ============================ */}
+        {activeMenu === 'rekening' && (() => {
+          const publicBanks = bankAccounts.filter((b) => (b.type || 'public') === 'public');
+          const pengajuanBanks = bankAccounts.filter((b) => b.type === 'pengajuan');
+          const currentList = bankTab === 'public' ? publicBanks : pengajuanBanks;
 
-            <Segmented
-              value={settingsTab}
-              onChange={setSettingsTab}
-              options={[
-                { value: 'rekening', label: 'Rekening Bank' },
-                { value: 'ekspedisi', label: 'Ekspedisi' },
-                { value: 'tempo', label: 'Tempo & Identitas' }
-              ]}
-            />
-
-            {settingsTab === 'rekening' && (
-              <Card
-                title="Rekening Bank"
-                subtitle="Rekening tujuan transfer mitra dan supplier"
-                action={
+          return (
+            <>
+              <PageHead
+                title="Master Rekening Bank"
+                desc={
+                  bankTab === 'public'
+                    ? 'Kelola rekening resmi toko untuk pembayaran checkout mitra, DP, pelunasan, dan faktur invoice.'
+                    : 'Kelola rekening transfer vendor / supplier untuk tujuan pengajuan dana ke Owner.'
+                }
+                badge={
+                  <Badge tone={bankTab === 'public' ? 'emerald' : 'amber'}>
+                    {currentList.filter((b) => b.active).length} aktif / {currentList.length} total
+                  </Badge>
+                }
+                actions={
                   <Button
                     icon="plus"
+                    variant={bankTab === 'pengajuan' ? 'gold' : 'primary'}
                     onClick={() =>
-                      setBankModal({ mode: 'create', form: { bank: '', accountNo: '', holder: '', active: true } })
+                      setBankModal({
+                        mode: 'create',
+                        form: {
+                          bank: '',
+                          accountNo: '',
+                          holder: '',
+                          type: bankTab,
+                          purpose: bankTab === 'public' ? 'Penerimaan Pembayaran Mitra' : '',
+                          active: true
+                        }
+                      })
                     }
                   >
-                    Rekening Baru
+                    {bankTab === 'pengajuan' ? 'Rekening Pengajuan Baru' : 'Rekening Publik Baru'}
                   </Button>
                 }
-              >
+              />
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <Segmented
+                  value={bankTab}
+                  onChange={setBankTab}
+                  options={[
+                    {
+                      value: 'public',
+                      label: 'Rekening Publik Toko',
+                      count: publicBanks.length
+                    },
+                    {
+                      value: 'pengajuan',
+                      label: 'Rekening Pengajuan Owner',
+                      count: pengajuanBanks.length
+                    }
+                  ]}
+                />
+              </div>
+
+              <Card>
                 <TableWrap>
                   <thead className="bg-gray-50 border-b border-gray-100">
                     <tr>
                       <th className={TH}>Bank</th>
                       <th className={TH}>Nomor Rekening</th>
                       <th className={TH}>Atas Nama</th>
-                      <th className={TH}>Status</th>
+                      <th className={TH}>{bankTab === 'pengajuan' ? 'Brand / Peruntukan Vendor' : 'Label / Kegunaan'}</th>
+                      <th className={`${TH} text-center`}>Status</th>
                       <th className={`${TH} text-right`}>Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {bankAccounts.map((b) => (
-                      <tr key={b.id} className="hover:bg-gray-50/70">
-                        <td className={`${TD} font-bold text-gray-900`}>{b.bank}</td>
-                        <td className={`${TD} font-mono`}>{b.accountNo}</td>
-                        <td className={TD}>{b.holder}</td>
-                        <td className={TD}>
-                          <Badge tone={b.active ? 'emerald' : 'gray'}>{b.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                        </td>
-                        <td className={`${TD} text-right`}>
-                          <div className="flex items-center justify-end gap-1.5">
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              onClick={() => setBankModal({ mode: 'edit', id: b.id, form: { ...b } })}
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant={b.active ? 'dangerOutline' : 'primary'}
-                              onClick={() => toggleBank(b)}
-                            >
-                              {b.active ? 'Nonaktifkan' : 'Aktifkan'}
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    {currentList.map((b) => {
+                      const isEditing = inlineBankId === b.id;
+
+                      if (isEditing) {
+                        return (
+                          <tr key={b.id} className="bg-amber-50/60">
+                            <td className={TD}>
+                              <input
+                                type="text"
+                                value={inlineBankForm.bank}
+                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, bank: e.target.value }))}
+                                placeholder="Bank"
+                                className="w-24 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#0F6B4F] bg-white font-semibold"
+                              />
+                            </td>
+                            <td className={TD}>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={inlineBankForm.accountNo}
+                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, accountNo: e.target.value.replace(/\D/g, '') }))}
+                                placeholder="No Rekening"
+                                className="w-36 font-mono px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#0F6B4F] bg-white"
+                              />
+                            </td>
+                            <td className={TD}>
+                              <input
+                                type="text"
+                                value={inlineBankForm.holder}
+                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, holder: e.target.value }))}
+                                placeholder="Atas Nama"
+                                className="w-full min-w-[140px] px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#0F6B4F] bg-white"
+                              />
+                            </td>
+                            <td className={TD}>
+                              <input
+                                type="text"
+                                value={inlineBankForm.purpose}
+                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, purpose: e.target.value }))}
+                                placeholder={bankTab === 'pengajuan' ? 'Brand / Peruntukan Vendor' : 'Label / Kegunaan'}
+                                className="w-full min-w-[140px] px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#0F6B4F] bg-white"
+                              />
+                            </td>
+                            <td className={`${TD} text-center`}>
+                              <label className="inline-flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={inlineBankForm.active}
+                                  onChange={(e) => setInlineBankForm((prev) => ({ ...prev, active: e.target.checked }))}
+                                  className="rounded border-gray-300 text-[#0F6B4F]"
+                                />
+                                <span className="text-[11px] text-gray-600 font-medium">{inlineBankForm.active ? 'Aktif' : 'Nonaktif'}</span>
+                              </label>
+                            </td>
+                            <td className={`${TD} text-right`}>
+                              <div className="inline-flex items-center gap-1">
+                                <Button size="xs" variant="primary" onClick={() => saveInlineEditBank(b)}>
+                                  Simpan
+                                </Button>
+                                <Button size="xs" variant="outline" onClick={() => setInlineBankId(null)}>
+                                  Batal
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return (
+                        <tr key={b.id} className="hover:bg-gray-50/70">
+                          <td className={`${TD} font-semibold text-gray-900`}>{b.bank}</td>
+                          <td className={`${TD} font-mono whitespace-nowrap`}>{b.accountNo}</td>
+                          <td className={TD}>{b.holder}</td>
+                          <td className={`${TD} text-xs text-gray-600`}>
+                            {b.type === 'pengajuan' && Array.isArray(b.brands) && b.brands.length > 0 ? (
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap gap-1">
+                                  {b.brands.map((br) => (
+                                    <span
+                                      key={br}
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-50 text-rose-900 border border-rose-200"
+                                    >
+                                      {br}
+                                    </span>
+                                  ))}
+                                </div>
+                                {b.purpose && !b.purpose.startsWith('Brand:') && (
+                                  <p className="text-[11px] text-gray-500">{b.purpose}</p>
+                                )}
+                              </div>
+                            ) : (
+                              b.purpose || (b.type === 'pengajuan' ? 'Vendor / Operasional' : 'Penerimaan Mitra')
+                            )}
+                          </td>
+                          <td className={`${TD} text-center`}>
+                            <Badge tone={b.active ? (bankTab === 'public' ? 'emerald' : 'amber') : 'gray'}>
+                              {b.active ? 'Aktif' : 'Nonaktif'}
+                            </Badge>
+                          </td>
+                          <td className={`${TD} text-right`}>
+                            <div className="inline-flex items-center gap-1">
+                              <Button size="xs" variant="outline" onClick={() => startInlineEditBank(b)}>
+                                Ubah
+                              </Button>
+                              <Button size="xs" variant="outline" onClick={() => toggleBank(b)}>
+                                {b.active ? 'Nonaktifkan' : 'Aktifkan'}
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="danger"
+                                icon="trash"
+                                onClick={() => deleteBank(b)}
+                              >
+                                Hapus
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </TableWrap>
-              </Card>
-            )}
-
-            {settingsTab === 'ekspedisi' && (
-              <Card
-                title="Master Ekspedisi"
-                subtitle="Pilihan ekspedisi saat input ongkir"
-                action={
-                  <Button
-                    icon="plus"
-                    onClick={() =>
-                      setCourierModal({
-                        mode: 'create',
-                        form: { name: '', code: '', note: '', active: true }
-                      })
+                {currentList.length === 0 && (
+                  <EmptyState
+                    title={bankTab === 'public' ? 'Belum ada rekening publik' : 'Belum ada rekening pengajuan vendor'}
+                    desc={
+                      bankTab === 'public'
+                        ? 'Tambahkan rekening toko agar mitra dapat melakukan transfer pembayaran pesanan.'
+                        : 'Tambahkan rekening supplier atau vendor untuk tujuan pengajuan dana ke Owner.'
                     }
-                  >
-                    Ekspedisi Baru
-                  </Button>
-                }
-              >
-                <TableWrap>
-                  <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>
-                      <th className={TH}>Nama</th>
-                      <th className={TH}>Kode</th>
-                      <th className={TH}>Catatan</th>
-                      <th className={TH}>Status</th>
-                      <th className={`${TH} text-right`}>Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {couriers.map((c) => (
-                      <tr key={c.id} className="hover:bg-gray-50/70">
-                        <td className={`${TD} font-bold text-gray-900`}>{c.name}</td>
-                        <td className={TD}>
-                          <Badge tone="teal">{c.code}</Badge>
-                        </td>
-                        <td className={`${TD} text-[11px] text-gray-500`}>{c.note || '—'}</td>
-                        <td className={TD}>
-                          <Badge tone={c.active ? 'emerald' : 'gray'}>{c.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                        </td>
-                        <td className={`${TD} text-right`}>
-                          <div className="flex items-center justify-end gap-1.5">
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              onClick={() => setCourierModal({ mode: 'edit', id: c.id, form: { ...c } })}
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant={c.active ? 'dangerOutline' : 'primary'}
-                              onClick={() => toggleCourier(c)}
-                            >
-                              {c.active ? 'Nonaktifkan' : 'Aktifkan'}
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </TableWrap>
+                    icon="card"
+                  />
+                )}
               </Card>
-            )}
+            </>
+          );
+        })()}
 
-            {settingsTab === 'tempo' && (
-              <Card title="Tempo & Identitas Toko" subtitle="Dipakai pada invoice dan pesan WhatsApp">
-                <form onSubmit={saveSettingsForm} className="p-4 sm:p-5 space-y-4">
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field label="Nama Toko">
-                      <Input
-                        value={settingsForm.shopName || ''}
-                        onChange={(e) => setSettingsForm((prev) => ({ ...prev, shopName: e.target.value }))}
-                      />
-                    </Field>
-                    <Field label="Nama Pengirim">
-                      <Input
-                        value={settingsForm.senderName || ''}
-                        onChange={(e) => setSettingsForm((prev) => ({ ...prev, senderName: e.target.value }))}
-                      />
-                    </Field>
-                    <Field label="DP Default (%)">
-                      <Input
-                        type="number"
-                        min="10"
-                        max="100"
-                        value={settingsForm.dpPct || ''}
-                        onChange={(e) => setSettingsForm((prev) => ({ ...prev, dpPct: Number(e.target.value) }))}
-                      />
-                    </Field>
-                    <Field label="Tempo Pelunasan (hari)">
-                      <Input
-                        type="number"
-                        min="1"
-                        value={settingsForm.pelunasanDueDays || ''}
-                        onChange={(e) =>
-                          setSettingsForm((prev) => ({ ...prev, pelunasanDueDays: Number(e.target.value) }))
-                        }
-                      />
-                    </Field>
-                    <Field label="Tempo Ongkir (hari)">
-                      <Input
-                        type="number"
-                        min="1"
-                        value={settingsForm.ongkirDueDays || ''}
-                        onChange={(e) => setSettingsForm((prev) => ({ ...prev, ongkirDueDays: Number(e.target.value) }))}
-                      />
-                    </Field>
-                    <Field label="Instagram">
-                      <Input
-                        value={settingsForm.instagram || ''}
-                        onChange={(e) => setSettingsForm((prev) => ({ ...prev, instagram: e.target.value }))}
-                      />
-                    </Field>
-                  </div>
-                  <Field label="Footer Pesan WhatsApp">
-                    <Textarea
-                      rows={2}
-                      value={settingsForm.waFooter || ''}
-                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, waFooter: e.target.value }))}
-                    />
-                  </Field>
-                  <div className="flex justify-end">
-                    <Button type="submit" icon="check">
-                      Simpan Pengaturan
-                    </Button>
-                  </div>
-                </form>
-              </Card>
-            )}
+        {/* ============================ EKSPEDISI =========================== */}
+        {activeMenu === 'ekspedisi' && (
+          <>
+            <PageHead
+              title="Master Ekspedisi Pengiriman"
+              desc="Daftar jasa kirim yang bisa dipilih saat admin/finance menginput ongkir pesanan mitra dan dipublikasikan ke halaman checkout."
+              badge={<Badge tone="gray">{couriers.filter((c) => c.active).length} aktif</Badge>}
+              actions={
+                <Button
+                  icon="plus"
+                  onClick={() =>
+                    setCourierModal({ mode: 'create', form: { name: '', code: '', note: '', active: true } })
+                  }
+                >
+                  Ekspedisi Baru
+                </Button>
+              }
+            />
+
+            <Card title="Daftar Ekspedisi" subtitle="Ekspedisi nonaktif tidak muncul pada pilihan input ongkir dan checkout mitra.">
+              <TableWrap>
+                <thead className="bg-gray-50 border-b border-gray-100">
+                  <tr>
+                    <th className={TH}>Ekspedisi</th>
+                    <th className={TH}>Kode</th>
+                    <th className={TH}>Catatan</th>
+                    <th className={`${TH} text-center`}>Status</th>
+                    <th className={`${TH} text-right`}>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {couriers.map((c) => (
+                    <tr key={c.id} className="hover:bg-gray-50/70">
+                      <td className={`${TD} font-semibold text-gray-900`}>{c.name}</td>
+                      <td className={`${TD} font-mono whitespace-nowrap`}>{c.code || '—'}</td>
+                      <td className={`${TD} max-w-[260px] text-[11px] text-gray-600`}>{c.note || '—'}</td>
+                      <td className={`${TD} text-center`}>
+                        <Badge tone={c.active ? 'teal' : 'gray'}>{c.active ? 'Aktif' : 'Nonaktif'}</Badge>
+                      </td>
+                      <td className={`${TD} text-right`}>
+                        <div className="inline-flex items-center gap-1">
+                          <Button size="xs" variant="outline" onClick={() => toggleCourier(c)}>
+                            {c.active ? 'Nonaktifkan' : 'Aktifkan'}
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            icon="edit"
+                            onClick={() => setCourierModal({ mode: 'edit', id: c.id, form: { ...c } })}
+                          >
+                            Ubah
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="danger"
+                            icon="trash"
+                            onClick={() => deleteCourier(c)}
+                          >
+                            Hapus
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </TableWrap>
+              {couriers.length === 0 && (
+                <EmptyState
+                  title="Belum ada ekspedisi"
+                  desc="Tambahkan ekspedisi pengiriman (JNE Trucking, J&T Cargo, Dakota, dll) untuk kebutuhan pengiriman PO."
+                  icon="truck"
+                />
+              )}
+            </Card>
           </>
         )}
-      </DashboardShell>
+            </DashboardShell>
 
       {/* ============================= MODALS ============================= */}
       {detailInvoice &&
@@ -3548,10 +3954,10 @@ export default function FinanceDashboard({
           return (
             <Modal
               size="xl"
-              title={`Edit Invoice · ${invoiceEdit.invoice}`}
+              title={`Edit Invoice  ·  ${invoiceEdit.invoice}`}
               subtitle={
                 target
-                  ? `${target.mitraName} · ${target.level} · ${rows.length} produk/varian`
+                  ? `${target.mitraName}  ·  ${target.level}  ·  ${rows.length} produk/varian`
                   : ''
               }
               onClose={() => setInvoiceEdit(null)}
@@ -3707,7 +4113,7 @@ export default function FinanceDashboard({
                 {verified && (
                   <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                     Ada pembayaran yang sudah diverifikasi. Status pembayaran tetap, tetapi nominal tagihan
-                    mengikuti nilai baru — mitra melihat nilai yang sama.
+                    mengikuti nilai baru  —  mitra melihat nilai yang sama.
                   </p>
                 )}
                 <p className="text-[10px] text-gray-400">
@@ -3721,8 +4127,8 @@ export default function FinanceDashboard({
 
       {ongkirModal && (
         <Modal
-          title={`Input Ongkir · ${ongkirModal.order.invoice}`}
-          subtitle={`${ongkirModal.order.mitraName} · ${ongkirModal.order.produk}`}
+          title={`Input Ongkir  ·  ${ongkirModal.order.invoice}`}
+          subtitle={`${ongkirModal.order.mitraName}  ·  ${ongkirModal.order.produk}`}
           onClose={() => setOngkirModal(null)}
           footer={
             <>
@@ -3740,7 +4146,7 @@ export default function FinanceDashboard({
               <p className="text-[10px] font-bold uppercase text-gray-400">Alamat Pengiriman</p>
               <p className="text-[11px] text-gray-700 leading-relaxed">{addressText(ongkirModal.order)}</p>
               <p className="text-[10px] text-gray-400">
-                {ongkirModal.order.qty} pcs · {ongkirModal.order.variant} · {ongkirModal.order.phone}
+                {ongkirModal.order.qty} pcs  ·  {ongkirModal.order.variant}  ·  {ongkirModal.order.phone}
               </p>
             </div>
             <Field label="Ekspedisi" required>
@@ -3750,7 +4156,7 @@ export default function FinanceDashboard({
                   setOngkirModal((prev) => ({ ...prev, form: { ...prev.form, ekspedisi: e.target.value } }))
                 }
               >
-                <option value="">Pilih ekspedisi…</option>
+                <option value="">Pilih ekspedisi...</option>
                 {couriers
                   .filter((c) => c.active)
                   .map((c) => (
@@ -3801,8 +4207,8 @@ export default function FinanceDashboard({
 
       {resiModal && (
         <Modal
-          title={`Input Resi · ${resiModal.order.invoice}`}
-          subtitle={`${resiModal.order.mitraName} · ${resiModal.order.ekspedisi || 'Ekspedisi belum dipilih'}`}
+          title={`Input Resi  ·  ${resiModal.order.invoice}`}
+          subtitle={`${resiModal.order.mitraName}  ·  ${resiModal.order.ekspedisi || 'Ekspedisi belum dipilih'}`}
           onClose={() => setResiModal(null)}
           footer={
             <>
@@ -3822,7 +4228,7 @@ export default function FinanceDashboard({
               <div className="flex flex-wrap gap-2 pt-1">
                 <Badge tone="emerald">Pelunasan ✓</Badge>
                 <Badge tone="emerald">Ongkir ✓</Badge>
-                <Badge tone="gray">{resiModal.order.ekspedisi || '—'}</Badge>
+                <Badge tone="gray">{resiModal.order.ekspedisi || ' — '}</Badge>
               </div>
             </div>
             <Field label="Nomor Resi" required>
@@ -3880,14 +4286,14 @@ export default function FinanceDashboard({
               </div>
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                 <p className="text-[10px] font-bold uppercase text-gray-400">Rekening Tujuan</p>
-                <p className="text-xs font-semibold text-gray-800 mt-1">{prDetail.bank} · {prDetail.accountNo}</p>
+                <p className="text-xs font-semibold text-gray-800 mt-1">{prDetail.bank}  ·  {prDetail.accountNo}</p>
                 <p className="text-[10px] text-gray-500">{prDetail.holder}</p>
               </div>
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
                 <p className="text-[10px] font-bold uppercase text-gray-400">Referensi</p>
                 <p className="text-xs font-semibold text-gray-800 mt-1">{prDetail.ref}</p>
                 <p className="text-[10px] text-gray-500">
-                  {prDetail.createdBy} · {fmtDate(prDetail.createdAt)}
+                  {prDetail.createdBy}  ·  {fmtDate(prDetail.createdAt)}
                 </p>
               </div>
             </div>
@@ -3915,7 +4321,7 @@ export default function FinanceDashboard({
                       </Badge>
                     </div>
                     <p className="text-[10px] text-gray-500">
-                      {entry.by} · {fmtDate(entry.at)}
+                      {entry.by}  ·  {fmtDate(entry.at)}
                     </p>
                     {entry.note && <p className="text-[11px] text-gray-600 mt-1">{entry.note}</p>}
                     {entry.proof && (
@@ -3942,7 +4348,7 @@ export default function FinanceDashboard({
       {mitraDetail && (
         <Drawer
           title={mitraDetail.name}
-          subtitle={`${mitraDetail.level} · ${mitraDetail.city || 'Kota belum diisi'}`}
+          subtitle={`${mitraDetail.level}  ·  ${mitraDetail.city || 'Kota belum diisi'}`}
           width="max-w-3xl"
           onClose={() => setMitraDetailId(null)}
           footer={
@@ -3997,7 +4403,7 @@ export default function FinanceDashboard({
               <span className="text-gray-400">WhatsApp:</span> {mitraDetail.phone}
             </p>
             <p className="text-xs text-gray-700">
-              <span className="text-gray-400">Alamat:</span> {mitraDetail.address || '—'}
+              <span className="text-gray-400">Alamat:</span> {mitraDetail.address || ' — '}
             </p>
             <p className="text-xs text-gray-700">
               <span className="text-gray-400">Bergabung:</span> {fmtDate(mitraDetail.joinedAt)}
@@ -4067,7 +4473,7 @@ export default function FinanceDashboard({
               <Field label="Nomor WhatsApp" required>
                 <Input
                   value={mitraModal.form.phone || ''}
-                  placeholder="0812…"
+                  placeholder="0812..."
                   onChange={(e) =>
                     setMitraModal((prev) => ({ ...prev, form: { ...prev.form, phone: e.target.value } }))
                   }
@@ -4224,51 +4630,15 @@ export default function FinanceDashboard({
       )}
 
       {bankModal && (
-        <Modal
-          title={bankModal.mode === 'edit' ? 'Edit Rekening' : 'Rekening Baru'}
+        <BankAccountModal
+          isOpen={!!bankModal}
+          mode={bankModal.mode}
+          initialData={bankModal.form}
+          brands={brands}
+          defaultType={bankModal.form?.type || bankTab || 'public'}
           onClose={() => setBankModal(null)}
-          footer={
-            <>
-              <Button variant="outline" onClick={() => setBankModal(null)}>
-                Batal
-              </Button>
-              <Button type="submit" form="bank-form" icon="check">
-                Simpan Rekening
-              </Button>
-            </>
-          }
-        >
-          <form id="bank-form" onSubmit={saveBank} className="space-y-3">
-            <Field label="Nama Bank" required>
-              <Input
-                placeholder="BCA / Mandiri / BRI"
-                value={bankModal.form.bank || ''}
-                onChange={(e) => setBankModal((prev) => ({ ...prev, form: { ...prev.form, bank: e.target.value } }))}
-              />
-            </Field>
-            <Field label="Nomor Rekening" required>
-              <Input
-                value={bankModal.form.accountNo || ''}
-                onChange={(e) =>
-                  setBankModal((prev) => ({ ...prev, form: { ...prev.form, accountNo: e.target.value } }))
-                }
-              />
-            </Field>
-            <Field label="Atas Nama" required>
-              <Input
-                value={bankModal.form.holder || ''}
-                onChange={(e) =>
-                  setBankModal((prev) => ({ ...prev, form: { ...prev.form, holder: e.target.value } }))
-                }
-              />
-            </Field>
-            <Switch
-              checked={!!bankModal.form.active}
-              label="Rekening aktif"
-              onChange={(next) => setBankModal((prev) => ({ ...prev, form: { ...prev.form, active: next } }))}
-            />
-          </form>
-        </Modal>
+          onSave={saveBank}
+        />
       )}
 
       {courierModal && (

@@ -68,9 +68,10 @@ async function performRequest(
   path,
   { method = 'GET', body, auth = true, signal, timeout = DEFAULT_TIMEOUT } = {}
 ) {
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   const headers = { Accept: 'application/json' };
 
-  if (body !== undefined) {
+  if (body !== undefined && !isForm) {
     headers['Content-Type'] = 'application/json';
   }
 
@@ -92,7 +93,7 @@ async function performRequest(
     response = await fetch(`${API_BASE_URL}${path}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
       signal: controller.signal
     });
   } catch (error) {
@@ -171,6 +172,7 @@ export const api = {
   products: (params) => request(`/products${buildQuery(params)}`),
   product: (id) => request(`/products/${id}`),
   brands: () => request('/brands', { auth: false }),
+  suppliers: () => request('/suppliers', { auth: false }),
   categories: () => request('/categories', { auth: false }),
   couriers: () => request('/couriers', { auth: false }),
   bankAccounts: () => request('/bank-accounts', { auth: false }),
@@ -184,7 +186,10 @@ export const api = {
   // --- Data mitra yang sedang login ---
   my: {
     deposits: () => request('/my/deposits'),
+    createDeposit: (payload) => request('/my/deposits', { method: 'POST', body: payload }),
     payments: () => request('/my/payments'),
+    uploadPayment: (payload) => request('/my/payments', { method: 'POST', body: payload }),
+    payWithDeposit: (payload) => request('/my/payments/deposit', { method: 'POST', body: payload }),
     notifications: () => request('/my/notifications'),
     addresses: () => request('/my/addresses'),
     createAddress: (payload) => request('/my/addresses', { method: 'POST', body: payload }),
@@ -268,10 +273,47 @@ export const api = {
     deleteCategory: (id) =>
       request(`/management/categories/${id}`, { method: 'DELETE' }),
 
+    bankAccounts: (options) => request('/management/master/bank-accounts', options),
+    createBankAccount: (payload) =>
+      request('/management/master/bank-accounts', { method: 'POST', body: payload }),
+    updateBankAccount: (id, payload) =>
+      request(`/management/master/bank-accounts/${id}`, { method: 'PUT', body: payload }),
+    deleteBankAccount: (id) =>
+      request(`/management/master/bank-accounts/${id}`, { method: 'DELETE' }),
+
+    couriers: (options) => request('/management/master/couriers', options),
+    createCourier: (payload) =>
+      request('/management/master/couriers', { method: 'POST', body: payload }),
+    updateCourier: (id, payload) =>
+      request(`/management/master/couriers/${id}`, { method: 'PUT', body: payload }),
+    deleteCourier: (id) =>
+      request(`/management/master/couriers/${id}`, { method: 'DELETE' }),
+
+    updateSettings: (payload) =>
+      request('/management/settings', { method: 'PUT', body: payload }),
+
+    uploadFile: (file, folder = 'proof') => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('folder', folder);
+      return request('/uploads', { method: 'POST', body: form, timeout: 30000 });
+    },
+
     activityLogs: (options) => request('/management/activity-logs', options),
     notifications: (options) => request('/management/notifications', options),
     settings: (options) => request('/management/settings', options)
   }
+};
+/**
+ * Berkas yang diunggah ke backend disimpan di public/uploads dan dikembalikan sebagai
+ * path relatif, jadi prefix dengan origin API supaya bisa dimuat dari origin Vite.
+ */
+export const mediaUrl = (src) => {
+  const value = String(src || '').trim();
+  if (!value) return '';
+  if (/^(data|blob):/i.test(value) || /^https?:\/\//i.test(value)) return value;
+  const origin = API_BASE_URL.replace(/\/api$/, '');
+  return `${origin}${value.startsWith('/') ? value : `/${value}`}`;
 };
 
 export default api;

@@ -148,7 +148,9 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
     const level = normalizeLevel(order.mitraLevel || seed?.level);
     const items = Array.isArray(order.items) && order.items.length ? order.items : [];
     const orderTitle = order.title || items[0]?.title;
-    const matchedProduct = (products || []).find((p) => titleKey(p.title) === titleKey(orderTitle));
+    const matchedProduct =
+      (products || []).find((p) => String(p.id) === String(items[0]?.productId ?? '__')) ||
+      (products || []).find((p) => titleKey(p.title) === titleKey(orderTitle));
     const qty = items.reduce((sum, item) => sum + num(item.qty), 0) || num(order.qty) || 1;
     const subtotal =
       num(order.subtotal) ||
@@ -198,6 +200,13 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
     const core = {
       id: invoice,
       invoice,
+      backendId: order.backendId ?? (Number.isInteger(order.id) ? order.id : null),
+      invoiceId: order.invoiceId ?? null,
+      invoiceNumber: order.invoiceNumber || '',
+      dbStatus: order.dbStatus || '',
+      dpInstallmentId: order.dpInstallmentId ?? null,
+      pelunasanInstallmentId: order.pelunasanInstallmentId ?? null,
+      variantId: items.find((item) => item.variantId)?.variantId ?? null,
       date,
       mitraId: order.mitraId || seed?.id || `m-${slug(name)}`,
       mitraName: name || currentUser?.name || 'Mitra',
@@ -224,11 +233,13 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       pelunasanNominal: Math.max(0, subtotal - dpNominal),
       paymentStages: paymentPlan,
       dpStatus: order.dpStatus || (flags.rejected ? PAY.TOLAK : flags.dpPaid ? PAY.ACC : PAY.BELUM),
-      dpProof: '',
+      dpProof: order.dpProof || '',
+      dpPaymentId: order.dpPaymentId ?? null,
       dpVerifiedBy: flags.dpPaid ? 'Admin Finance' : '',
       dpVerifiedAt: flags.dpPaid ? date : '',
       pelunasanStatus: order.pelunasanStatus || (flags.paid ? PAY.ACC : PAY.BELUM),
-      pelunasanProof: '',
+      pelunasanProof: order.pelunasanProof || '',
+      pelunasanPaymentId: order.pelunasanPaymentId ?? null,
       pelunasanVerifiedBy: flags.paid ? 'Admin Finance' : '',
       pelunasanVerifiedAt: flags.paid ? date : '',
       ongkir,
@@ -237,10 +248,11 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       weight: `${Math.max(1, Math.round(qty * 0.4))} kg`,
       shippingNote: '',
       ongkirStatus: order.ongkirStatus || (flags.paid ? PAY.ACC : PAY.BELUM),
-      ongkirProof: '',
+      ongkirProof: order.ongkirProof || '',
+      ongkirPaymentId: order.ongkirPaymentId ?? null,
       ongkirVerifiedBy: flags.paid ? 'Admin Finance' : '',
       ongkirVerifiedAt: flags.paid ? date : '',
-      resi: flags.shipped ? `AWB-${String(invoice).replace(/\s+/g, '')}` : '',
+      resi: order.trackingNumber || order.resi || '',
       shippedAt: flags.shipped ? date : '',
       receivedAt: flags.done ? date : '',
       shipStatus: flags.done ? SHIP.DITERIMA : flags.shipped ? SHIP.DIKIRIM : flags.paid ? SHIP.SIAP : SHIP.BELUM,
@@ -255,7 +267,7 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       marketingNote: '',
       marketingBy: flags.dpPaid ? 'Admin Marketing' : '',
       marketingAt: flags.dpPaid ? date : '',
-      productionStatus: flags.paid ? PROD.READY : flags.dpPaid ? PROD.RUN : PROD.QUEUE,
+      productionStatus: order.productionStatus || (flags.paid ? PROD.READY : flags.dpPaid ? PROD.RUN : PROD.QUEUE),
       readyAt: flags.paid ? date : '',
       address,
       createdBy: 'Checkout Mitra',
@@ -277,29 +289,14 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
 
 export const projectOrderToCore = (order, options) => projectOrdersToCore([order], options)[0];
 
-// Demo orders may reference products that are no longer in the published catalog.
-// Link those orders to a catalog product so per-product recap stays consistent.
+// Pesanan wajib menunjuk produk aslinya. Kalau produk belum ada di katalog
+// (misalnya belum dipublikasikan), biarkan rujukan apa adanya supaya recap
+// per produk tidak pernah menghitung pesanan untuk produk yang salah.
 export const alignCoreOrdersToProducts = (coreOrders, coreProducts) => {
-  const list = coreProducts || [];
-  if (!list.length) return coreOrders || [];
-  const known = new Set(list.map((p) => String(p.id)));
-  return (coreOrders || []).map((order, index) => {
+  const known = new Set((coreProducts || []).map((p) => String(p.id)));
+  return (coreOrders || []).map((order) => {
     if (known.has(String(order.produkId))) return order;
-    const product = list[index % list.length];
-    const variant = product.variants?.[0];
-    return {
-      ...order,
-      produkId: product.id,
-      produk: product.title,
-      brand: product.brand,
-      variantId: variant?.id || order.variantId,
-      variant: variant ? `${variant.color}/${variant.model}/${variant.size}` : order.variant,
-      _projectMeta: {
-        ...(order._projectMeta || {}),
-        originalTitle: order.produk,
-        originalBrand: order.brand
-      }
-    };
+    return { ...order, productUnlisted: true };
   });
 };
 
@@ -410,26 +407,46 @@ export const projectProductsToCore = (products) =>
     const sizes = Array.isArray(product.sizes) && product.sizes.length ? product.sizes : DEFAULT_SIZES;
     const colors = Array.isArray(product.colors) && product.colors.length ? product.colors : DEFAULT_COLORS;
     const models = Array.isArray(product.models) && product.models.length ? product.models : DEFAULT_MODELS;
-    // Satu varian untuk setiap kombinasi model x warna x ukuran yang dipublikasikan
-    // di katalog (index publish), tanpa memotong opsi.
+    const basePrice = num(product.price);
+    const priceFor = (value) => (value != null && value !== '' ? num(value) : basePrice);
+    // Varian asli dari database (punya id angka) wajib dipertahankan: id itulah yang
+    // dipakai checkout dan sinkronisasi stok. Kombinasi model x warna x ukuran hanya
+    // dipakai untuk produk yang belum punya varian tersimpan.
+    const savedVariants = (Array.isArray(product.variants) ? product.variants : [])
+      .filter((v) => Number.isFinite(Number(v?.id)) && Number(v.id) > 0)
+      .map((v) => ({
+        id: Number(v.id),
+        color: v.color || 'Default',
+        model: v.model || 'Reguler',
+        size: String(v.size ?? ''),
+        price: priceFor(v.price),
+        addon: num(v.addon ?? v.addon_fee),
+        stock: num(v.stock),
+        used: num(v.used)
+      }));
+
     const combos = [];
-    models.forEach((model, mi) => {
-      const modelPrice = model.price != null && model.price !== '' ? num(model.price) : num(product.price);
-      const modelAddon = num(model.addon);
-      colors.forEach((color, ci) => {
-        sizes.forEach((size, si) => {
-          combos.push({
-            id: `v-${product.id}-${mi}-${ci}-${si}`,
-            color: colorNameOf(color),
-            model: model.name || 'Reguler',
-            size: String(size),
-            price: modelPrice,
-            addon: modelAddon,
-            used: 0
+    if (savedVariants.length) {
+      combos.push(...savedVariants);
+    } else {
+      models.forEach((model, mi) => {
+        const modelPrice = model.price != null && model.price !== '' ? num(model.price) : basePrice;
+        const modelAddon = num(model.addon);
+        colors.forEach((color, ci) => {
+          sizes.forEach((size, si) => {
+            combos.push({
+              id: `v-${product.id}-${mi}-${ci}-${si}`,
+              color: colorNameOf(color),
+              model: model.name || 'Reguler',
+              size: String(size),
+              price: modelPrice,
+              addon: modelAddon,
+              used: 0
+            });
           });
         });
       });
-    });
+    }
     const stockQuota = num(product.stockQuota);
     const totalQuota = Math.max(stockQuota, combos.length);
     const baseQuota = Math.floor(totalQuota / Math.max(1, combos.length));

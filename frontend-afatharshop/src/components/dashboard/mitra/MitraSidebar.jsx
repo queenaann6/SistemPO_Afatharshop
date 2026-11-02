@@ -35,12 +35,16 @@ export default function MitraSidebar({
       <div>
         {/* User Mini Profile */}
         <div className="flex items-center gap-3 p-2 mb-4 border-b border-stone-100">
-          <div className="w-10 h-10 rounded-full overflow-hidden bg-stone-100 ring-2 ring-emerald-500/30 shrink-0">
-            <img
-              src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-              alt={currentUser?.name || 'Mitra'}
-              className="w-full h-full object-cover"
-            />
+          <div className="w-10 h-10 rounded-full overflow-hidden bg-stone-100 ring-2 ring-emerald-500/30 shrink-0 flex items-center justify-center text-sm font-bold text-stone-600 uppercase">
+            {currentUser?.avatar && !currentUser.avatar.includes('unsplash.com') ? (
+              <img
+                src={currentUser.avatar}
+                alt={currentUser?.name || 'Mitra'}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <span>{String(currentUser?.name || 'M').charAt(0).toUpperCase()}</span>
+            )}
           </div>
           <div className="min-w-0">
             <h4 className="font-bold text-stone-900 text-sm tracking-wide truncate uppercase">

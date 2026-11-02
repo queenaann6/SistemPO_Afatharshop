@@ -5,6 +5,7 @@ import {
   DEFAULT_SIZES,
   DEFAULT_STORE
 } from '../data/mockData';
+import { mediaUrl } from './api';
 
 const FALLBACK_IMAGE =
   'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=800&q=80';
@@ -148,8 +149,8 @@ export const mapProduct = (product) => {
       price: basePrice,
       addon: 0
     })),
-    image: product.image || FALLBACK_IMAGE,
-    thumbnails: [product.image || FALLBACK_IMAGE],
+    image: mediaUrl(product.image) || FALLBACK_IMAGE,
+    thumbnails: [mediaUrl(product.image) || FALLBACK_IMAGE],
     description: product.description || '',
     descriptionDetailed: {
       summary: product.description || '',
@@ -196,7 +197,7 @@ export const mapApiUser = (user, fallback = {}) => {
     role: user.role || user.level || fallback.role || 'Mitra Distributor',
     roleId: roleIdFromApiUser(user),
     level: user.level || fallback.level || '',
-    avatar: user.avatar || fallback.avatar,
+    avatar: (user.avatar && !user.avatar.includes('unsplash.com')) ? user.avatar : (fallback.avatar && !fallback.avatar.includes('unsplash.com') ? fallback.avatar : ''),
     balance: formatRupiah(user.deposit_balance ?? 0),
     totalBill: fallback.totalBill || 'Rp 0',
     phone: user.phone || fallback.phone || '',
@@ -213,13 +214,31 @@ export const mapCourier = (courier) => ({
   note: courier.description || ''
 });
 
-export const mapBankAccount = (account) => ({
-  id: String(account.id),
-  bank: account.bank_name,
-  accountNo: account.account_number,
-  holder: account.account_holder,
-  active: account.is_active !== false
-});
+export const mapBankAccount = (account) => {
+  let brands = [];
+  if (Array.isArray(account.brands)) {
+    brands = account.brands;
+  } else if (typeof account.brands === 'string' && account.brands.trim()) {
+    try {
+      const parsed = JSON.parse(account.brands);
+      brands = Array.isArray(parsed) ? parsed : [account.brands];
+    } catch {
+      brands = account.brands.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+  }
+
+  return {
+    id: String(account.id),
+    backendId: account.id,
+    bank: account.bank_name,
+    accountNo: account.account_number,
+    holder: account.account_holder,
+    active: account.is_active !== false,
+    type: account.type || 'public',
+    purpose: account.purpose || '',
+    brands
+  };
+};
 
 const PAY_STATUS = {
   acc: 'ACC',
@@ -240,6 +259,35 @@ const normalizePaymentStatus = (status) => {
     return 'Menunggu Verifikasi';
   }
   return 'Belum';
+};
+
+// Nilai status yang dibandingkan poCore.orderStage (MKT.PENDING/ACC/TOLAK).
+const MARKETING_PENDING = 'Menunggu ACC';
+const MARKETING_ACC = 'ACC';
+const MARKETING_REJECTED = 'Ditolak';
+
+/**
+ * Status backend pesanan (VARCHAR) diterjemahkan ke label yang dipakai
+ * tabel pesanan dashboard. Urutan cek penting: 'Menunggu ACC Marketing'
+ * memuat kata 'acc' tapi berarti menunggu ACC, bukan sudah di-ACC.
+ */
+const resolveProjectStatus = (rawStatus, { paid, invoiceLunas, dpStage }) => {
+  const text = String(rawStatus || '').toLowerCase();
+
+  if (/batal|tolak/.test(text)) return 'Batal';
+  if (/menunggu\s*acc/.test(text)) return 'Menunggu ACC Admin';
+  if (invoiceLunas || (/lunas/.test(text) && !text.includes('belum'))) return 'Lunas (Siap Kirim)';
+  if (/selesai/.test(text)) return 'Selesai';
+  if (/dikirim|terkirim/.test(text)) return 'Dikirim';
+  if (/alamat/.test(text)) return 'Menunggu Alamat Mitra';
+  if (/pengiriman|resi/.test(text)) return 'Lunas (Siap Kirim)';
+  if (/produksi/.test(text)) return 'DP Terbayar (Validasi Selesai)';
+  if (/dp/.test(text)) {
+    if (dpStage === 'Menunggu Verifikasi') return 'Menunggu Verifikasi DP';
+    return paid > 0 ? 'DP Terbayar (Validasi Selesai)' : 'Menunggu Pembayaran DP';
+  }
+
+  return 'Menunggu ACC Admin';
 };
 
 export const mapOrderToProjectOrder = (order, user = {}) => {
@@ -289,20 +337,25 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     return 'Belum';
   };
 
-  let status = 'Menunggu ACC Admin';
-  if (orderStatus.includes('acc') || orderStatus.includes('dp') || orderStatus === 'open') {
-    status = paid > 0 ? 'DP Terbayar (Validasi Selesai)' : 'Menunggu Pembayaran DP';
-  }
-  if (paid > 0) status = 'DP Terbayar (Validasi Selesai)';
-  if (invoiceLunas || orderLunas) {
-    status = 'Lunas (Siap Kirim)';
-  }
-  if (orderStatus.includes('dikirim')) status = 'Dikirim';
-  if (orderStatus.includes('selesai')) status = 'Selesai';
-  if (orderRejected) status = 'Batal';
-  if (status === 'Menunggu Pembayaran DP' && stageStatus(dpRow) === 'Menunggu Verifikasi') {
-    status = 'Menunggu Verifikasi DP';
-  }
+  // Bukti bayar tersimpan di baris payments; unggahan tahap ongkir tidak punya
+  // baris cicilan sehingga installment_id-nya kosong.
+  const lastPaymentFor = (row) => {
+    if (!row) return null;
+    const related = payments.filter(
+      (payment) => Number(payment.installment_id) === Number(row.id)
+    );
+    return related[related.length - 1] || null;
+  };
+  const stagelessPayment =
+    payments.filter((payment) => !payment.installment_id).slice(-1)[0] || null;
+  const dpPayment = lastPaymentFor(dpRow);
+  const pelunasanPayment = lastPaymentFor(pelunasanRow);
+
+  const status = resolveProjectStatus(order.status, {
+    paid,
+    invoiceLunas,
+    dpStage: stageStatus(dpRow)
+  });
 
   const address = order.address
     ? [
@@ -318,11 +371,31 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
   return {
     orderNo: order.order_number || `PO-${order.id}`,
     id: order.id,
+    backendId: order.id,
+    invoiceId: order.invoice?.id ?? null,
+    invoiceNumber: order.invoice?.invoice_number || '',
+    dbStatus: order.status || '',
+    productionStatus: order.production_status || '',
+    trackingNumber: order.tracking_number || '',
+    addressId: order.address?.id ?? null,
+    dpInstallmentId: dpRow?.id ?? null,
+    pelunasanInstallmentId: pelunasanRow?.id ?? null,
+    installmentIds: installments.reduce(
+      (acc, row) => ({ ...acc, [row.type]: row.id, [`stage-${row.sequence_number}`]: row.id }),
+      {}
+    ),
     brand: product.brand?.name || '',
+    brandName: product.brand?.name || '',
     title: product.name || 'Pesanan PO',
     date: order.ordered_at || order.created_at,
     status,
-    marketingStatus: order.marketing_status || (status === 'Menunggu ACC Admin' ? 'PENDING' : 'ACC'),
+    marketingStatus:
+      order.marketing_status ||
+      (status === 'Menunggu ACC Admin'
+        ? MARKETING_PENDING
+        : orderRejected
+          ? MARKETING_REJECTED
+          : MARKETING_ACC),
     subtotal,
     ongkir: shipping,
     total,
@@ -330,12 +403,20 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     dpStatus: orderRejected ? 'Ditolak' : stageStatus(dpRow),
     pelunasanStatus: stageStatus(pelunasanRow),
     ongkirStatus: orderLunas ? 'ACC' : 'Belum',
+    dpProof: mediaUrl(dpPayment?.proof_url || ''),
+    pelunasanProof: mediaUrl(pelunasanPayment?.proof_url || ''),
+    ongkirProof: mediaUrl(stagelessPayment?.proof_url || ''),
+    dpPaymentId: dpPayment?.id ?? null,
+    pelunasanPaymentId: pelunasanPayment?.id ?? null,
+    ongkirPaymentId: stagelessPayment?.id ?? null,
     address,
     courier: order.courier_name || '',
     dpPct,
     dpNominal: toNumber(dpRow?.amount),
     paymentStages: installments
       .map((row, index) => ({
+        id: row.id,
+        type: row.type,
         label:
           row.type === 'dp'
             ? 'DP'
@@ -343,11 +424,15 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
               ? 'Pelunasan'
               : `Cicilan ${row.sequence_number ?? index + 1}`,
         pct: total ? Math.round((toNumber(row.amount) / total) * 100) : 0,
+        amount: toNumber(row.amount),
+        status: normalizePaymentStatus(row.status),
         date: row.due_at || ''
       }))
       .filter((stage) => stage.pct > 0),
     items: items.map((item, index) => ({
       id: item.id ?? index + 1,
+      variantId: item.variant?.id ?? null,
+      productId: item.variant?.product?.id ?? null,
       title: item.variant?.product?.name || product.name || 'Item PO',
       variant:
         [item.variant?.color, item.variant?.model, item.variant?.size]
@@ -358,8 +443,9 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
       size: item.variant?.size || '',
       price: toNumber(item.unit_price),
       qty: toNumber(item.quantity, 1),
+      fee: toNumber(item.fee),
       subtotal: toNumber(item.subtotal),
-      image: item.variant?.product?.image || product.image || FALLBACK_IMAGE
+      image: mediaUrl(item.variant?.product?.image || product.image) || FALLBACK_IMAGE
     })),
     mitraId: owner.id ? `m-${owner.id}` : '',
     mitraName: owner.name || owner.nama || '',
@@ -369,7 +455,7 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     mitraAddress: address,
     mitraEmail: owner.email || '',
     note: order.notes || '',
-    image: product.image || FALLBACK_IMAGE,
+    image: mediaUrl(product.image) || FALLBACK_IMAGE,
     closeDate: '',
     isClosedPO: product.status === 'closed_po'
   };
@@ -440,29 +526,33 @@ export const mapSupplier = (supplier) => ({
   backendId: supplier.id,
   name: supplier.name,
   city: supplier.city || '',
-  contact: supplier.contact_person || '',
+  contact: supplier.contact_person || supplier.contact || '',
   phone: supplier.phone || '',
-  note: (supplier.brands || []).join(', '),
+  note: Array.isArray(supplier.brands) ? supplier.brands.map((b) => b.name || b).join(', ') : (supplier.note || ''),
   createdAt: String(supplier.created_at || '').slice(0, 10)
 });
 
-export const mapBrandToCore = (brand) => ({
-  id: brand.id ? `b-${brand.id}` : (brand.id || `b-${slugify(brand.name)}`),
-  backendId: brand.id,
-  name: brand.name,
-  supplier: brand.supplier || '',
-  supplier_id: brand.supplier_id,
-  address: brand.address || 'Solo',
-  discountType: 'pct',
-  discountValue: brand.discount_db_all ?? brand.discountDBAll ?? 30,
-  feeType: 'pct',
-  discountDBAll: brand.discount_db_all ?? brand.discountDBAll ?? 30,
-  discountSubDB: brand.discount_sub_db ?? brand.discountSubDB ?? 25,
-  discountAgen: brand.discount_agen ?? brand.discountAgen ?? 20,
-  discountReseller: brand.discount_reseller ?? brand.discountReseller ?? 15,
-  active: brand.is_active !== false && brand.active !== false,
-  createdAt: String(brand.created_at || '').slice(0, 10)
-});
+export const mapBrandToCore = (brand) => {
+  const supplierName = brand.supplier_name || (typeof brand.supplier === 'object' ? brand.supplier?.name : brand.supplier) || '';
+  const supplierCity = (typeof brand.supplier === 'object' ? brand.supplier?.city : '') || brand.address || 'Bandung';
+  return {
+    id: brand.id ? `b-${brand.id}` : (brand.id || `b-${slugify(brand.name)}`),
+    backendId: brand.id,
+    name: brand.name,
+    supplier: supplierName,
+    supplier_id: brand.supplier_id || (typeof brand.supplier === 'object' ? brand.supplier?.id : null),
+    address: supplierCity,
+    discountType: 'pct',
+    discountValue: toNumber(brand.discount_db_all ?? brand.discountDBAll, 30),
+    feeType: 'pct',
+    discountDBAll: toNumber(brand.discount_db_all ?? brand.discountDBAll, 30),
+    discountSubDB: toNumber(brand.discount_sub_db ?? brand.discountSubDB, 25),
+    discountAgen: toNumber(brand.discount_agen ?? brand.discountAgen, 20),
+    discountReseller: toNumber(brand.discount_reseller ?? brand.discountReseller, 15),
+    active: brand.is_active !== false && brand.active !== false,
+    createdAt: String(brand.created_at || '').slice(0, 10)
+  };
+};
 
 export const mapDepositToCore = (deposit) => ({
   id: deposit.id ? `dep-${deposit.id}` : `dep-${Date.now()}`,
@@ -473,7 +563,7 @@ export const mapDepositToCore = (deposit) => ({
   nominal: toNumber(deposit.amount),
   bank: deposit.bank || '-',
   accountNo: deposit.bank_account || '',
-  proof: deposit.proof_url || '',
+  proof: mediaUrl(deposit.proof_url),
   status: normalizePaymentStatus(deposit.status),
   verifiedBy: deposit.verified_by || '',
   note: deposit.description || 'Top up saldo deposit mitra'
@@ -498,8 +588,19 @@ export const mapPaymentToLedger = (payment) => ({
   bank: '-',
   by: payment.verified_by || '',
   status: normalizePaymentStatus(payment.status),
+  proof: mediaUrl(payment.proof_url),
   note: payment.rejection_reason || ''
 });
+
+const PREQ_LABEL = {
+  'menunggu review purchasing': 'Menunggu Review Purchasing',
+  'menunggu acc owner': 'Menunggu Approval Owner',
+  'acc owner': 'Disetujui Owner',
+  'selesai ditransfer': 'Ditransfer',
+  'ditolak marketing': 'Ditolak',
+  'ditolak owner': 'Ditolak',
+  'dibatalkan': 'Dibatalkan'
+};
 
 export const mapPaymentRequestToCore = (request) => ({
   id: request.id ? `pr-${request.id}` : `pr-${Date.now()}`,
@@ -514,10 +615,13 @@ export const mapPaymentRequestToCore = (request) => ({
   purpose: request.purpose || '',
   ref: request.reference || '-',
   note: request.note || '',
-  status: request.status || 'Menunggu Review Purchasing',
+  status: PREQ_LABEL[String(request.status || '').toLowerCase()] || request.status || 'Menunggu Review Purchasing',
+  dbStatus: request.status || '',
   marketing: request.marketing || null,
   owner: request.owner || null,
-  transfer: request.transfer || null
+  transfer: request.transfer
+    ? { ...request.transfer, proof: mediaUrl(request.transfer.proof) }
+    : null
 });
 
 export const mapBatchToCore = (batch) => {
@@ -636,3 +740,19 @@ export const addressBookToPayload = (address) => ({
   district: address.district || '',
   is_default: Boolean(address.isDefault || address.isPrimary)
 });
+
+/**
+ * ID numerik asli milik baris data. Baris hasil uid('b')/draft lokal bukan data server,
+ * jadi nilainya null supaya tidak pernah dikirim sebagai ?/?/id ke backend
+ * (pembulatan "b-12" menjadi 12 pernah membuat request mengenai baris yang salah).
+ */
+export const dbId = (row) => {
+  if (!row) return null;
+  const candidates = [row.backendId, row.db_id, row.id];
+  for (const raw of candidates) {
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+    const text = String(raw ?? '').trim();
+    if (/^[1-9]\d*$/.test(text)) return Number(text);
+  }
+  return null;
+};

@@ -359,6 +359,25 @@ export const splitAddressGroups = (o) => {
 
 export const effectiveProd = (o) =>
   o?.productionStatus || (o?.readyAt || hasAddress(o) ? PROD.READY : PROD.QUEUE);
+/**
+ * Patch inti pesanan dashboard -> kolom yang diterima endpoint
+ * PATCH /management/orders/{id}. Kolom lain hanya untuk tampilan dan tidak dikirim.
+ */
+export const orderPatchToServer = (patch = {}) => {
+  const body = {};
+  const put = (key, value) => {
+    if (value !== undefined && value !== null && value !== '') body[key] = value;
+  };
+
+  put('status', patch.status);
+  put('production_status', patch.productionStatus);
+  put('courier_name', patch.ekspedisi ?? patch.courier_name);
+  put('tracking_number', patch.resi ?? patch.tracking_number);
+  put('shipping_cost', patch.ongkir);
+  put('notes', patch.notes ?? patch.note);
+
+  return body;
+};
 
 export const orderStage = (o) => {
   if (!o) return 'baru';
@@ -624,7 +643,7 @@ export const variantLabel = (v) => [v?.color, v?.model, v?.size].filter(Boolean)
 export const buildWA = (kind, order, ctx = {}) => {
   const shop = ctx.shopName || 'Afathar Shop';
   const sender = ctx.senderName || 'Admin Afathar Shop';
-  const banks = (ctx.banks || []).filter((b) => b.active);
+  const banks = (ctx.banks || []).filter((b) => b.active && (b.type || 'public') === 'public');
   const bankLines = banks.length
     ? banks.map((b) => `• ${b.bank} ${b.accountNo} a.n ${b.holder}`).join('\n')
     : '• (rekening belum diatur)';
@@ -746,10 +765,16 @@ export const createSeedData = () => {
   const deposits = [];
 
   const bankAccounts = [
-    { id: 'bk-1', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
-    { id: 'bk-2', bank: 'Mandiri', accountNo: '133-00-2998801', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
-    { id: 'bk-3', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
-    { id: 'bk-4', bank: 'BSI', accountNo: '718-002-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true }
+    // Rekening Publik (Resmi Distributor untuk Mitra / Checkout / Deposit / Invoice)
+    { id: 'bk-1', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bk-2', bank: 'Mandiri', accountNo: '133-00-2998801', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bk-3', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bk-4', bank: 'BSI', accountNo: '718-002-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+
+    // Rekening Pengajuan ke Owner (Tujuan Transfer Vendor / Supplier / Produksi / Operasional)
+    { id: 'pr-1', bank: 'BCA', accountNo: '522-034-1100', holder: 'PT HANA TEXTILE NUSANTARA', active: true, type: 'pengajuan', purpose: 'Supplier Kain & Bahan Baku' },
+    { id: 'pr-2', bank: 'Mandiri', accountNo: '131-00-9821733', holder: 'CV INDAH BORDIR KREASI', active: true, type: 'pengajuan', purpose: 'Vendor Jahit & Bordir Pabrik' },
+    { id: 'pr-3', bank: 'BCA', accountNo: '883-019-4421', holder: 'PT LOGISTIK PRIMA CARGO', active: true, type: 'pengajuan', purpose: 'Ekspedisi Kargo Produksi' }
   ];
 
   const couriers = [
@@ -2388,9 +2413,14 @@ export function DashboardShell({
               >
                 <Icon name="menu" className="w-4 h-4" />
               </button>
-              <div className="min-w-0">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{portalLabel}</p>
-                <h2 className="text-sm font-bold text-gray-900 truncate">{activeItem?.title || activeItem?.label || 'Dashboard'}</h2>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 shrink-0">
+                  {portalLabel}
+                </span>
+                <span className="text-gray-300 select-none">/</span>
+                <span className="text-xs font-semibold text-gray-700 truncate">
+                  {activeItem?.label || 'Dashboard'}
+                </span>
               </div>
             </div>
 

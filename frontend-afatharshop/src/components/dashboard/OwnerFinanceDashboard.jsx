@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import api from '../../services/api';
+import api, { mediaUrl } from '../../services/api';
+import { dbId } from '../../services/adapters';
 import {
   ACCENTS,
   Badge,
@@ -26,7 +27,6 @@ import {
   ProofModal,
   ProofThumb,
   ReasonModal,
-  SAMPLE_PROOF_2,
   SHIP,
   SearchBox,
   Segmented,
@@ -51,6 +51,7 @@ import {
   isPaid,
   num,
   orderOutstanding,
+  orderPatchToServer,
   orderPaid,
   orderStage,
   prSteps,
@@ -575,20 +576,40 @@ export default function OwnerFinanceDashboard({
           { id: 'buku_kas', label: 'Buku Kas', title: 'Buku Kas Perusahaan', icon: 'card' },
           { id: 'audit', label: 'Audit Trail', title: 'Jejak Audit Aktivitas', icon: 'eye' }
         ]
-      },
-      { id: 'pengaturan', label: 'Pengaturan', title: 'Konfigurasi Bisnis', icon: 'file' }
+      }
     ],
     [approvals.length, readyTransfer.length]
   );
 
   /* --------------------------------------------------------------- handlers */
-  const decidePR = (req, decision, note) => {
+  const serverFail = (err, action) =>
+    toast(`${action} gagal: ${err?.message || 'Terjadi kesalahan pada server.'}`, 'error');
+
+  const notOnServer = (label) =>
+    toast(`${label} belum tersimpan di database. Muat ulang data lalu coba lagi.`, 'error');
+
+  const decidePR = async (req, decision, note) => {
+    const targetId = dbId(req);
+    if (!targetId) {
+      notOnServer(`Pengajuan bayar ${req.code}`);
+      return false;
+    }
+    try {
+      await api.management.updatePaymentRequest(targetId, {
+        owner_decision: decision,
+        owner_note: note
+      });
+    } catch (err) {
+      serverFail(err, `Memproses pengajuan ${req.code}`);
+      return false;
+    }
     commitPaymentRequests((prev) =>
       prev.map((r) =>
         r.id === req.id
           ? {
               ...r,
               status: decision === 'ACC' ? PREQ.APPROVED : PREQ.REJECTED,
+              dbStatus: decision === 'ACC' ? 'ACC Owner' : 'Ditolak Owner',
               owner: { by: me.name, at: todayISO(), note, decision }
             }
           : r
@@ -601,11 +622,7 @@ export default function OwnerFinanceDashboard({
         : `${req.code} ditolak.`,
       decision === 'ACC' ? 'success' : 'warning'
     );
-    const targetId = req.backendId || req.id;
-    api.management.updatePaymentRequest(targetId, {
-      owner_decision: decision,
-      owner_note: note
-    }).catch(() => {});
+    return true;
   };
 
   const approvePR = (req) => {
@@ -613,9 +630,9 @@ export default function OwnerFinanceDashboard({
       title: 'Setujui pengajuan',
       message: `Setujui ${req.code} sebesar ${rp(req.amount)} untuk "${req.purpose}"? Dana akan masuk daftar siap transfer.`,
       confirmLabel: 'Setujui pengajuan',
-      onConfirm: () => {
-        decidePR(req, 'ACC', 'Disetujui owner.');
-        setConfirmModal(null);
+      onConfirm: async () => {
+        const ok = await decidePR(req, 'ACC', 'Disetujui owner.');
+        if (ok !== false) setConfirmModal(null);
       }
     });
   };
@@ -629,8 +646,8 @@ export default function OwnerFinanceDashboard({
       placeholder: 'Contoh: dokumen belum lengkap / dana belum tersedia',
       confirmLabel: 'Tolak pengajuan',
       danger: true,
-      onSubmit: (note) => {
-        decidePR(req, 'TOLAK', note);
+      onSubmit: async (note) => {
+        await decidePR(req, 'TOLAK', note);
         setReasonModal(null);
       }
     });
@@ -641,27 +658,53 @@ export default function OwnerFinanceDashboard({
     if (file.size > 2 * 1024 * 1024) return toast('Ukuran berkas maksimal 2 MB.', 'error');
     const reader = new FileReader();
     reader.onload = () =>
-      setTransferModal((prev) => ({ ...prev, form: { ...prev.form, proof: String(reader.result) } }));
+      setTransferModal((prev) => ({
+        ...prev,
+        form: { ...prev.form, proof: String(reader.result), proofFile: file }
+      }));
     reader.readAsDataURL(file);
   };
 
-  const saveTransfer = (e) => {
+  const saveTransfer = async (e) => {
     e.preventDefault();
     const req = transferModal.req;
     const f = transferModal.form;
-    if (!f.proof) return toast('Lampirkan bukti transfer terlebih dahulu.', 'error');
+    if (!f.proofFile) return toast('Lampirkan bukti transfer terlebih dahulu.', 'error');
+    const targetId = dbId(req);
+    if (!targetId) return notOnServer(`Pengajuan bayar ${req.code}`);
+
+    let proofPath = '';
+    try {
+      const uploaded = await api.management.uploadFile(f.proofFile, 'proof');
+      proofPath = uploaded?.data?.path || '';
+    } catch (err) {
+      return serverFail(err, 'Mengunggah bukti transfer');
+    }
+    if (!proofPath) return toast('Bukti transfer tidak tersimpan di server.', 'error');
+
+    try {
+      await api.management.updatePaymentRequest(targetId, {
+        transfer_proof: proofPath,
+        transfer_note: f.note || f.ref,
+        transfer_by: me.name
+      });
+    } catch (err) {
+      return serverFail(err, `Menandai transfer ${req.code}`);
+    }
+
     commitPaymentRequests((prev) =>
       prev.map((r) =>
         r.id === req.id
           ? {
               ...r,
               status: PREQ.TRANSFERRED,
+              dbStatus: 'Selesai Ditransfer',
               owner: r.owner || { by: me.name, at: todayISO(), note: 'Disetujui owner.', decision: 'ACC' },
               transfer: {
                 by: me.name,
                 at: todayISO(),
                 note: f.note || f.ref || 'Transfer dari portal owner',
-                proof: f.proof
+                proof: mediaUrl(proofPath)
               }
             }
           : r
@@ -669,12 +712,6 @@ export default function OwnerFinanceDashboard({
     );
     setTransferModal(null);
     toast(`${req.code} ditandai sudah ditransfer. Finance dapat melihat bukti transfer.`);
-    const targetId = req.backendId || req.id;
-    api.management.updatePaymentRequest(targetId, {
-      transfer_proof: f.proof,
-      transfer_note: f.note || f.ref,
-      transfer_by: me.name
-    }).catch(() => {});
   };
 
   const toggleTeam = (u) => {
@@ -684,12 +721,17 @@ export default function OwnerFinanceDashboard({
       message: `${u.active ? 'Nonaktifkan' : 'Aktifkan'} akun ${u.name} (${roleLabel(u.role)})?`,
       confirmLabel: u.active ? 'Nonaktifkan' : 'Aktifkan',
       danger: u.active,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetId = dbId(u);
+        if (!targetId) return notOnServer(`Akun ${u.name}`);
+        try {
+          await api.management.updateUser(targetId, { is_active: !u.active });
+        } catch (err) {
+          return serverFail(err, `Mengubah status akun ${u.name}`);
+        }
         commitTeam((prev) => prev.map((x) => (x.id === u.id ? { ...x, active: !x.active } : x)));
         setConfirmModal(null);
         toast(`${u.name} ${u.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
-        const targetId = u.backendId || u.id;
-        api.management.updateUser(targetId, { is_active: !u.active }).catch(() => {});
       }
     });
   };
@@ -703,66 +745,79 @@ export default function OwnerFinanceDashboard({
       message: `Hapus akun "${u.name}" (${roleLabel(u.role)})? Akses login akan dicabut dan data dihapus permanen.`,
       confirmLabel: 'Hapus Akun',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetId = dbId(u);
+        if (!targetId) {
+          commitTeam((prev) => prev.filter((x) => x.id !== u.id));
+          setConfirmModal(null);
+          return notOnServer(`Akun ${u.name}`);
+        }
+        try {
+          await api.management.deleteUser(targetId);
+        } catch (err) {
+          return serverFail(err, `Menghapus akun ${u.name}`);
+        }
         commitTeam((prev) => prev.filter((x) => x.id !== u.id));
         setConfirmModal(null);
         toast(`Akun ${u.name} berhasil dihapus.`, 'warning');
-        const targetId = u.backendId || (typeof u.id === 'number' ? u.id : String(u.id || '').replace(/\D/g, ''));
-        if (targetId) {
-          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
-        }
       }
     });
   };
 
-  const saveTeam = (e) => {
+  const saveTeam = async (e) => {
     e.preventDefault();
     const f = teamModal.form;
     if (!f.name?.trim() || !f.email?.trim()) return toast('Nama dan email wajib diisi.', 'error');
     const tempPassword = `Tim#${Math.floor(1000 + Math.random() * 9000)}`;
-    const newU = {
-      id: uid('u'),
-      name: f.name.trim(),
-      email: f.email.trim(),
-      role: f.role,
-      phone: f.phone,
-      active: true,
-      createdAt: todayISO(),
-      createdBy: me.name
-    };
-    commitTeam((prev) => [newU, ...prev]);
+    let created;
+    try {
+      created = await api.management.createUser({
+        nama: f.name.trim(),
+        email: f.email.trim(),
+        role: f.role,
+        phone: f.phone,
+        password: tempPassword,
+        is_active: true
+      });
+    } catch (err) {
+      return serverFail(err, `Membuat akun ${f.name}`);
+    }
+    const row = created?.data;
+    commitTeam((prev) => [
+      {
+        id: row?.id != null ? `u-${row.id}` : uid('u'),
+        backendId: row?.id ?? null,
+        name: f.name.trim(),
+        email: f.email.trim(),
+        role: f.role,
+        phone: f.phone,
+        active: true,
+        createdAt: todayISO(),
+        createdBy: me.name
+      },
+      ...prev
+    ]);
     setTeamModal(null);
     setCredential({
       title: 'Akun tim dibuat',
-      name: newU.name,
-      email: newU.email,
+      name: f.name.trim(),
+      email: f.email.trim(),
       password: tempPassword,
-      note: `Peran: ${roleLabel(newU.role)}. Password hanya ditampilkan sekali.`
+      note: `Peran: ${roleLabel(f.role)}. Password hanya ditampilkan sekali.`
     });
-    toast(`Akun ${newU.name} berhasil disimpan.`);
-
-    api.management.createUser({
-      nama: newU.name,
-      email: newU.email,
-      role: newU.role,
-      phone: newU.phone,
-      password: tempPassword,
-      is_active: true
-    }).then((res) => {
-      const serverUser = res?.data;
-      if (serverUser?.id) {
-        newU.backendId = serverUser.id;
-        commitTeam((prev) => prev.map((x) => (x.id === newU.id ? { ...x, backendId: serverUser.id } : x)));
-      }
-    }).catch((err) => {
-      toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
-    });
+    toast(`Akun ${f.name} tersimpan di database.`);
   };
 
-  const saveSettingsForm = (e) => {
+  const saveSettingsForm = async (e) => {
     e.preventDefault();
-    commitSettings((prev) => ({ ...prev, ...settingsForm }));
-    toast('Konfigurasi bisnis disimpan.');
+    let saved;
+    try {
+      saved = await api.management.updateSettings(settingsForm);
+    } catch (err) {
+      return serverFail(err, 'Menyimpan konfigurasi bisnis');
+    }
+    commitSettings((prev) => ({ ...prev, ...(saved?.data || {}), ...settingsForm }));
+    toast('Konfigurasi bisnis tersimpan di database.');
   };
 
   const openWA = (o, kind) => {
@@ -967,7 +1022,7 @@ export default function OwnerFinanceDashboard({
                       <Button
                         size="xs"
                         variant="outline"
-                        onClick={() => setTransferModal({ req: r, form: { note: '', ref: '', proof: '' } })}
+                        onClick={() => setTransferModal({ req: r, form: { note: '', ref: '', proof: '', proofFile: null } })}
                       >
                         Tandai Transfer
                       </Button>
@@ -1330,7 +1385,7 @@ export default function OwnerFinanceDashboard({
                             variant="gold"
                             icon="wallet"
                             onClick={() =>
-                              setTransferModal({ req: r, form: { note: '', ref: '', proof: '' } })
+                              setTransferModal({ req: r, form: { note: '', ref: '', proof: '', proofFile: null } })
                             }
                           >
                             Tandai Transfer
@@ -1349,15 +1404,17 @@ export default function OwnerFinanceDashboard({
                 </TableWrap>
               </Card>
 
-              <Card title="Rekening Resmi" subtitle="Transfer hanya ke rekening aktif ini">
-                <div className="divide-y divide-gray-100">
+              <Card title="Rekening Vendor Terdaftar" subtitle="Rekening tujuan transfer vendor & operasional">
+                <div className="divide-y divide-gray-100 max-h-[460px] overflow-y-auto">
                   {bankAccounts
-                    .filter((b) => b.active)
+                    .filter((b) => b.type === 'pengajuan' && b.active)
                     .map((b) => (
                       <div key={b.id} className="px-4 py-3 flex items-start justify-between gap-2">
                         <div>
-                          <p className="text-[11px] font-bold text-gray-900">{b.bank}</p>
-                          <p className="text-[10px] text-gray-500">{b.accountNo}</p>
+                          <p className="text-[11px] font-bold text-gray-900">
+                            {b.bank} · <span className="text-gray-500 font-normal">{b.purpose || 'Vendor'}</span>
+                          </p>
+                          <p className="text-[10px] text-gray-700 font-mono mt-0.5">{b.accountNo}</p>
                           <p className="text-[10px] text-gray-400">a.n {b.holder}</p>
                         </div>
                         <Button
@@ -1372,9 +1429,9 @@ export default function OwnerFinanceDashboard({
                         </Button>
                       </div>
                     ))}
-                  {bankAccounts.filter((b) => b.active).length === 0 && (
+                  {bankAccounts.filter((b) => b.type === 'pengajuan' && b.active).length === 0 && (
                     <p className="px-4 py-8 text-center text-[11px] text-gray-400">
-                      Belum ada rekening aktif.
+                      Belum ada rekening vendor aktif.
                     </p>
                   )}
                 </div>
@@ -2255,119 +2312,6 @@ export default function OwnerFinanceDashboard({
             </Card>
           </>
         )}
-
-        {/* ============================= PENGATURAN =========================== */}
-        {activeMenu === 'pengaturan' && (
-          <>
-            <PageHead
-              title="Konfigurasi Bisnis"
-              desc="Identitas toko, aturan tempo pembayaran, dan daftar rekening serta ekspedisi resmi."
-              badge={<Badge tone="gray">Owner</Badge>}
-            />
-
-            <div className="grid lg:grid-cols-3 gap-4">
-              <Card title="Identitas & Aturan" subtitle="Berlaku untuk seluruh invoice dan reminder" className="lg:col-span-2">
-                <form onSubmit={saveSettingsForm} className="p-4 space-y-3">
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field label="Nama Toko" required>
-                      <Input
-                        value={settingsForm.shopName}
-                        onChange={(e) => setSettingsForm({ ...settingsForm, shopName: e.target.value })}
-                      />
-                    </Field>
-                    <Field label="Nama Pengirim">
-                      <Input
-                        value={settingsForm.senderName}
-                        onChange={(e) => setSettingsForm({ ...settingsForm, senderName: e.target.value })}
-                      />
-                    </Field>
-                    <Field label="DP (%)" hint="Persentase DP default pesanan baru">
-                      <Input
-                        type="number"
-                        min="10"
-                        max="100"
-                        value={settingsForm.dpPct}
-                        onChange={(e) =>
-                          setSettingsForm({ ...settingsForm, dpPct: Number(e.target.value) })
-                        }
-                      />
-                    </Field>
-                    <Field label="Tempo Pelunasan (hari)">
-                      <Input
-                        type="number"
-                        min="1"
-                        value={settingsForm.pelunasanDueDays}
-                        onChange={(e) =>
-                          setSettingsForm({ ...settingsForm, pelunasanDueDays: Number(e.target.value) })
-                        }
-                      />
-                    </Field>
-                    <Field label="Tempo Ongkir (hari)">
-                      <Input
-                        type="number"
-                        min="1"
-                        value={settingsForm.ongkirDueDays}
-                        onChange={(e) =>
-                          setSettingsForm({ ...settingsForm, ongkirDueDays: Number(e.target.value) })
-                        }
-                      />
-                    </Field>
-                    <Field label="Instagram">
-                      <Input
-                        value={settingsForm.instagram}
-                        onChange={(e) => setSettingsForm({ ...settingsForm, instagram: e.target.value })}
-                      />
-                    </Field>
-                  </div>
-                  <Field label="Catatan WhatsApp" hint="Ditambahkan pada pesan reminder ke mitra">
-                    <Textarea
-                      rows={3}
-                      value={settingsForm.waFooter}
-                      onChange={(e) => setSettingsForm({ ...settingsForm, waFooter: e.target.value })}
-                    />
-                  </Field>
-                  <div className="flex justify-end">
-                    <Button type="submit" variant="gold" icon="check">
-                      Simpan Konfigurasi
-                    </Button>
-                  </div>
-                </form>
-              </Card>
-
-              <div className="space-y-4">
-                <Card title="Rekening Resmi" subtitle="Hanya rekening aktif yang ditampilkan ke mitra">
-                  <div className="divide-y divide-gray-100">
-                    {bankAccounts.map((b) => (
-                      <div key={b.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
-                        <div>
-                          <p className="text-[11px] font-semibold text-gray-900">
-                            {b.bank} <span className="font-normal text-gray-400">· {b.accountNo}</span>
-                          </p>
-                          <p className="text-[10px] text-gray-400">a.n {b.holder}</p>
-                        </div>
-                        <Badge tone={b.active ? 'emerald' : 'gray'}>{b.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-
-                <Card title="Ekspedisi" subtitle="Daftar ekspedisi yang tersedia">
-                  <div className="divide-y divide-gray-100">
-                    {couriers.map((c) => (
-                      <div key={c.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
-                        <div>
-                          <p className="text-[11px] font-semibold text-gray-900">{c.name}</p>
-                          <p className="text-[10px] text-gray-400">{c.note}</p>
-                        </div>
-                        <Badge tone={c.active ? 'emerald' : 'gray'}>{c.code}</Badge>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-              </div>
-            </div>
-          </>
-        )}
       </DashboardShell>
 
       {/* ========================== PR DETAIL MODAL ========================= */}
@@ -2402,7 +2346,7 @@ export default function OwnerFinanceDashboard({
                   variant="gold"
                   icon="wallet"
                   onClick={() => {
-                    setTransferModal({ req: prDetail, form: { note: '', ref: '', proof: '' } });
+                    setTransferModal({ req: prDetail, form: { note: '', ref: '', proof: '', proofFile: null } });
                     setPrDetailId(null);
                   }}
                 >
@@ -2588,7 +2532,10 @@ export default function OwnerFinanceDashboard({
                         variant="ghost"
                         icon="x"
                         onClick={() =>
-                          setTransferModal((prev) => ({ ...prev, form: { ...prev.form, proof: '' } }))
+                          setTransferModal((prev) => ({
+                            ...prev,
+                            form: { ...prev.form, proof: '', proofFile: null }
+                          }))
                         }
                       >
                         Hapus
@@ -2609,12 +2556,12 @@ export default function OwnerFinanceDashboard({
                     onClick={() =>
                       setTransferModal((prev) => ({
                         ...prev,
-                        form: { ...prev.form, proof: SAMPLE_PROOF_2 }
+                        form: { ...prev.form, proof: '', proofFile: null }
                       }))
                     }
-                    className="mt-2 text-[10px] font-semibold text-sky-700 hover:underline"
+                    className="mt-2 text-[10px] font-semibold text-gray-500 hover:underline"
                   >
-                    Gunakan contoh bukti transfer
+                    Batal pilih berkas
                   </button>
                 </div>
               )}

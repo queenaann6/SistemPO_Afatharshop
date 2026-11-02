@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { XIcon, CameraIcon, CheckIcon, ShieldCheckIcon, PhoneIcon, MailIcon, MapPinIcon } from './Icons';
+import { XIcon, CameraIcon, CheckIcon, ShieldCheckIcon, PhoneIcon, MailIcon, MapPinIcon, TrashIcon } from './Icons';
 
 export default function ProfileModal({
   isOpen,
@@ -45,12 +45,7 @@ export default function ProfileModal({
     setIsEditing(false);
   };
 
-  const sampleAvatars = [
-    'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80',
-    'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=256&q=80',
-    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80',
-    'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=256&q=80'
-  ];
+  const hasAvatar = !!(currentUser?.avatar && !currentUser.avatar.includes('unsplash.com'));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
@@ -83,12 +78,18 @@ export default function ProfileModal({
           {/* Avatar Section */}
           <div className="flex flex-col items-center justify-center text-center p-4 bg-gradient-to-b from-[#FFF5ED] to-white rounded-2xl border border-rose-100/60">
             <div className="relative group mb-3">
-              <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-[#F0C973] shadow-lg bg-stone-100">
-                <img
-                  src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-                  alt={currentUser?.name || 'Mitra'}
-                  className="w-full h-full object-cover"
-                />
+              <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-[#F0C973] shadow-lg bg-stone-100 flex items-center justify-center">
+                {hasAvatar ? (
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser?.name || 'Mitra'}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span className="text-3xl font-extrabold text-stone-400 uppercase">
+                    {String(currentUser?.name || 'M').charAt(0).toUpperCase()}
+                  </span>
+                )}
               </div>
 
               {/* Upload Overlay Button */}
@@ -98,7 +99,7 @@ export default function ProfileModal({
                 title="Unggah Foto Profil Baru"
               >
                 <CameraIcon className="w-5 h-5 mb-0.5 text-[#F0C973]" />
-                <span>Ganti Foto</span>
+                <span>{hasAvatar ? 'Ganti Foto' : 'Pilih Foto'}</span>
               </button>
 
               {/* Camera Badge */}
@@ -131,30 +132,37 @@ export default function ProfileModal({
             {uploadSuccess && (
               <div className="mt-2.5 inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-200 animate-in fade-in">
                 <CheckIcon className="w-3.5 h-3.5" />
-                <span>Foto profil berhasil diperbarui!</span>
+                <span>{hasAvatar ? 'Foto profil berhasil diperbarui!' : 'Foto profil berhasil dihapus!'}</span>
               </div>
             )}
 
-            {/* Quick avatar selection */}
-            <div className="mt-4 pt-3 border-t border-rose-100/80 w-full">
-              <p className="text-[11px] font-semibold text-stone-500 mb-2">
-                Atau pilih avatar default:
-              </p>
-              <div className="flex items-center justify-center gap-2">
-                {sampleAvatars.map((url, idx) => (
+            {/* Avatar Action Controls */}
+            <div className="mt-4 pt-3 border-t border-rose-100/80 w-full flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="text-xs font-semibold text-[#6B1416] hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <CameraIcon className="w-3.5 h-3.5" />
+                <span>{hasAvatar ? 'Ganti Foto' : 'Unggah Foto'}</span>
+              </button>
+              {hasAvatar && (
+                <>
+                  <span className="text-stone-300">•</span>
                   <button
-                    key={idx}
+                    type="button"
                     onClick={() => {
-                      onUpdateAvatar && onUpdateAvatar(url);
+                      onUpdateAvatar && onUpdateAvatar('');
                       setUploadSuccess(true);
                       setTimeout(() => setUploadSuccess(false), 2000);
                     }}
-                    className="w-9 h-9 rounded-full overflow-hidden border-2 border-stone-200 hover:border-[#6B1416] hover:scale-105 transition cursor-pointer"
+                    className="text-xs font-semibold text-rose-600 hover:underline flex items-center gap-1 cursor-pointer"
                   >
-                    <img src={url} alt={`Avatar ${idx + 1}`} className="w-full h-full object-cover" />
+                    <TrashIcon className="w-3.5 h-3.5" />
+                    <span>Hapus Foto</span>
                   </button>
-                ))}
-              </div>
+                </>
+              )}
             </div>
           </div>
 

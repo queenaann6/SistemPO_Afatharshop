@@ -11,6 +11,7 @@ export default function MitraOrdersTab({
   poBatches = [],
   orders: customOrders,
   adminBankAccounts = [],
+  adminCouriers = [],
   onUpdateOrder
 }) {
   const [selectedOrder, setSelectedOrder] = useState(null);
@@ -78,6 +79,7 @@ export default function MitraOrdersTab({
         currentUser={currentUser}
         isClosedPOProp={isClosedPO}
         adminBankAccounts={adminBankAccounts}
+        adminCouriers={adminCouriers}
         orderInvoice={liveOrder.orderNo || liveOrder.id}
         onUpdateOrder={(patch) => {
           setSelectedOrder((prev) => (prev ? { ...prev, ...patch } : prev));

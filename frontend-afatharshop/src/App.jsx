@@ -63,12 +63,21 @@ import {
 } from './services/adapters';
 import { syncAddressBookFromApi } from './components/dashboard/mitra/mitraAddressBook';
 
+const getCleanStoredAvatar = () => {
+  if (typeof window === 'undefined') return '';
+  const stored = localStorage.getItem('afatharshop_user_avatar');
+  if (stored && stored.includes('unsplash.com')) {
+    localStorage.removeItem('afatharshop_user_avatar');
+    return '';
+  }
+  return stored || '';
+};
+
 const DEFAULT_USER = {
   name: 'Mitra',
   role: 'Mitra Distributor',
   roleId: 'mitra',
-  avatar: (typeof window !== 'undefined' && localStorage.getItem('afatharshop_user_avatar')) ||
-    'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80',
+  avatar: getCleanStoredAvatar(),
   balance: 'Rp 0',
   totalBill: 'Rp 0',
   phone: '',
@@ -250,13 +259,25 @@ export default function App() {
   // Global PO Batches State (Controlled strictly by Admin Marketing - NOT Mitra)
   const [poBatches, setPoBatches] = useState([]);
 
-  // Global Bank Accounts (Updated strictly by Admin Finance)
+  // Global Bank Accounts (Rekening Publik Toko & Rekening Pengajuan ke Owner)
   const [adminBankAccounts, setAdminBankAccounts] = useState([
-    { id: 'bca', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
-    { id: 'mandiri', bank: 'MANDIRI', accountNo: '133-00-2998801', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
-    { id: 'bri', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true },
-    { id: 'bsi', bank: 'BSI Syariah', accountNo: '718-002-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true }
+    // Rekening Publik (Resmi Distributor untuk Mitra / Checkout / Deposit / Invoice)
+    { id: 'bca', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'mandiri', bank: 'MANDIRI', accountNo: '133-00-2998801', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bri', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bsi', bank: 'BSI Syariah', accountNo: '718-002-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+
+    // Rekening Pengajuan ke Owner (Tujuan Transfer Vendor / Supplier / Produksi / Operasional)
+    { id: 'pr-1', bank: 'BCA', accountNo: '522-034-1100', holder: 'PT HANA TEXTILE NUSANTARA', active: true, type: 'pengajuan', purpose: 'Supplier Kain & Bahan Baku' },
+    { id: 'pr-2', bank: 'MANDIRI', accountNo: '131-00-9821733', holder: 'CV INDAH BORDIR KREASI', active: true, type: 'pengajuan', purpose: 'Vendor Jahit & Bordir Pabrik' },
+    { id: 'pr-3', bank: 'BCA', accountNo: '883-019-4421', holder: 'PT LOGISTIK PRIMA CARGO', active: true, type: 'pengajuan', purpose: 'Ekspedisi Kargo Produksi' }
   ]);
+
+  // Hanya rekening publik yang boleh tampil di checkout, cetak invoice, rincian tagihan, dan deposit mitra
+  const publicBankAccounts = useMemo(
+    () => (adminBankAccounts || []).filter((b) => b.type !== 'pengajuan'),
+    [adminBankAccounts]
+  );
 
   // Global Couriers (Updated strictly by Admin Finance)
   const [adminCouriers, setAdminCouriers] = useState([
@@ -288,12 +309,18 @@ export default function App() {
   };
 
   // Mitra Membayar Tagihan menggunakan Saldo Deposit (Potong Saldo & Langsung ACC)
-  const handlePayWithDeposit = ({ orderNo, billTitle, amount, billType }) => {
+  const handlePayWithDeposit = ({ orderNo, billTitle, amount, billType, depositBalance }) => {
     const uName = String(currentUser?.name || 'Mitra').toLowerCase();
+    const currentBalance =
+      Number(String(currentUser?.balance || '').replace(/[^0-9]/g, '')) || 0;
+    const nextBalance =
+      depositBalance !== null && depositBalance !== undefined
+        ? Number(depositBalance)
+        : Math.max(0, currentBalance - (Number(amount) || 0));
     setPoMitra((prev) =>
       prev.map((m) => {
         if (m.name.toLowerCase().includes(uName) || uName.includes(m.name.toLowerCase())) {
-          return { ...m, deposit: Math.max(0, (Number(m.deposit) || 0) - Number(amount)) };
+          return { ...m, deposit: nextBalance };
         }
         return m;
       })
@@ -472,10 +499,25 @@ export default function App() {
           );
         }
 
-        const remoteBrands = mapBrands(snapshot.brands || []);
-        if (remoteBrands.length > 1) {
-          setBrands(remoteBrands);
-          setPoBrands(projectBrandsToCore(remoteBrands));
+        const rawBrands = snapshot.brands || [];
+        if (Array.isArray(rawBrands) && rawBrands.length) {
+          const coreBrands = rawBrands.map(mapBrandToCore);
+          setPoBrands(coreBrands);
+          setBrands(coreBrandsToProject(coreBrands));
+        }
+
+        const rawSuppliers = snapshot.suppliers || [];
+        if (Array.isArray(rawSuppliers) && rawSuppliers.length) {
+          setPoSuppliers(rawSuppliers.map(mapSupplier));
+        } else {
+          try {
+            const supRes = await api.suppliers();
+            if (Array.isArray(supRes?.data) && supRes.data.length) {
+              setPoSuppliers(supRes.data.map(mapSupplier));
+            }
+          } catch {
+            /* ignore fallback error */
+          }
         }
 
         const remoteCategories = mapCategoryNames(snapshot.categories || []);
@@ -943,9 +985,13 @@ export default function App() {
 
   const handleUpdateAvatar = (newAvatar) => {
     setCurrentUser((prev) => {
-      const updated = { ...prev, avatar: newAvatar };
+      const updated = { ...prev, avatar: newAvatar || '' };
       try {
-        localStorage.setItem('afatharshop_user_avatar', newAvatar);
+        if (newAvatar) {
+          localStorage.setItem('afatharshop_user_avatar', newAvatar);
+        } else {
+          localStorage.removeItem('afatharshop_user_avatar');
+        }
       } catch (e) {
         console.warn('Gagal menyimpan ke localStorage', e);
       }
@@ -953,7 +999,9 @@ export default function App() {
     });
     setToast({
       show: true,
-      message: 'Foto profil akun berhasil diperbarui dan disinkronkan ke seluruh sistem.'
+      message: newAvatar
+        ? 'Foto profil akun berhasil diperbarui dan disinkronkan ke seluruh sistem.'
+        : 'Foto profil berhasil dihapus.'
     });
   };
 
@@ -1005,7 +1053,7 @@ export default function App() {
     setIsLoggedIn(true);
     setActiveRole(role);
     setSessionToken(tokenStore.get());
-    const savedAvatar = typeof window !== 'undefined' ? localStorage.getItem('afatharshop_user_avatar') : null;
+    const savedAvatar = getCleanStoredAvatar();
     const roleId = role?.id || 'mitra';
     const roleName = role?.name || 'Mitra Distributor';
 
@@ -1013,7 +1061,9 @@ export default function App() {
       name: userData?.name || (roleId === 'mitra' ? 'Mitra' : roleName),
       role: roleName,
       roleId: roleId,
-      avatar: savedAvatar || userData?.avatar || DEFAULT_USER.avatar,
+      avatar: (userData?.avatar && !userData.avatar.includes('unsplash.com'))
+        ? userData.avatar
+        : savedAvatar || '',
       balance: userData?.balance || 'Rp 0',
       totalBill: userData?.totalBill || 'Rp 0',
       phone: userData?.phone || '',
@@ -1048,20 +1098,6 @@ export default function App() {
     setToast({
       show: true,
       message: `Selamat datang kembali, ${userObj.name}!`
-    });
-  };
-
-  const handleQuickSwitchRole = (roleId) => {
-    const matchedRole = ROLES.find((r) => r.id === roleId) || ROLES[0];
-    handleLoginSuccess(matchedRole, {
-      name:
-        roleId === 'marketing'
-          ? 'ADMIN PURCHASING'
-          : roleId === 'finance'
-          ? 'DEWI FINANCE'
-          : roleId === 'owner'
-          ? 'OWNER AFATHAR'
-          : 'Mitra'
     });
   };
 
@@ -1171,7 +1207,6 @@ export default function App() {
         onOpenOrders={() => handleNavigateDashboard('pesanan_saya')}
         onNavigateDashboard={handleNavigateDashboard}
         currentPage={currentPage}
-        onQuickSwitchRole={handleQuickSwitchRole}
         notifications={notifications}
         onNotificationClick={handleNotificationClick}
         onMarkAllRead={handleMarkAllNotifRead}
@@ -1317,7 +1352,7 @@ export default function App() {
             onNavigateCart={() => setCurrentPage('cart')}
             onCompleteOrder={handleCompleteOrder}
             adminCouriers={adminCouriers}
-            adminBankAccounts={adminBankAccounts}
+            adminBankAccounts={publicBankAccounts}
           />
         )}
 
@@ -1343,7 +1378,7 @@ export default function App() {
                 !o.mitraName ||
                 o.mitraName.toUpperCase().includes((currentUser?.name || 'Mitra').toUpperCase())
             )}
-            adminBankAccounts={adminBankAccounts}
+            adminBankAccounts={publicBankAccounts}
             adminCouriers={adminCouriers}
             onUpdateOrder={handleUpdateMitraOrder}
           />
@@ -1379,7 +1414,7 @@ export default function App() {
             onChangeCategories={setPoCategories}
             onChangeBankAccounts={setAdminBankAccounts}
             onChangeCouriers={setAdminCouriers}
-            onPrintInvoice={(order) => openInvoicePrintTab(order, adminBankAccounts)}
+            onPrintInvoice={(order) => openInvoicePrintTab(order, publicBankAccounts)}
           />
         )}
 
@@ -1409,7 +1444,7 @@ export default function App() {
             onChangeCouriers={setAdminCouriers}
             onChangeLedger={setPoLedger}
             onChangeSettings={setPoSettings}
-            onPrintInvoice={(order) => openInvoicePrintTab(order, adminBankAccounts)}
+            onPrintInvoice={(order) => openInvoicePrintTab(order, publicBankAccounts)}
           />
         )}
 
@@ -1433,7 +1468,7 @@ export default function App() {
             onChangeTeam={setPoTeam}
             onChangePaymentRequests={setPoPaymentRequests}
             onChangeSettings={setPoSettings}
-            onPrintInvoice={(order) => openInvoicePrintTab(order, adminBankAccounts)}
+            onPrintInvoice={(order) => openInvoicePrintTab(order, publicBankAccounts)}
           />
         )}
 

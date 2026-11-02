@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import api from '../../services/api';
+import api, { mediaUrl } from '../../services/api';
+import { dbId, mapBrandToCore, mapSupplier } from '../../services/adapters';
+import ProductCatalogModal from './ProductCatalogModal';
+import BankAccountModal from './BankAccountModal';
 import {
   ACCENTS,
   Badge,
@@ -29,7 +32,6 @@ import {
   ProofModal,
   ProofThumb,
   ReasonModal,
-  SAMPLE_PROOF_2,
   SHIP,
   SearchBox,
   Segmented,
@@ -68,6 +70,7 @@ import {
   nowStamp,
   num,
   orderOutstanding,
+  orderPatchToServer,
   orderStage,
   poClosingToday,
   prSteps,
@@ -235,6 +238,9 @@ export default function MarketingDashboard({
   const [supplierModal, setSupplierModal] = useState(null);
   const [categoryModal, setCategoryModal] = useState(null);
   const [bankModal, setBankModal] = useState(null);
+  const [bankTab, setBankTab] = useState('public'); // 'public' | 'pengajuan'
+  const [inlineBankId, setInlineBankId] = useState(null);
+  const [inlineBankForm, setInlineBankForm] = useState({ bank: '', accountNo: '', holder: '', purpose: '', brands: [], active: true });
   const [courierModal, setCourierModal] = useState(null);
   const [mitraModal, setMitraModal] = useState(null);
   const [mitraDetailId, setMitraDetailId] = useState(null);
@@ -251,7 +257,8 @@ export default function MarketingDashboard({
     date: todayISO(),
     bankId: seed.bankAccounts[0]?.id || '',
     refNo: '',
-    proof: ''
+    proof: '',
+    proofFile: null
   });
 
   // Pengajuan pembayaran
@@ -276,10 +283,41 @@ export default function MarketingDashboard({
 
   // Pengaturan
   const [settingsForm, setSettingsForm] = useState({ ...seed.settings });
+  const [poBatches, setPoBatches] = useState([]);
 
   useEffect(() => {
     setSettingsForm({ ...settings });
   }, [settings]);
+
+  // Sinkronisasi otomatis Brand, Supplier & Batches langsung dari database backend
+  useEffect(() => {
+    let cancelled = false;
+    const syncBrandsAndSuppliers = async () => {
+      try {
+        const [brandsRes, suppliersRes, batchesRes] = await Promise.allSettled([
+          api.management.brands().catch(() => api.brands()),
+          api.management.suppliers().catch(() => api.suppliers()),
+          api.management.batches().catch(() => ({ data: [] }))
+        ]);
+        if (cancelled) return;
+        if (brandsRes.status === 'fulfilled' && Array.isArray(brandsRes.value?.data) && brandsRes.value.data.length > 0) {
+          commitBrands(brandsRes.value.data.map(mapBrandToCore));
+        }
+        if (suppliersRes.status === 'fulfilled' && Array.isArray(suppliersRes.value?.data) && suppliersRes.value.data.length > 0) {
+          commitSuppliers(suppliersRes.value.data.map(mapSupplier));
+        }
+        if (batchesRes.status === 'fulfilled' && Array.isArray(batchesRes.value?.data)) {
+          setPoBatches(batchesRes.value.data);
+        }
+      } catch (e) {
+        console.warn('Gagal sinkronisasi data master brand/supplier/batches:', e);
+      }
+    };
+    syncBrandsAndSuppliers();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /* ---------------------------------------------------------------- derived */
   const pendingAcc = useMemo(() => orders.filter((o) => o.marketingStatus === MKT.PENDING), [orders]);
@@ -554,26 +592,46 @@ export default function MarketingDashboard({
           { id: 'ekspedisi', label: 'Ekspedisi', title: 'Master Ekspedisi Pengiriman', icon: 'truck' }
         ]
       },
-      { id: 'terhapus', label: 'Penjualan Terhapus', title: 'Penjualan Terhapus', icon: 'trash' },
-      { id: 'pengaturan', label: 'Pengaturan', title: 'Pengaturan Purchasing', icon: 'file' }
+      { id: 'terhapus', label: 'Penjualan Terhapus', title: 'Penjualan Terhapus', icon: 'trash' }
     ],
     [pendingAcc.length, marketingPR.length]
   );
 
   /* --------------------------------------------------------------- handlers */
-  const patchOrder = (invoice, patch) => {
-    commitOrders((prev) => prev.map((o) => (o.invoice === invoice ? { ...o, ...patch } : o)));
+  const serverFail = (err, action) =>
+    toast(`${action} gagal: ${err?.message || 'server tidak merespons.'}`, 'error');
+
+  const notOnServer = (label) =>
+    toast(`${label} ini belum tersimpan di server. Tambahkan lewat portal lebih dulu.`, 'error');
+
+  // Produk dashboard memakai id "p-<id database>", jadi id numeriknya ada di projectId.
+  const productDbId = (p) => dbId(p) || (num(p?.projectId) > 0 ? num(p.projectId) : null);
+
+  const patchOrder = async (invoice, patch) => {
     const matched = orders.find((o) => o.invoice === invoice);
-    const targetId = matched?.backendId || matched?.id || invoice;
-    const nextStatus = patch.marketingStatus === MKT.ACC
-      ? 'Menunggu DP'
-      : patch.marketingStatus === MKT.TOLAK
-      ? 'Batal'
-      : patch.status || patch.marketingStatus || 'Open';
-    api.management.updateOrderStatus(targetId, {
-      status: nextStatus,
-      ...patch
-    }).catch(() => {});
+    if (!matched) return false;
+
+    // Status pesanan hanya berubah untuk keputusan purchasing; patch lain (produksi, resi)
+    // tidak boleh menimpa status yang sudah berjalan.
+    const nextStatus =
+      patch.marketingStatus === MKT.ACC
+        ? 'Menunggu DP'
+        : patch.marketingStatus === MKT.TOLAK
+          ? 'Batal'
+          : patch.status;
+
+    // Backend menerima id angka atau nomor pesanan (PO-YYYYMMDD-XXXXX).
+    const targetId = dbId(matched) || matched.invoice;
+    const body = orderPatchToServer({ ...patch, status: nextStatus });
+
+    try {
+      if (Object.keys(body).length) await api.management.updateOrderStatus(targetId, body);
+      commitOrders((prev) => prev.map((o) => (o.invoice === invoice ? { ...o, ...patch } : o)));
+      return true;
+    } catch (err) {
+      serverFail(err, `Perubahan status ${invoice}`);
+      return false;
+    }
   };
 
   const adjustQuota = (order, delta) => {
@@ -592,66 +650,65 @@ export default function MarketingDashboard({
     );
   };
 
-  const approveOrder = (o, silent) => {
-    patchOrder(o.invoice, {
+  const approveOrder = async (o, silent) => {
+    const ok = await patchOrder(o.invoice, {
       marketingStatus: MKT.ACC,
       marketingBy: me.name,
       marketingAt: todayISO(),
       marketingNote: ''
     });
-    if (!silent) toast(`${o.invoice} di-ACC. Mitra dapat melanjutkan pembayaran DP.`);
+    if (ok && !silent) toast(`${o.invoice} di-ACC. Mitra dapat melanjutkan pembayaran DP.`);
   };
 
-  const approveMany = () => {
-    const ids = accSelected.filter((inv) => pendingAcc.some((o) => o.invoice === inv));
-    if (!ids.length) return;
-    commitOrders((prev) =>
-      prev.map((o) =>
-        ids.includes(o.invoice)
-          ? {
-              ...o,
-              marketingStatus: MKT.ACC,
-              marketingBy: me.name,
-              marketingAt: todayISO(),
-              marketingNote: ''
-            }
-          : o
-      )
-    );
-    ids.forEach((inv) => {
-      const matched = orders.find((o) => o.invoice === inv);
-      const targetId = matched?.backendId || matched?.id || inv;
-      api.management.updateOrderStatus(targetId, {
-        status: 'Menunggu DP',
-        marketingStatus: MKT.ACC
-      }).catch(() => {});
-    });
+  const approveMany = async () => {
+    const targets = accSelected
+      .map((inv) => orders.find((o) => o.invoice === inv))
+      .filter((o) => o && pendingAcc.some((p) => p.invoice === o.invoice));
+    if (!targets.length) return;
+
+    const done = [];
+    for (const order of targets) {
+      const ok = await patchOrder(order.invoice, {
+        marketingStatus: MKT.ACC,
+        marketingBy: me.name,
+        marketingAt: todayISO(),
+        marketingNote: ''
+      });
+      if (ok) done.push(order.invoice);
+    }
+
     setAccSelected([]);
-    toast(`${ids.length} pesanan berhasil di-ACC.`);
+    if (done.length) toast(`${done.length} pesanan berhasil di-ACC.`);
+    if (done.length < targets.length) {
+      toast(`${targets.length - done.length} pesanan gagal di-ACC dan tetap berstatus menunggu.`, 'warning');
+    }
   };
 
-  const rejectOrder = (o, reason) => {
+  const rejectOrder = async (o, reason) => {
     const wasActive = o.marketingStatus !== MKT.TOLAK;
-    patchOrder(o.invoice, {
+    const ok = await patchOrder(o.invoice, {
       marketingStatus: MKT.TOLAK,
       marketingNote: reason,
       marketingBy: me.name,
       marketingAt: todayISO()
     });
+    if (!ok) return;
     if (wasActive) adjustQuota(o, -num(o.qty));
     toast(`Pesanan ${o.invoice} ditolak dan kuota varian dikembalikan.`, 'warning');
   };
 
-  const reopenOrder = (o) => {
-    patchOrder(o.invoice, { marketingStatus: MKT.PENDING, marketingNote: '' });
+  const reopenOrder = async (o) => {
+    const ok = await patchOrder(o.invoice, { marketingStatus: MKT.PENDING, marketingNote: '' });
+    if (!ok) return;
     adjustQuota(o, num(o.qty));
     toast(`${o.invoice} dibuka kembali untuk direview.`);
   };
 
-  const setProduction = (o, status) => {
+  const setProduction = async (o, status) => {
     const patch = { productionStatus: status };
     if (status === PROD.READY) patch.readyAt = todayISO();
-    patchOrder(o.invoice, patch);
+    const ok = await patchOrder(o.invoice, patch);
+    if (!ok) return;
     if (status === PROD.READY) {
       toast(`${o.invoice} ditandai READY. Mitra sudah bisa mengisi alamat & menerima tagihan ongkir.`);
     } else {
@@ -863,7 +920,169 @@ export default function MarketingDashboard({
     return next;
   };
 
-  const saveProduct = (e) => {
+  const variantKey = (v) => `${String(v?.color || '').toLowerCase()}|${String(v?.model || '').toLowerCase()}|${String(v?.size ?? '')}`;
+
+  const handleSaveProductFromModal = async (f, actionType = 'open') => {
+    const current = productModal?.mode === 'edit' ? products.find((p) => p.id === productModal.id) : null;
+    const stages = (f.stages || [])
+      .slice(0, f.terminCount === 2 ? 2 : 3)
+      .map((stage, index, arr) => ({
+        label: stageLabelOf(index, arr.length),
+        pct: Math.min(100, Math.max(0, num(stage.pct))),
+        date: stage.date || ''
+      }));
+    const pctSum = stages.reduce((sum, stage) => sum + stage.pct, 0);
+    if (stages.length < 2 || pctSum !== 100) {
+      return toast('Total porsi termin pembayaran harus 100%.', 'error');
+    }
+
+    const variants = (f.variants || []).map((v) => ({
+      ...v,
+      id: v.id || uid('v'),
+      color: v.color || 'Standard',
+      size: String(v.size || 'All'),
+      model: v.model || 'Standard',
+      sku: v.sku || `${v.color} (${v.size})`,
+      hpp: num(v.hpp) || 0,
+      price: num(v.price) || 0,
+      addon: num(v.addon) || 0,
+      quota: num(v.quota ?? v.stock) || 10,
+      stock: num(v.quota ?? v.stock) || 10,
+      is_active: v.is_active !== undefined ? !!v.is_active : true
+    }));
+
+    const variantPrices = variants.filter(hasOwnPrice).map((v) => num(v.price));
+    const basePrice = variantPrices.length ? Math.min(...variantPrices) : (num(f.price) || num(current?.price) || 295000);
+    const isSale = !!f.isSale;
+    const discountPercent = isSale ? (num(f.discountPercent) || 0) : 0;
+    const originalPrice = isSale
+      ? (num(f.originalPrice) || (discountPercent > 0 ? Math.round(basePrice / (1 - discountPercent / 100)) : Math.round(basePrice * 1.2)))
+      : basePrice;
+
+    const computedStatus = actionType === 'open' ? 'open' : actionType === 'scheduled' ? 'upcoming' : 'draft';
+
+    const payload = {
+      title: f.title,
+      name: f.title,
+      brand: f.brand,
+      brand_id: f.brand_id || undefined,
+      category: f.category,
+      category_id: f.category_id || undefined,
+      series: f.series || '',
+      batch: f.batch || '',
+      po_batch_id: f.po_batch_id || undefined,
+      price: basePrice,
+      image: f.image || current?.image || '',
+      thumbnails: f.thumbnails || [f.image, f.image2, f.image3, f.image4].filter(Boolean),
+      reelUrl: f.reelUrl || '',
+      isSale,
+      is_sale: isSale,
+      discountPercent,
+      discount_percent: discountPercent,
+      originalPrice,
+      original_price: originalPrice,
+      saleQuota: f.saleQuota,
+      saleBadgeText: f.saleBadgeText,
+      openDate: f.openDate || '',
+      closeDate: f.closeDate,
+      closeTime: f.closeTime || '',
+      readyEstimate: f.readyEstimate,
+      description: f.description,
+      material_detail: f.material_detail || f.materialDetail || '',
+      dpPct: stages[0].pct,
+      pelunasanDueDate: stages[stages.length - 1].date || '',
+      paymentStages: stages,
+      terminCount: f.terminCount,
+      status: computedStatus,
+      options: f.options || {
+        colors: f.colors || [],
+        sizes: f.sizes || [],
+        models: [{ name: 'Standard' }]
+      }
+    };
+
+    const serverPayload = {
+      title: f.title.trim(),
+      name: f.title.trim(),
+      brand: f.brand,
+      brand_id: f.brand_id || undefined,
+      category: f.category,
+      category_id: f.category_id || undefined,
+      batch: f.batch || undefined,
+      po_batch_id: f.po_batch_id || undefined,
+      series: f.series || undefined,
+      price: basePrice,
+      image: f.image || current?.image || '',
+      is_sale: isSale,
+      discount_percent: discountPercent,
+      original_price: originalPrice,
+      status: computedStatus === 'open' ? 'pre_order' : computedStatus,
+      tutup_po: f.closeDate ? `${f.closeDate} ${f.closeTime || '23:59'}` : null,
+      estimated_shipment: f.readyEstimate,
+      description: f.description,
+      material_detail: f.material_detail || f.materialDetail || '',
+      min_dp_percent: stages[0].pct,
+      stock_quota: variants.reduce((sum, v) => sum + Math.max(0, num(v.quota ?? v.stock)), 0),
+      variants: variants.map((v) => ({
+        id: typeof v.id === 'number' ? v.id : undefined,
+        model: v.model || 'Standard',
+        size: v.size,
+        color: v.color,
+        sku: v.sku,
+        stock: num(v.quota ?? v.stock) || 10,
+        price: num(v.price) || basePrice,
+        addon: num(v.addon) || 0,
+        hpp: num(v.hpp) || 0,
+        is_active: v.is_active !== undefined ? !!v.is_active : true
+      }))
+    };
+
+    if (current) {
+      const targetId = productDbId(current);
+      if (!targetId) return notOnServer(`Produk ${current.title}`);
+      let updatedRes;
+      try {
+        updatedRes = await api.management.updateProduct(targetId, serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menyimpan produk ${f.title}`);
+      }
+      const updatedData = updatedRes?.data;
+      const updatedVariants = Array.isArray(updatedData?.variants) ? updatedData.variants : variants;
+      commitProducts((prev) => prev.map((p) => (p.id === current.id ? { ...p, ...payload, variants: updatedVariants } : p)));
+      toast(`Produk ${f.title} berhasil diperbarui.`);
+      setProductModal(null);
+      return;
+    }
+
+    let created;
+    try {
+      created = await api.management.createProduct(serverPayload);
+    } catch (err) {
+      return serverFail(err, `Membuat produk ${f.title}`);
+    }
+
+    const serverProduct = created?.data;
+    const serverVariants = Array.isArray(serverProduct?.variants) ? serverProduct.variants : [];
+    const withServerIds = variants.map((v) => {
+      const match = serverVariants.find((sv) => variantKey(sv) === variantKey(v));
+      return match ? { ...v, id: match.id } : v;
+    });
+
+    const newId = serverProduct?.id ? `P-${serverProduct.id}` : uid('p');
+    const newP = {
+      id: newId,
+      ...payload,
+      backendId: serverProduct?.id ?? null,
+      status: computedStatus,
+      createdAt: todayISO(),
+      variants: withServerIds
+    };
+    commitProducts((prev) => [newP, ...prev]);
+    toast(`Produk PO ${f.title} berhasil disimpan ${actionType === 'open' ? 'dan dibuka.' : '.'}`);
+    setProductModal(null);
+  };
+
+  const saveProduct = async (e) => {
     e.preventDefault();
     const f = productModal.form;
     if (!f.title?.trim()) return toast('Nama produk wajib diisi.', 'error');
@@ -908,77 +1127,81 @@ export default function MarketingDashboard({
       paymentStages: stages,
       options
     };
+
+    const serverPayload = {
+      title: f.title.trim(),
+      brand: f.brand,
+      category: f.category,
+      price: basePrice,
+      image: f.image || current?.image || '',
+      is_sale: isSale,
+      discount_percent: discountPercent,
+      original_price: originalPrice,
+      tutup_po: f.closeDate ? `${f.closeDate} ${f.closeTime || '23:59'}` : null,
+      estimated_shipment: f.readyEstimate,
+      description: f.description,
+      min_dp_percent: stages[0].pct,
+      stock_quota: variants.reduce((sum, v) => sum + Math.max(0, num(v.quota)), 0),
+      variants: variants.map((v) => ({
+        id: typeof v.id === 'number' ? v.id : undefined,
+        model: v.model,
+        size: v.size,
+        color: v.color,
+        sku: v.sku,
+        stock: num(v.quota) || 10,
+        price: num(v.price) || basePrice
+      }))
+    };
+
     if (current) {
+      const targetId = productDbId(current);
+      if (!targetId) return notOnServer(`Produk ${current.title}`);
+      try {
+        await api.management.updateProduct(targetId, serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menyimpan produk ${f.title}`);
+      }
       commitProducts((prev) => prev.map((p) => (p.id === current.id ? { ...p, ...payload, variants } : p)));
       toast(`Produk ${f.title} berhasil diperbarui.`);
       setProductModal(null);
-      const targetId = current.backendId || current.id;
-      api.management.updateProduct(targetId, {
-        title: f.title,
-        brand: f.brand,
-        category: f.category,
-        price: basePrice,
-        image: f.image || current?.image || '',
-        is_sale: isSale,
-        discount_percent: discountPercent,
-        original_price: originalPrice,
-        tutup_po: f.closeDate,
-        estimated_shipment: f.readyEstimate,
-        description: f.description,
-        min_dp_percent: stages[0].pct
-      }).catch(() => {});
       return;
     }
+
+    let created;
+    try {
+      created = await api.management.createProduct(serverPayload);
+    } catch (err) {
+      return serverFail(err, `Membuat produk ${f.title}`);
+    }
+
+    const serverProduct = created?.data;
+    const serverVariants = Array.isArray(serverProduct?.variants) ? serverProduct.variants : [];
+    const withServerIds = variants.map((v) => {
+      const match = serverVariants.find((sv) => variantKey(sv) === variantKey(v));
+      return match ? { ...v, id: match.id } : v;
+    });
+
     const newId = uid('p');
     const newP = {
       id: newId,
       ...payload,
+      backendId: serverProduct?.id ?? null,
       status: 'open',
       image: f.image || '',
       isSale,
       discountPercent,
       originalPrice,
       createdAt: todayISO(),
-      variants
+      variants: withServerIds
     };
     commitProducts((prev) => [newP, ...prev]);
     setProductModal(null);
     setVariantModal({ productId: newId, form: { ...blankVariantForm } });
     toast(
-      variants.length
-        ? `Produk ${f.title} dibuat dengan ${variants.length} varian dan disimpan ke database.`
-        : `Produk ${f.title} dibuat dan disimpan ke database.`
+      withServerIds.length
+        ? `Produk ${f.title} dibuat dengan ${withServerIds.length} varian dan tersimpan di database.`
+        : `Produk ${f.title} dibuat dan tersimpan di database.`
     );
-    api.management.createProduct({
-      name: f.title,
-      brand: f.brand,
-      category: f.category,
-      price: basePrice,
-      image: f.image || '',
-      is_sale: isSale,
-      discount_percent: discountPercent,
-      original_price: originalPrice,
-      tutup_po: f.closeDate,
-      estimated_shipment: f.readyEstimate,
-      description: f.description,
-      min_dp_percent: stages[0]?.pct || 25,
-      variants: variants.map((v) => ({
-        model: v.model,
-        size: v.size,
-        color: v.color,
-        sku: v.sku,
-        stock: num(v.stock) || 10,
-        price: num(v.price) || basePrice
-      }))
-    }).then((res) => {
-      const serverProduct = res?.data;
-      if (serverProduct?.id) {
-        newP.backendId = serverProduct.id;
-        commitProducts((prev) => prev.map((x) => x.id === newP.id ? { ...x, backendId: serverProduct.id } : x));
-      }
-    }).catch((err) => {
-      console.warn('Gagal simpan produk ke database:', err?.message || err);
-    });
   };
 
   const saveVariant = (e) => {
@@ -1070,22 +1293,52 @@ export default function MarketingDashboard({
     toast(`${generated.length} varian dilengkapi. Lengkapi harga tiap varian.`);
   };
 
-  const deleteVariant = (productId, variantId) => {
+  const pushProductVariants = async (product, nextVariants) => {
+    const targetId = productDbId(product);
+    if (!targetId) return notOnServer(`Produk ${product.title}`);
+    try {
+      await api.management.updateProduct(targetId, {
+        variants: nextVariants.map((v) => ({
+          id: typeof v.id === 'number' ? v.id : undefined,
+          model: v.model,
+          size: v.size,
+          color: v.color,
+          sku: v.sku,
+          stock: num(v.quota) || 10,
+          price: num(v.price) || num(product.price)
+        }))
+      });
+      return true;
+    } catch (err) {
+      serverFail(err, `Menyimpan varian ${product.title}`);
+      return false;
+    }
+  };
+
+  const deleteVariant = async (productId, variantId) => {
     const p = products.find((x) => x.id === productId);
     const v = p?.variants.find((x) => x.id === variantId);
     if (num(v?.used) > 0) return toast('Varian sudah memiliki pesanan, tidak bisa dihapus.', 'error');
+    const nextVariants = p.variants.filter((v2) => v2.id !== variantId);
+    const ok = await pushProductVariants(p, nextVariants);
+    if (!ok) return;
     commitProducts((prev) =>
-      prev.map((x) =>
-        x.id === productId
-          ? withVariantPrice({ ...x, variants: x.variants.filter((v2) => v2.id !== variantId) })
-          : x
-      )
+      prev.map((x) => (x.id === productId ? withVariantPrice({ ...x, variants: nextVariants }) : x))
     );
     toast('Varian dihapus.');
   };
 
-  const toggleProductStatus = (p) => {
+  const toggleProductStatus = async (p) => {
     const next = p.status === 'open' ? 'closed' : 'open';
+    const targetId = productDbId(p);
+    if (!targetId) return notOnServer(`Produk ${p.title}`);
+    try {
+      await api.management.updateProduct(targetId, {
+        status: next === 'closed' ? 'closed_po' : 'pre_order'
+      });
+    } catch (err) {
+      return serverFail(err, `Mengubah status ${p.title}`);
+    }
     commitProducts((prev) => prev.map((x) => (x.id === p.id ? { ...x, status: next } : x)));
     toast(`${p.title}: ${next === 'closed' ? 'PO ditutup.' : 'PO dibuka kembali.'}`);
   };
@@ -1099,23 +1352,37 @@ export default function MarketingDashboard({
       message: `Hapus produk "${p.title}" dari katalog? Tindakan ini tidak bisa dibatalkan.`,
       confirmLabel: 'Hapus produk',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetId = productDbId(p);
+        if (!targetId) {
+          setConfirmModal(null);
+          return notOnServer(`Produk ${p.title}`);
+        }
+        try {
+          await api.management.deleteProduct(targetId);
+        } catch (err) {
+          setConfirmModal(null);
+          return serverFail(err, `Menghapus produk ${p.title}`);
+        }
         commitProducts((prev) => prev.filter((x) => x.id !== p.id));
         setConfirmModal(null);
         toast(`Produk ${p.title} dihapus.`, 'warning');
-        const targetId = p.backendId || p.id;
-        api.management.deleteProduct(targetId).catch(() => {});
       }
     });
   };
 
-  const saveBrand = (e) => {
+  const saveBrand = async (e) => {
     e.preventDefault();
     const f = brandModal.form;
     if (!f.name?.trim()) return toast('Nama brand wajib diisi.', 'error');
+    const matchedSup = suppliers.find((s) => s.name === f.supplier);
+    const resolvedSupplierId = dbId({ id: f.supplier_id }) || dbId(matchedSup);
     const payload = {
       ...f,
       name: f.name.trim(),
+      supplier: f.supplier || matchedSup?.name || '',
+      supplier_id: resolvedSupplierId || null,
+      address: f.address || matchedSup?.city || '',
       discountType: f.discountType === 'nominal' ? 'nominal' : 'pct',
       discountValue: num(f.discountValue),
       feeType: f.feeType === 'nominal' ? 'nominal' : 'pct',
@@ -1124,22 +1391,33 @@ export default function MarketingDashboard({
       discountAgen: num(f.discountAgen),
       discountReseller: num(f.discountReseller)
     };
-    const targetBrandId = brandModal.backendId || (typeof brandModal.id === 'number' ? brandModal.id : String(brandModal.id || '').replace(/\D/g, ''));
+
     if (brandModal.mode === 'edit') {
+      const targetBrandId = dbId(brands.find((b) => b.id === brandModal.id)) || dbId(brandModal);
+      if (!targetBrandId) return notOnServer(`Brand ${payload.name}`);
+      try {
+        await api.management.updateBrand(targetBrandId, payload);
+      } catch (err) {
+        return serverFail(err, `Menyimpan brand ${payload.name}`);
+      }
       commitBrands((prev) => prev.map((b) => (b.id === brandModal.id ? { ...b, ...payload } : b)));
       toast(`Brand ${payload.name} diperbarui.`);
-      if (targetBrandId) {
-        api.management.updateBrand(targetBrandId, payload).catch((err) => toast(`Gagal simpan brand di server: ${err?.message || 'Error'}`, 'error'));
-      }
     } else {
-      const newB = { id: uid('b'), ...payload, active: true, createdAt: todayISO() };
+      let created;
+      try {
+        created = await api.management.createBrand(payload);
+      } catch (err) {
+        return serverFail(err, `Menambahkan brand ${payload.name}`);
+      }
+      const serverBrand = created?.data;
+      const newB = mapBrandToCore({
+        ...payload,
+        ...(serverBrand || {}),
+        id: serverBrand?.id ?? null,
+        supplier: serverBrand?.supplier?.name || payload.supplier
+      });
       commitBrands((prev) => [newB, ...prev]);
       toast(`Brand ${payload.name} ditambahkan.`);
-      api.management.createBrand(payload).then((res) => {
-        if (res?.data?.id) {
-          commitBrands((prev) => prev.map((x) => x.id === newB.id ? { ...x, backendId: res.data.id } : x));
-        }
-      }).catch((err) => toast(`Gagal simpan brand di server: ${err?.message || 'Error'}`, 'error'));
     }
     setBrandModal(null);
   };
@@ -1153,38 +1431,56 @@ export default function MarketingDashboard({
       message: `Hapus brand "${b.name}"? Data akan dihapus dari server dan database.`,
       confirmLabel: 'Hapus brand',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetBrandId = dbId(b);
+        if (!targetBrandId) {
+          setConfirmModal(null);
+          return notOnServer(`Brand ${b.name}`);
+        }
+        try {
+          await api.management.deleteBrand(targetBrandId);
+        } catch (err) {
+          setConfirmModal(null);
+          return serverFail(err, `Menghapus brand ${b.name}`);
+        }
         commitBrands((prev) => prev.filter((x) => x.id !== b.id));
         setConfirmModal(null);
         toast(`Brand ${b.name} dihapus.`, 'warning');
-        const targetBrandId = b.backendId || (typeof b.id === 'number' ? b.id : String(b.id || '').replace(/\D/g, ''));
-        if (targetBrandId) {
-          api.management.deleteBrand(targetBrandId).catch((err) => toast(`Gagal hapus brand di server: ${err?.message || 'Error'}`, 'error'));
-        }
       }
     });
   };
 
-  const saveSupplier = (e) => {
+  const saveSupplier = async (e) => {
     e.preventDefault();
     const f = supplierModal.form;
     if (!f.name?.trim()) return toast('Nama supplier wajib diisi.', 'error');
-    const targetSupId = supplierModal.backendId || (typeof supplierModal.id === 'number' ? supplierModal.id : String(supplierModal.id || '').replace(/\D/g, ''));
+
     if (supplierModal.mode === 'edit') {
+      const targetSupId = dbId(suppliers.find((s) => s.id === supplierModal.id)) || dbId(supplierModal);
+      if (!targetSupId) return notOnServer(`Supplier ${f.name}`);
+      try {
+        await api.management.updateSupplier(targetSupId, f);
+      } catch (err) {
+        return serverFail(err, `Menyimpan supplier ${f.name}`);
+      }
       commitSuppliers((prev) => prev.map((s) => (s.id === supplierModal.id ? { ...s, ...f } : s)));
       toast(`Supplier ${f.name} diperbarui.`);
-      if (targetSupId) {
-        api.management.updateSupplier(targetSupId, f).catch((err) => toast(`Gagal simpan supplier di server: ${err?.message || 'Error'}`, 'error'));
-      }
     } else {
-      const newS = { id: uid('s'), ...f, createdAt: todayISO() };
+      let created;
+      try {
+        created = await api.management.createSupplier(f);
+      } catch (err) {
+        return serverFail(err, `Menambahkan supplier ${f.name}`);
+      }
+      const serverSup = created?.data;
+      const newS = {
+        ...mapSupplier({ ...serverSup, ...f }),
+        id: serverSup?.id ? `s-${serverSup.id}` : uid('s'),
+        backendId: serverSup?.id ?? null,
+        createdAt: todayISO()
+      };
       commitSuppliers((prev) => [newS, ...prev]);
       toast(`Supplier ${f.name} ditambahkan.`);
-      api.management.createSupplier(f).then((res) => {
-        if (res?.data?.id) {
-          commitSuppliers((prev) => prev.map((x) => x.id === newS.id ? { ...x, backendId: res.data.id } : x));
-        }
-      }).catch((err) => toast(`Gagal simpan supplier di server: ${err?.message || 'Error'}`, 'error'));
     }
     setSupplierModal(null);
   };
@@ -1198,20 +1494,41 @@ export default function MarketingDashboard({
       message: `Hapus supplier "${s.name}"? Data akan dihapus dari server dan database.`,
       confirmLabel: 'Hapus supplier',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetSupId = dbId(s);
+        if (!targetSupId) {
+          setConfirmModal(null);
+          return notOnServer(`Supplier ${s.name}`);
+        }
+        try {
+          await api.management.deleteSupplier(targetSupId);
+        } catch (err) {
+          setConfirmModal(null);
+          return serverFail(err, `Menghapus supplier ${s.name}`);
+        }
         commitSuppliers((prev) => prev.filter((x) => x.id !== s.id));
         setConfirmModal(null);
         toast(`Supplier ${s.name} dihapus.`, 'warning');
-        const targetSupId = s.backendId || (typeof s.id === 'number' ? s.id : String(s.id || '').replace(/\D/g, ''));
-        if (targetSupId) {
-          api.management.deleteSupplier(targetSupId).catch((err) => toast(`Gagal hapus supplier di server: ${err?.message || 'Error'}`, 'error'));
-        }
       }
     });
   };
 
   /* --------------------------------------- master publikasi kategori/rekening */
-  const saveCategory = (e) => {
+  // Dashboard menyimpan kategori sebagai nama, sedangkan API memakai id numerik.
+  const categoryIdByName = async (name) => {
+    try {
+      const res = await api.management.categories();
+      const row = (res?.data || []).find(
+        (c) => String(c.name).toLowerCase() === String(name).toLowerCase()
+      );
+      return row?.id ?? null;
+    } catch (err) {
+      serverFail(err, 'Memuat daftar kategori');
+      return null;
+    }
+  };
+
+  const saveCategory = async (e) => {
     e.preventDefault();
     const name = String(categoryModal.form.name || '').trim();
     if (!name) return toast('Nama kategori wajib diisi.', 'error');
@@ -1219,16 +1536,27 @@ export default function MarketingDashboard({
       (c) => c.toLowerCase() === name.toLowerCase() && (categoryModal.mode === 'create' || c !== categoryModal.id)
     );
     if (duplicate) return toast('Kategori tersebut sudah ada.', 'error');
+
     if (categoryModal.mode === 'edit') {
       const oldName = categoryModal.id;
+      const targetId = await categoryIdByName(oldName);
+      if (!targetId) return notOnServer(`Kategori ${oldName}`);
+      try {
+        await api.management.updateCategory(targetId, { name });
+      } catch (err) {
+        return serverFail(err, `Menyimpan kategori ${name}`);
+      }
       commitCategories((prev) => prev.map((c) => (c === oldName ? name : c)));
       commitProducts((prev) => prev.map((p) => (p.category === oldName ? { ...p, category: name } : p)));
       toast(`Kategori diganti menjadi ${name}.`);
-      api.management.updateCategory(oldName, { name }).catch(() => {});
     } else {
+      try {
+        await api.management.createCategory({ name });
+      } catch (err) {
+        return serverFail(err, `Menambahkan kategori ${name}`);
+      }
       commitCategories((prev) => [...prev, name]);
       toast(`Kategori ${name} ditambahkan.`);
-      api.management.createCategory({ name }).catch(() => {});
     }
     setCategoryModal(null);
   };
@@ -1242,51 +1570,209 @@ export default function MarketingDashboard({
       message: `Hapus kategori "${name}"? Kategori akan hilang dari filter toko.`,
       confirmLabel: 'Hapus kategori',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetId = await categoryIdByName(name);
+        if (!targetId) {
+          setConfirmModal(null);
+          return notOnServer(`Kategori ${name}`);
+        }
+        try {
+          await api.management.deleteCategory(targetId);
+        } catch (err) {
+          setConfirmModal(null);
+          return serverFail(err, `Menghapus kategori ${name}`);
+        }
         commitCategories((prev) => prev.filter((c) => c !== name));
         setConfirmModal(null);
         toast(`Kategori ${name} dihapus.`, 'warning');
-        api.management.deleteCategory(name).catch(() => {});
       }
     });
   };
 
-  const saveBank = (e) => {
-    e.preventDefault();
-    const f = bankModal.form;
-    if (!f.bank?.trim() || !f.accountNo?.trim() || !f.holder?.trim()) {
+  const saveBank = async (formData) => {
+    const f = formData || bankModal?.form;
+    if (!f || !f.bank?.trim() || !f.accountNo?.trim() || !f.holder?.trim()) {
       return toast('Bank, nomor rekening, dan atas nama wajib diisi.', 'error');
     }
+    const type = f.type || bankTab || 'public';
+    const purpose = f.purpose?.trim() || (type === 'public' ? 'Penerimaan Pembayaran Mitra' : '');
+    const brandsList = Array.isArray(f.brands) ? f.brands : [];
+    const serverPayload = {
+      bank_name: f.bank.trim(),
+      account_number: f.accountNo.trim(),
+      account_holder: f.holder.trim(),
+      type,
+      purpose,
+      brands: brandsList,
+      is_active: f.active !== false
+    };
+
     if (bankModal.mode === 'edit') {
-      commitBankAccounts((prev) => prev.map((b) => (b.id === bankModal.id ? { ...b, ...f } : b)));
+      const targetId = dbId(bankAccounts.find((b) => b.id === bankModal.id)) || dbId(bankModal);
+      if (!targetId) return notOnServer(`Rekening ${f.bank}`);
+      try {
+        await api.management.updateBankAccount(targetId, serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menyimpan rekening ${f.bank}`);
+      }
+      commitBankAccounts((prev) =>
+        prev.map((b) =>
+          b.id === bankModal.id
+            ? { ...b, ...f, type, purpose, brands: brandsList }
+            : b
+        )
+      );
       toast(`Rekening ${f.bank} diperbarui.`);
     } else {
-      commitBankAccounts((prev) => [...prev, { id: uid('bk'), ...f, active: f.active !== false }]);
-      toast(`Rekening ${f.bank} ditambahkan.`);
+      let created;
+      try {
+        created = await api.management.createBankAccount(serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menambahkan rekening ${f.bank}`);
+      }
+      const row = created?.data;
+      commitBankAccounts((prev) => [
+        ...prev,
+        {
+          ...f,
+          type,
+          purpose,
+          brands: brandsList,
+          id: row?.id != null ? String(row.id) : uid('bk'),
+          backendId: row?.id ?? null,
+          active: f.active !== false
+        }
+      ]);
+      toast(`Rekening ${f.bank} (${type === 'pengajuan' ? 'Pengajuan Owner' : 'Publik Toko'}) ditambahkan.`);
     }
     setBankModal(null);
   };
 
-  const toggleBank = (b) => {
+  const deleteBank = (b) => {
+    setConfirmModal({
+      title: 'Hapus Rekening Bank',
+      message: `Hapus rekening "${b.bank} - ${b.accountNo}" (a/n ${b.holder})? Tindakan ini akan menghapus rekening dari database sistem.`,
+      confirmLabel: 'Hapus Rekening',
+      danger: true,
+      onConfirm: async () => {
+        const targetId = dbId(b) || (num(b.id) > 0 ? num(b.id) : null);
+        if (!targetId) {
+          commitBankAccounts((prev) => prev.filter((x) => x.id !== b.id));
+          setConfirmModal(null);
+          return notOnServer(`Rekening ${b.bank}`);
+        }
+        try {
+          await api.management.deleteBankAccount(targetId);
+        } catch (err) {
+          return serverFail(err, `Menghapus rekening ${b.bank}`);
+        }
+        commitBankAccounts((prev) => prev.filter((x) => x.id !== b.id));
+        setConfirmModal(null);
+        toast(`Rekening ${b.bank} (${b.accountNo}) berhasil dihapus.`, 'warning');
+      }
+    });
+  };
+
+  const startInlineEditBank = (b) => {
+    setInlineBankId(b.id);
+    setInlineBankForm({
+      bank: b.bank || '',
+      accountNo: b.accountNo || '',
+      holder: b.holder || '',
+      purpose: b.purpose || '',
+      brands: b.brands || [],
+      active: b.active !== false
+    });
+  };
+
+  const saveInlineEditBank = async (b) => {
+    if (!inlineBankForm.bank.trim() || !inlineBankForm.accountNo.trim() || !inlineBankForm.holder.trim()) {
+      return toast('Bank, nomor rekening, dan atas nama wajib diisi.', 'error');
+    }
+    const targetId = dbId(b) || (num(b.id) > 0 ? num(b.id) : null);
+    const serverPayload = {
+      bank_name: inlineBankForm.bank.trim(),
+      account_number: inlineBankForm.accountNo.trim(),
+      account_holder: inlineBankForm.holder.trim(),
+      type: b.type || bankTab || 'public',
+      purpose: inlineBankForm.purpose.trim(),
+      brands: inlineBankForm.brands || [],
+      is_active: inlineBankForm.active !== false
+    };
+    if (targetId) {
+      try {
+        await api.management.updateBankAccount(targetId, serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menyimpan rekening ${inlineBankForm.bank}`);
+      }
+    }
+    commitBankAccounts((prev) =>
+      prev.map((item) =>
+        item.id === b.id
+          ? {
+              ...item,
+              bank: inlineBankForm.bank.trim(),
+              accountNo: inlineBankForm.accountNo.trim(),
+              holder: inlineBankForm.holder.trim(),
+              purpose: inlineBankForm.purpose.trim(),
+              brands: inlineBankForm.brands || [],
+              active: inlineBankForm.active !== false
+            }
+          : item
+      )
+    );
+    setInlineBankId(null);
+    toast(`Rekening ${inlineBankForm.bank} berhasil disimpan.`);
+  };
+
+  const toggleBank = async (b) => {
+    const targetId = dbId(b);
+    if (!targetId) return notOnServer(`Rekening ${b.bank}`);
+    try {
+      await api.management.updateBankAccount(targetId, { is_active: !b.active });
+    } catch (err) {
+      return serverFail(err, `Mengubah status rekening ${b.bank}`);
+    }
     commitBankAccounts((prev) => prev.map((x) => (x.id === b.id ? { ...x, active: !x.active } : x)));
     toast(`Rekening ${b.bank} ${b.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
   };
 
-  const saveCourier = (e) => {
+  const saveCourier = async (e) => {
     e.preventDefault();
     const f = courierModal.form;
     if (!f.name?.trim()) return toast('Nama ekspedisi wajib diisi.', 'error');
+    const serverPayload = {
+      name: f.name.trim(),
+      code: f.code || f.name.trim().slice(0, 3).toUpperCase(),
+      description: f.note || '',
+      is_active: f.active !== false
+    };
+
     if (courierModal.mode === 'edit') {
+      const targetId = dbId(couriers.find((c) => c.id === courierModal.id)) || dbId(courierModal);
+      if (!targetId) return notOnServer(`Ekspedisi ${f.name}`);
+      try {
+        await api.management.updateCourier(targetId, serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menyimpan ekspedisi ${f.name}`);
+      }
       commitCouriers((prev) => prev.map((c) => (c.id === courierModal.id ? { ...c, ...f } : c)));
       toast(`Ekspedisi ${f.name} diperbarui.`);
     } else {
+      let created;
+      try {
+        created = await api.management.createCourier(serverPayload);
+      } catch (err) {
+        return serverFail(err, `Menambahkan ekspedisi ${f.name}`);
+      }
+      const row = created?.data;
       commitCouriers((prev) => [
         ...prev,
         {
-          id: uid('c'),
-          ...f,
-          name: f.name.trim(),
-          code: f.code || f.name.trim().slice(0, 3).toUpperCase(),
+          ...serverPayload,
+          id: row?.id != null ? `c-${row.id}` : uid('c'),
+          backendId: row?.id ?? null,
+          active: true,
           createdAt: todayISO()
         }
       ]);
@@ -1295,71 +1781,119 @@ export default function MarketingDashboard({
     setCourierModal(null);
   };
 
-  const toggleCourier = (c) => {
+  const toggleCourier = async (c) => {
+    const targetId = dbId(c);
+    if (!targetId) return notOnServer(`Ekspedisi ${c.name}`);
+    try {
+      await api.management.updateCourier(targetId, { is_active: !c.active });
+    } catch (err) {
+      return serverFail(err, `Mengubah status ekspedisi ${c.name}`);
+    }
     commitCouriers((prev) => prev.map((x) => (x.id === c.id ? { ...x, active: !x.active } : x)));
     toast(`${c.name} ${c.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
   };
 
-  const saveMitra = (e) => {
+  const deleteCourier = (c) => {
+    setConfirmModal({
+      title: 'Hapus Ekspedisi',
+      message: `Hapus ekspedisi "${c.name}"? Ekspedisi yang sudah terhubung dengan data pesanan tidak dapat dihapus (silakan nonaktifkan).`,
+      confirmLabel: 'Hapus Ekspedisi',
+      danger: true,
+      onConfirm: async () => {
+        const targetId = dbId(c) || (num(c.id) > 0 ? num(c.id) : null);
+        if (!targetId) {
+          commitCouriers((prev) => prev.filter((x) => x.id !== c.id));
+          setConfirmModal(null);
+          return notOnServer(`Ekspedisi ${c.name}`);
+        }
+        try {
+          await api.management.deleteCourier(targetId);
+        } catch (err) {
+          return serverFail(err, `Menghapus ekspedisi ${c.name}`);
+        }
+        commitCouriers((prev) => prev.filter((x) => x.id !== c.id));
+        setConfirmModal(null);
+        toast(`Ekspedisi ${c.name} berhasil dihapus.`, 'warning');
+      }
+    });
+  };
+
+  const saveMitra = async (e) => {
     e.preventDefault();
     const f = mitraModal.form;
     if (!f.name?.trim() || !f.phone?.trim()) return toast('Nama dan WhatsApp wajib diisi.', 'error');
     if (mitraModal.mode === 'create' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(f.email || '').trim())) {
       return toast('Email login mitra wajib diisi dengan format valid.', 'error');
-    }    if (mitraModal.mode === 'edit') {
+    }
+
+    if (mitraModal.mode === 'edit') {
+      const current = mitra.find((m) => m.id === mitraModal.id);
+      const targetId = dbId(current) || dbId(mitraModal);
+      if (!targetId) return notOnServer(`Mitra ${current?.name || f.name}`);
+      try {
+        await api.management.updateUser(targetId, {
+          nama: f.name.trim(),
+          phone: f.phone,
+          city: f.city,
+          level: f.level || 'reseller'
+        });
+      } catch (err) {
+        return serverFail(err, `Memperbarui mitra ${f.name}`);
+      }
       commitMitra((prev) => prev.map((m) => (m.id === mitraModal.id ? { ...m, ...f } : m)));
       toast(`Mitra ${f.name} diperbarui.`);
       setMitraModal(null);
-      const targetId = mitraModal.backendId || mitraModal.id;
-      api.management.updateUser(targetId, {
-        nama: f.name,
-        phone: f.phone,
-        city: f.city,
-        level: f.level || 'reseller'
-      }).catch(() => {});
-    } else {
-      const tempPassword = `Mitra#${Math.floor(1000 + Math.random() * 9000)}`;
-      const newM = {
-        id: uid('m'),
-        ...f,
-        active: true,
-        deposit: 0,
-        joinedAt: todayISO(),
-        createdBy: me.name
-      };
-      commitMitra((prev) => [newM, ...prev]);
-      setMitraModal(null);
-      setCredential({
-        title: 'Akun mitra dibuat',
-        name: f.name,
-        email: String(f.email || '').trim(),
-        password: tempPassword,
-        note: 'Kirimkan kredensial ini ke mitra. Password hanya ditampilkan sekali.'
-      });
-      toast(`Akun mitra ${f.name} berhasil disimpan ke database.`);
+      return;
+    }
 
-      api.management.createUser({
-        nama: f.name,
+    const tempPassword = `Mitra#${Math.floor(1000 + Math.random() * 9000)}`;
+    let created;
+    try {
+      created = await api.management.createUser({
+        nama: f.name.trim(),
         email: String(f.email || '').trim(),
         role: 'mitra',
-        level: f.level || 'reseller',
+        level: String(f.level || 'reseller').toLowerCase(),
         phone: f.phone,
         city: f.city,
         password: tempPassword,
         is_active: true
-      }).then((res) => {
-        const serverUser = res?.data;
-        if (serverUser?.id) {
-          newM.backendId = serverUser.id;
-          commitMitra((prev) => prev.map((x) => x.id === newM.id ? { ...x, backendId: serverUser.id } : x));
-        }
-      }).catch((err) => {
-        toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
       });
+    } catch (err) {
+      return serverFail(err, `Membuat akun mitra ${f.name}`);
     }
+    const row = created?.data;
+    commitMitra((prev) => [
+      {
+        ...f,
+        id: row?.id != null ? `m-${row.id}` : uid('m'),
+        backendId: row?.id ?? null,
+        active: true,
+        deposit: 0,
+        joinedAt: todayISO(),
+        createdBy: me.name
+      },
+      ...prev
+    ]);
+    setMitraModal(null);
+    setCredential({
+      title: 'Akun mitra dibuat',
+      name: f.name,
+      email: String(f.email || '').trim(),
+      password: tempPassword,
+      note: 'Kirimkan kredensial ini ke mitra. Password hanya ditampilkan sekali.'
+    });
+    toast(`Akun mitra ${f.name} tersimpan di database.`);
   };
 
-  const toggleMitra = (m) => {
+  const toggleMitra = async (m) => {
+    const targetId = dbId(m);
+    if (!targetId) return notOnServer(`Mitra ${m.name}`);
+    try {
+      await api.management.updateUser(targetId, { is_active: !m.active });
+    } catch (err) {
+      return serverFail(err, `Mengubah status mitra ${m.name}`);
+    }
     commitMitra((prev) => prev.map((x) => (x.id === m.id ? { ...x, active: !x.active } : x)));
     toast(`${m.name} ${m.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
   };
@@ -1370,70 +1904,82 @@ export default function MarketingDashboard({
       message: `Hapus mitra "${m.name}"? Akses login dan data akun akan dihapus dari sistem dan database.`,
       confirmLabel: 'Hapus Mitra',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetId = dbId(m);
+        if (!targetId) {
+          commitMitra((prev) => prev.filter((x) => x.id !== m.id));
+          setConfirmModal(null);
+          return notOnServer(`Mitra ${m.name}`);
+        }
+        try {
+          await api.management.deleteUser(targetId);
+        } catch (err) {
+          return serverFail(err, `Menghapus mitra ${m.name}`);
+        }
         commitMitra((prev) => prev.filter((x) => x.id !== m.id));
         setConfirmModal(null);
         toast(`Mitra ${m.name} dihapus.`, 'warning');
-        const targetId = m.backendId || (typeof m.id === 'number' ? m.id : String(m.id || '').replace(/\D/g, ''));
-        if (targetId) {
-          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
-        }
       }
     });
   };
 
-  const saveTeam = (e) => {
+  const saveTeam = async (e) => {
     e.preventDefault();
     const f = teamModal.form;
     if (!f.name?.trim() || !f.email?.trim()) return toast('Nama dan email wajib diisi.', 'error');
     if (f.role === 'owner') return toast('Peran owner hanya dapat dibuat dari portal owner.', 'error');
     const tempPassword = `Tim#${Math.floor(1000 + Math.random() * 9000)}`;
-    const newU = {
-      id: uid('u'),
-      name: f.name.trim(),
-      email: f.email.trim(),
-      role: f.role,
-      phone: f.phone,
-      active: true,
-      createdAt: todayISO(),
-      createdBy: me.name
-    };
-    commitTeam((prev) => [newU, ...prev]);
+    let created;
+    try {
+      created = await api.management.createUser({
+        nama: f.name.trim(),
+        email: f.email.trim(),
+        role: f.role,
+        phone: f.phone,
+        password: tempPassword,
+        is_active: true
+      });
+    } catch (err) {
+      return serverFail(err, `Membuat akun tim ${f.name}`);
+    }
+    const row = created?.data;
+    commitTeam((prev) => [
+      {
+        id: row?.id != null ? `u-${row.id}` : uid('u'),
+        backendId: row?.id ?? null,
+        name: f.name.trim(),
+        email: f.email.trim(),
+        role: f.role,
+        phone: f.phone,
+        active: true,
+        createdAt: todayISO(),
+        createdBy: me.name
+      },
+      ...prev
+    ]);
     setTeamModal(null);
     setCredential({
       title: 'Akun tim admin dibuat',
-      name: newU.name,
-      email: newU.email,
+      name: f.name.trim(),
+      email: f.email.trim(),
       password: tempPassword,
-      note: `Peran: ${roleLabel(newU.role)}. Password hanya ditampilkan sekali.`
+      note: `Peran: ${roleLabel(f.role)}. Password hanya ditampilkan sekali.`
     });
-    toast(`Akun tim ${newU.name} berhasil disimpan ke database.`);
-
-    api.management.createUser({
-      nama: newU.name,
-      email: newU.email,
-      role: newU.role,
-      phone: newU.phone,
-      password: tempPassword,
-      is_active: true
-    }).then((res) => {
-      const serverUser = res?.data;
-      if (serverUser?.id) {
-        newU.backendId = serverUser.id;
-        commitTeam((prev) => prev.map((x) => x.id === newU.id ? { ...x, backendId: serverUser.id } : x));
-      }
-    }).catch((err) => {
-      toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
-    });
+    toast(`Akun tim ${f.name} tersimpan di database.`);
   };
 
-  const toggleTeam = (u) => {
+  const toggleTeam = async (u) => {
     if (u.role === 'owner') return toast('Akun owner tidak dapat dinonaktifkan dari portal purchasing.', 'error');
     if (u.id === me.id) return toast('Tidak dapat menonaktifkan akun sendiri.', 'error');
+    const targetId = dbId(u);
+    if (!targetId) return notOnServer(`Akun ${u.name}`);
+    try {
+      await api.management.updateUser(targetId, { is_active: !u.active });
+    } catch (err) {
+      return serverFail(err, `Mengubah status akun ${u.name}`);
+    }
     commitTeam((prev) => prev.map((x) => (x.id === u.id ? { ...x, active: !x.active } : x)));
     toast(`${u.name} ${u.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
-    const targetId = u.backendId || u.id;
-    api.management.updateUser(targetId, { is_active: !u.active }).catch(() => {});
   };
 
   const deleteTeam = (u) => {
@@ -1444,14 +1990,21 @@ export default function MarketingDashboard({
       message: `Hapus akun "${u.name}" (${roleLabel(u.role)})? Akses pengguna akan dicabut dari sistem dan database.`,
       confirmLabel: 'Hapus Akun',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetId = dbId(u);
+        if (!targetId) {
+          commitTeam((prev) => prev.filter((x) => x.id !== u.id));
+          setConfirmModal(null);
+          return notOnServer(`Akun ${u.name}`);
+        }
+        try {
+          await api.management.deleteUser(targetId);
+        } catch (err) {
+          return serverFail(err, `Menghapus akun ${u.name}`);
+        }
         commitTeam((prev) => prev.filter((x) => x.id !== u.id));
         setConfirmModal(null);
         toast(`Akun tim ${u.name} berhasil dihapus.`, 'warning');
-        const targetId = u.backendId || (typeof u.id === 'number' ? u.id : String(u.id || '').replace(/\D/g, ''));
-        if (targetId) {
-          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
-        }
       }
     });
   };
@@ -1460,49 +2013,120 @@ export default function MarketingDashboard({
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) return toast('Ukuran berkas maksimal 2 MB.', 'error');
     const reader = new FileReader();
-    reader.onload = () => setProofForm((prev) => ({ ...prev, proof: String(reader.result) }));
+    reader.onload = () =>
+      setProofForm((prev) => ({ ...prev, proof: String(reader.result), proofFile: file }));
     reader.readAsDataURL(file);
   };
 
-  const submitProofForm = (e) => {
+  const resetProofForm = () =>
+    setProofForm((prev) => ({
+      ...prev,
+      nominal: '',
+      invoice: '',
+      refNo: '',
+      proof: '',
+      proofFile: null
+    }));
+
+  const submitProofForm = async (e) => {
     e.preventDefault();
     const f = proofForm;
     const nominal = num(f.nominal);
     if (!f.mitraId) return toast('Pilih mitra.', 'error');
     if (!nominal) return toast('Nominal harus lebih dari 0.', 'error');
     if (f.kind !== 'Deposit' && !f.invoice) return toast('Pilih invoice terkait.', 'error');
-    const bank = bankAccounts.find((b) => b.id === f.bankId);
+    if (!f.proofFile) return toast('Berkas bukti transfer wajib dipilih.', 'error');
+
     const m = mitra.find((x) => x.id === f.mitraId);
+    if (!m) return toast('Mitra tidak ditemukan.', 'error');
+    const mitraDbId = dbId(m);
+    if (!mitraDbId) return notOnServer(`Mitra ${m.name}`);
+    const bank = bankAccounts.find((b) => b.id === f.bankId);
+
+    let proofPath = '';
+    try {
+      const uploaded = await api.management.uploadFile(f.proofFile, 'proof');
+      proofPath = uploaded?.data?.path || '';
+    } catch (err) {
+      return serverFail(err, 'Mengunggah bukti transfer');
+    }
+    if (!proofPath) return toast('Bukti transfer tidak tersimpan di server.', 'error');
 
     if (f.kind === 'Deposit') {
+      let created;
+      try {
+        created = await api.management.createDeposit({
+          user_id: mitraDbId,
+          bank_account_id: dbId(bank) || null,
+          amount: nominal,
+          proof_url: proofPath,
+          description: f.refNo ? `Ref ${f.refNo} — input purchasing` : 'Input manual admin purchasing'
+        });
+      } catch (err) {
+        return serverFail(err, `Deposit ${m.name}`);
+      }
+      const row = created?.data;
       commitDeposits((prev) => [
         {
-          id: uid('dep'),
+          id: row?.id != null ? `dep-${row.id}` : uid('dep'),
+          backendId: row?.id ?? null,
+          mitraId: m.id,
+          mitraName: m.name,
           date: f.date,
-          mitraId: m?.id,
-          mitraName: m?.name,
           nominal,
-          bank: bank?.bank || '-',
-          proof: f.proof,
+          bank: row?.bank || bank?.bank || '-',
+          accountNo: row?.bank_account || '',
+          proof: mediaUrl(row?.proof_url || proofPath),
           status: PAY.MENUNGGU,
           verifiedBy: '',
-          note: f.refNo || 'Input manual admin purchasing'
+          note: row?.description || f.refNo || 'Input manual admin purchasing'
         },
         ...prev
       ]);
-      toast(`Deposit ${rp(nominal)} dicatat dan menunggu verifikasi finance.`);
-    } else {
-      const o = orders.find((x) => x.invoice === f.invoice);
-      if (!o) return toast('Invoice tidak ditemukan.', 'error');
-      const statusKey = { DP: 'dpStatus', Pelunasan: 'pelunasanStatus', Ongkir: 'ongkirStatus' }[f.kind];
-      const proofKey = { DP: 'dpProof', Pelunasan: 'pelunasanProof', Ongkir: 'ongkirProof' }[f.kind];
-      patchOrder(o.invoice, { [statusKey]: PAY.MENUNGGU, [proofKey]: f.proof });
-      toast(`Bukti ${f.kind} ${o.invoice} dicatat. Menunggu verifikasi finance.`);
+      toast(`Deposit ${rp(nominal)} ${m.name} tersimpan dan menunggu verifikasi finance.`);
+      resetProofForm();
+      return;
     }
-    setProofForm((prev) => ({ ...prev, nominal: '', invoice: '', refNo: '', proof: '' }));
+
+    const o = orders.find((x) => x.invoice === f.invoice);
+    if (!o) return toast('Invoice tidak ditemukan.', 'error');
+    const statusKey = { DP: 'dpStatus', Pelunasan: 'pelunasanStatus', Ongkir: 'ongkirStatus' }[f.kind];
+    const proofKey = { DP: 'dpProof', Pelunasan: 'pelunasanProof', Ongkir: 'ongkirProof' }[f.kind];
+
+    try {
+      await api.management.createPayment({
+        invoice_number: o.invoiceNumber || '',
+        order_number: o.invoice,
+        installment_id:
+          f.kind === 'DP' ? o.dpInstallmentId || null : f.kind === 'Pelunasan' ? o.pelunasanInstallmentId || null : null,
+        stage: f.kind,
+        amount: nominal,
+        proof_url: proofPath
+      });
+    } catch (err) {
+      return serverFail(err, `Bukti ${f.kind} ${o.invoice}`);
+    }
+
+    commitOrders((prev) =>
+      prev.map((x) =>
+        x.invoice === o.invoice ? { ...x, [statusKey]: PAY.MENUNGGU, [proofKey]: mediaUrl(proofPath) } : x
+      )
+    );
+    toast(`Bukti ${f.kind} ${o.invoice} tersimpan. Menunggu verifikasi finance.`);
+    resetProofForm();
   };
 
-  const reviewPR = (req, decision, note) => {
+  const reviewPR = async (req, decision, note) => {
+    const targetId = dbId(req);
+    if (!targetId) return notOnServer(`Pengajuan bayar ${req.code}`);
+    try {
+      await api.management.updatePaymentRequest(targetId, {
+        marketing_decision: decision,
+        marketing_note: note || null
+      });
+    } catch (err) {
+      return serverFail(err, `Review pengajuan ${req.code}`);
+    }
     commitPaymentRequests((prev) =>
       prev.map((r) =>
         r.id === req.id
@@ -1523,10 +2147,16 @@ export default function MarketingDashboard({
     );
   };
 
-  const saveSettingsForm = (e) => {
+  const saveSettingsForm = async (e) => {
     e.preventDefault();
-    commitSettings((prev) => ({ ...prev, ...settingsForm }));
-    toast('Pengaturan purchasing disimpan.');
+    let saved;
+    try {
+      saved = await api.management.updateSettings(settingsForm);
+    } catch (err) {
+      return serverFail(err, 'Menyimpan pengaturan toko');
+    }
+    commitSettings((prev) => ({ ...prev, ...(saved?.data || {}), ...settingsForm }));
+    toast('Pengaturan purchasing tersimpan di database.');
   };
 
   const exportOrders = () => {
@@ -1640,6 +2270,7 @@ export default function MarketingDashboard({
     setProductModal({
       mode: 'edit',
       id: p.id,
+      product: p,
       form: {
         title: p.title,
         brand: p.brand,
@@ -1655,6 +2286,9 @@ export default function MarketingDashboard({
         originalPrice: p.originalPrice || '',
         terminCount: stages.length === 2 ? 2 : 3,
         stages,
+        paymentStages: stages,
+        variants: p.variants || [],
+        options: p.options,
         modelsText: (p.options?.models || []).map((m) => m.name).join('\n'),
         sizesText: (p.options?.sizes || []).join(', '),
         colorsText: (p.options?.colors || []).map((c) => c.name).join(', ')
@@ -2846,7 +3480,6 @@ export default function MarketingDashboard({
                     options={[
                       { value: 'all', label: 'Semua', count: catalogCounts.all },
                       { value: 'open', label: 'PO Dibuka', count: catalogCounts.open },
-                      { value: 'sale', label: '🔥 Sale', count: catalogCounts.sale },
                       { value: 'closing', label: 'Tutup Hari Ini', count: catalogCounts.closing },
                       { value: 'closed', label: 'Arsip / Ditutup', count: catalogCounts.closed }
                     ]}
@@ -2937,7 +3570,7 @@ export default function MarketingDashboard({
                   <span className="font-semibold text-gray-400">Filter Aktif:</span>
                   {catalogStatus !== 'all' && (
                     <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 px-2 py-0.5 rounded-md font-medium">
-                      Status: {catalogStatus === 'open' ? 'PO Dibuka' : catalogStatus === 'sale' ? '🔥 Sale' : catalogStatus === 'closing' ? 'Tutup Hari Ini' : 'Arsip'}
+                      Status: {catalogStatus === 'open' ? 'PO Dibuka' : catalogStatus === 'closing' ? 'Tutup Hari Ini' : 'Arsip'}
                       <button onClick={() => setCatalogStatus('all')} className="hover:text-rose-600 font-bold ml-0.5">×</button>
                     </span>
                   )}
@@ -3852,17 +4485,12 @@ export default function MarketingDashboard({
                         className="block w-full text-[11px] text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-semibold file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
                       />
                       <div className="flex items-center gap-3 flex-wrap">
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => setProofForm((prev) => ({ ...prev, proof: SAMPLE_PROOF_2 }))}
-                        >
-                          Gunakan contoh bukti
-                        </Button>
                         {proofForm.proof && (
                           <ProofThumb
-                            src={proofForm.proof}
-                            onClick={() => setProofView({ src: proofForm.proof, title: 'Pratinjau bukti transfer' })}
+                            src={mediaUrl(proofForm.proof)}
+                            onClick={() =>
+                              setProofView({ src: mediaUrl(proofForm.proof), title: 'Pratinjau bukti transfer' })
+                            }
                             label="Pratinjau"
                           />
                         )}
@@ -4253,73 +4881,217 @@ export default function MarketingDashboard({
         )}
 
         {/* ============================ REKENING ============================ */}
-        {activeMenu === 'rekening' && (
-          <>
-            <PageHead
-              title="Master Rekening Bank"
-              desc="Rekening resmi tujuan transfer DP, pelunasan, dan ongkir. Rekening aktif tampil di invoice, rincian tagihan, dan halaman pembayaran mitra."
-              badge={<Badge tone="gray">{bankAccounts.filter((b) => b.active).length} aktif</Badge>}
-              actions={
-                <Button
-                  icon="plus"
-                  onClick={() =>
-                    setBankModal({ mode: 'create', form: { bank: '', accountNo: '', holder: '', active: true } })
-                  }
-                >
-                  Rekening Baru
-                </Button>
-              }
-            />
+        {activeMenu === 'rekening' && (() => {
+          const publicBanks = bankAccounts.filter((b) => (b.type || 'public') === 'public');
+          const pengajuanBanks = bankAccounts.filter((b) => b.type === 'pengajuan');
+          const currentList = bankTab === 'public' ? publicBanks : pengajuanBanks;
 
-            <Card title="Daftar Rekening" subtitle="Hanya rekening aktif yang dicetak pada invoice mitra.">
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Bank</th>
-                    <th className={TH}>Nomor Rekening</th>
-                    <th className={TH}>Atas Nama</th>
-                    <th className={`${TH} text-center`}>Status</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {bankAccounts.map((b) => (
-                    <tr key={b.id} className="hover:bg-gray-50/70">
-                      <td className={`${TD} font-semibold text-gray-900`}>{b.bank}</td>
-                      <td className={`${TD} font-mono whitespace-nowrap`}>{b.accountNo}</td>
-                      <td className={TD}>{b.holder}</td>
-                      <td className={`${TD} text-center`}>
-                        <Badge tone={b.active ? 'emerald' : 'gray'}>{b.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                      </td>
-                      <td className={`${TD} text-right`}>
-                        <div className="inline-flex items-center gap-1">
-                          <Button size="xs" variant="outline" onClick={() => toggleBank(b)}>
-                            {b.active ? 'Nonaktifkan' : 'Aktifkan'}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            icon="edit"
-                            onClick={() => setBankModal({ mode: 'edit', id: b.id, form: { ...b } })}
-                          >
-                            Ubah
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
-              {bankAccounts.length === 0 && (
-                <EmptyState
-                  title="Belum ada rekening"
-                  desc="Tambahkan rekening tujuan transfer agar mitra tahu ke mana harus membayar."
-                  icon="card"
+          return (
+            <>
+              <PageHead
+                title="Master Rekening Bank"
+                desc={
+                  bankTab === 'public'
+                    ? 'Kelola rekening resmi toko untuk pembayaran checkout mitra, DP, pelunasan, dan faktur invoice.'
+                    : 'Kelola rekening transfer vendor / supplier untuk tujuan pengajuan dana ke Owner.'
+                }
+                badge={
+                  <Badge tone={bankTab === 'public' ? 'emerald' : 'amber'}>
+                    {currentList.filter((b) => b.active).length} aktif / {currentList.length} total
+                  </Badge>
+                }
+                actions={
+                  <Button
+                    icon="plus"
+                    variant={bankTab === 'pengajuan' ? 'gold' : 'primary'}
+                    onClick={() =>
+                      setBankModal({
+                        mode: 'create',
+                        form: {
+                          bank: '',
+                          accountNo: '',
+                          holder: '',
+                          type: bankTab,
+                          purpose: bankTab === 'public' ? 'Penerimaan Pembayaran Mitra' : '',
+                          active: true
+                        }
+                      })
+                    }
+                  >
+                    {bankTab === 'pengajuan' ? 'Rekening Pengajuan Baru' : 'Rekening Publik Baru'}
+                  </Button>
+                }
+              />
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <Segmented
+                  value={bankTab}
+                  onChange={setBankTab}
+                  options={[
+                    {
+                      value: 'public',
+                      label: 'Rekening Publik Toko',
+                      count: publicBanks.length
+                    },
+                    {
+                      value: 'pengajuan',
+                      label: 'Rekening Pengajuan Owner',
+                      count: pengajuanBanks.length
+                    }
+                  ]}
                 />
-              )}
-            </Card>
-          </>
-        )}
+              </div>
+
+              <Card>
+                <TableWrap>
+                  <thead className="bg-gray-50 border-b border-gray-100">
+                    <tr>
+                      <th className={TH}>Bank</th>
+                      <th className={TH}>Nomor Rekening</th>
+                      <th className={TH}>Atas Nama</th>
+                      <th className={TH}>{bankTab === 'pengajuan' ? 'Brand / Peruntukan Vendor' : 'Label / Kegunaan'}</th>
+                      <th className={`${TH} text-center`}>Status</th>
+                      <th className={`${TH} text-right`}>Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {currentList.map((b) => {
+                      const isEditing = inlineBankId === b.id;
+
+                      if (isEditing) {
+                        return (
+                          <tr key={b.id} className="bg-amber-50/60">
+                            <td className={TD}>
+                              <input
+                                type="text"
+                                value={inlineBankForm.bank}
+                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, bank: e.target.value }))}
+                                placeholder="Bank"
+                                className="w-24 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#541221] bg-white font-semibold"
+                              />
+                            </td>
+                            <td className={TD}>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={inlineBankForm.accountNo}
+                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, accountNo: e.target.value.replace(/\D/g, '') }))}
+                                placeholder="No Rekening"
+                                className="w-36 font-mono px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#541221] bg-white"
+                              />
+                            </td>
+                            <td className={TD}>
+                              <input
+                                type="text"
+                                value={inlineBankForm.holder}
+                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, holder: e.target.value }))}
+                                placeholder="Atas Nama"
+                                className="w-full min-w-[140px] px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#541221] bg-white"
+                              />
+                            </td>
+                            <td className={TD}>
+                              <input
+                                type="text"
+                                value={inlineBankForm.purpose}
+                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, purpose: e.target.value }))}
+                                placeholder={bankTab === 'pengajuan' ? 'Brand / Peruntukan Vendor' : 'Label / Kegunaan'}
+                                className="w-full min-w-[140px] px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#541221] bg-white"
+                              />
+                            </td>
+                            <td className={`${TD} text-center`}>
+                              <label className="inline-flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={inlineBankForm.active}
+                                  onChange={(e) => setInlineBankForm((prev) => ({ ...prev, active: e.target.checked }))}
+                                  className="rounded border-gray-300 text-[#541221]"
+                                />
+                                <span className="text-[11px] text-gray-600 font-medium">{inlineBankForm.active ? 'Aktif' : 'Nonaktif'}</span>
+                              </label>
+                            </td>
+                            <td className={`${TD} text-right`}>
+                              <div className="inline-flex items-center gap-1">
+                                <Button size="xs" variant="primary" onClick={() => saveInlineEditBank(b)}>
+                                  Simpan
+                                </Button>
+                                <Button size="xs" variant="outline" onClick={() => setInlineBankId(null)}>
+                                  Batal
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return (
+                        <tr key={b.id} className="hover:bg-gray-50/70">
+                          <td className={`${TD} font-semibold text-gray-900`}>{b.bank}</td>
+                          <td className={`${TD} font-mono whitespace-nowrap`}>{b.accountNo}</td>
+                          <td className={TD}>{b.holder}</td>
+                          <td className={`${TD} text-xs text-gray-600`}>
+                            {b.type === 'pengajuan' && Array.isArray(b.brands) && b.brands.length > 0 ? (
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap gap-1">
+                                  {b.brands.map((br) => (
+                                    <span
+                                      key={br}
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-50 text-rose-900 border border-rose-200"
+                                    >
+                                      {br}
+                                    </span>
+                                  ))}
+                                </div>
+                                {b.purpose && !b.purpose.startsWith('Brand:') && (
+                                  <p className="text-[11px] text-gray-500">{b.purpose}</p>
+                                )}
+                              </div>
+                            ) : (
+                              b.purpose || (b.type === 'pengajuan' ? 'Vendor / Operasional' : 'Penerimaan Mitra')
+                            )}
+                          </td>
+                          <td className={`${TD} text-center`}>
+                            <Badge tone={b.active ? (bankTab === 'public' ? 'emerald' : 'amber') : 'gray'}>
+                              {b.active ? 'Aktif' : 'Nonaktif'}
+                            </Badge>
+                          </td>
+                          <td className={`${TD} text-right`}>
+                            <div className="inline-flex items-center gap-1">
+                              <Button size="xs" variant="outline" onClick={() => startInlineEditBank(b)}>
+                                Ubah
+                              </Button>
+                              <Button size="xs" variant="outline" onClick={() => toggleBank(b)}>
+                                {b.active ? 'Nonaktifkan' : 'Aktifkan'}
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="danger"
+                                icon="trash"
+                                onClick={() => deleteBank(b)}
+                              >
+                                Hapus
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </TableWrap>
+                {currentList.length === 0 && (
+                  <EmptyState
+                    title={bankTab === 'public' ? 'Belum ada rekening publik' : 'Belum ada rekening pengajuan vendor'}
+                    desc={
+                      bankTab === 'public'
+                        ? 'Tambahkan rekening toko agar mitra dapat melakukan transfer pembayaran pesanan.'
+                        : 'Tambahkan rekening supplier atau vendor untuk tujuan pengajuan dana ke Owner.'
+                    }
+                    icon="card"
+                  />
+                )}
+              </Card>
+            </>
+          );
+        })()}
 
         {/* ============================ EKSPEDISI =========================== */}
         {activeMenu === 'ekspedisi' && (
@@ -4373,6 +5145,14 @@ export default function MarketingDashboard({
                           >
                             Ubah
                           </Button>
+                          <Button
+                            size="xs"
+                            variant="danger"
+                            icon="trash"
+                            onClick={() => deleteCourier(c)}
+                          >
+                            Hapus
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -4387,136 +5167,6 @@ export default function MarketingDashboard({
                 />
               )}
             </Card>
-          </>
-        )}
-
-        {/* ============================ PENGATURAN ========================== */}
-        {activeMenu === 'pengaturan' && (
-          <>
-            <PageHead
-              title="Pengaturan Purchasing"
-              desc="Atur identitas toko, tempo pembayaran, dan template pesan WhatsApp. Rekening serta ekspedisi dikelola pada menu Publikasi Toko."
-              badge={<Badge tone="red">{roleLabel('marketing')}</Badge>}
-            />
-
-            <div className="grid lg:grid-cols-3 gap-4">
-              <Card
-                title="Identitas & Kebijakan"
-                subtitle="Dipakai pada invoice, pesan WhatsApp, dan katalog"
-                className="lg:col-span-2"
-              >
-                <form onSubmit={saveSettingsForm} className="p-4 sm:p-5 space-y-4">
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field label="Nama Toko">
-                      <Input
-                        value={settingsForm.shopName || ''}
-                        onChange={(e) =>
-                          setSettingsForm((prev) => ({ ...prev, shopName: e.target.value }))
-                        }
-                      />
-                    </Field>
-                    <Field label="Nama Pengirim">
-                      <Input
-                        value={settingsForm.senderName || ''}
-                        onChange={(e) =>
-                          setSettingsForm((prev) => ({ ...prev, senderName: e.target.value }))
-                        }
-                      />
-                    </Field>
-                    <Field label="DP (%)">
-                      <Input
-                        type="number"
-                        min="10"
-                        max="100"
-                        value={settingsForm.dpPct || ''}
-                        onChange={(e) =>
-                          setSettingsForm((prev) => ({ ...prev, dpPct: Number(e.target.value) }))
-                        }
-                      />
-                    </Field>
-                    <Field label="Tempo Pelunasan (hari)">
-                      <Input
-                        type="number"
-                        min="1"
-                        value={settingsForm.pelunasanDueDays || ''}
-                        onChange={(e) =>
-                          setSettingsForm((prev) => ({
-                            ...prev,
-                            pelunasanDueDays: Number(e.target.value)
-                          }))
-                        }
-                      />
-                    </Field>
-                    <Field label="Tempo Ongkir (hari)">
-                      <Input
-                        type="number"
-                        min="1"
-                        value={settingsForm.ongkirDueDays || ''}
-                        onChange={(e) =>
-                          setSettingsForm((prev) => ({ ...prev, ongkirDueDays: Number(e.target.value) }))
-                        }
-                      />
-                    </Field>
-                    <Field label="Instagram">
-                      <Input
-                        value={settingsForm.instagram || ''}
-                        onChange={(e) =>
-                          setSettingsForm((prev) => ({ ...prev, instagram: e.target.value }))
-                        }
-                      />
-                    </Field>
-                  </div>
-                  <Field label="Footer Pesan WhatsApp" hint="Ditambahkan di setiap pesan otomatis.">
-                    <Textarea
-                      rows={2}
-                      value={settingsForm.waFooter || ''}
-                      onChange={(e) =>
-                        setSettingsForm((prev) => ({ ...prev, waFooter: e.target.value }))
-                      }
-                    />
-                  </Field>
-                  <div className="flex justify-end">
-                    <Button type="submit" icon="check">
-                      Simpan Pengaturan
-                    </Button>
-                  </div>
-                </form>
-              </Card>
-
-              <div className="space-y-4">
-                <Card title="Rekening Aktif" subtitle="Dikelola di menu Rekening Bank">
-                  <div className="divide-y divide-gray-100">
-                    {bankAccounts.filter((b) => b.active).map((b) => (
-                      <div key={b.id} className="px-4 py-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-xs font-bold text-gray-900">{b.bank}</p>
-                          <Badge tone="emerald">Aktif</Badge>
-                        </div>
-                        <p className="text-[11px] font-mono text-gray-600">{b.accountNo}</p>
-                        <p className="text-[10px] text-gray-400">{b.holder}</p>
-                      </div>
-                    ))}
-                    {bankAccounts.filter((b) => b.active).length === 0 && (
-                      <p className="px-4 py-3 text-[11px] text-gray-400">Belum ada rekening aktif.</p>
-                    )}
-                  </div>
-                </Card>
-
-                <Card title="Ekspedisi Terdaftar" subtitle="Dipakai saat input ongkir">
-                  <div className="divide-y divide-gray-100">
-                    {couriers.map((c) => (
-                      <div key={c.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
-                        <div>
-                          <p className="text-[11px] font-semibold text-gray-800">{c.name}</p>
-                          <p className="text-[10px] text-gray-400">{c.note}</p>
-                        </div>
-                        <Badge tone={c.active ? 'teal' : 'gray'}>{c.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-              </div>
-            </div>
           </>
         )}
       </DashboardShell>
@@ -4664,425 +5314,31 @@ export default function MarketingDashboard({
 
       {/* ============================= MODALS ============================= */}
       {productModal && (
-        <Modal
-          title={productModal.mode === 'edit' ? 'Edit Produk PO' : 'Produk PO Baru'}
-          subtitle="Produk tampil di katalog mitra setelah varian ditambahkan."
-          size="lg"
+        <ProductCatalogModal
+          isOpen={!!productModal}
+          mode={productModal.mode}
+          initialData={productModal.product || productModal.form}
+          brands={brands}
+          categories={categories}
+          poBatches={poBatches}
+          onCreateBatch={async (batchPayload) => {
+            try {
+              const res = await api.management.createBatch(batchPayload);
+              if (res?.data) {
+                setPoBatches((prev) => [...prev, res.data]);
+                return res.data;
+              }
+            } catch (err) {
+              console.error('Gagal membuat batch baru:', err);
+              throw err;
+            }
+            return null;
+          }}
           onClose={() => setProductModal(null)}
-          footer={
-            <>
-              <Button variant="outline" onClick={() => setProductModal(null)}>
-                Batal
-              </Button>
-              <Button type="submit" form="product-form" icon="check">
-                Simpan Produk
-              </Button>
-            </>
-          }
-        >
-          <form id="product-form" onSubmit={saveProduct} className="space-y-4">
-            <section className="rounded-xl border border-gray-200 p-3 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">1</span>
-                <div>
-                  <p className="text-[11px] font-bold text-gray-800">Input Brand</p>
-                  <p className="text-[10px] text-gray-400">Produk langsung masuk ke brand & index publish brand tersebut.</p>
-                </div>
-              </div>
-              <Field label="Brand" required>
-                <Select
-                  value={productModal.form.brand || ''}
-                  onChange={(e) =>
-                    setProductModal((prev) => ({ ...prev, form: { ...prev.form, brand: e.target.value } }))
-                  }
-                >
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.name}>
-                      {b.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </section>
-
-            <section className="rounded-xl border border-gray-200 p-3 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">2</span>
-                <div>
-                  <p className="text-[11px] font-bold text-gray-800">Input Produk</p>
-                  <p className="text-[10px] text-gray-400">Nama, kategori, dan satu deskripsi untuk halaman produk.</p>
-                </div>
-              </div>
-              <div className="grid sm:grid-cols-2 gap-3">
-                <Field label="Nama Produk" required>
-                  <Input
-                    value={productModal.form.title || ''}
-                    placeholder="Contoh: Gamis Almira"
-                    onChange={(e) =>
-                      setProductModal((prev) => ({ ...prev, form: { ...prev.form, title: e.target.value } }))
-                    }
-                  />
-                </Field>
-                <Field label="Kategori" hint="Diambil dari master Kategori Produk." required>
-                  <Select
-                    value={productModal.form.category || ''}
-                    onChange={(e) =>
-                      setProductModal((prev) => ({ ...prev, form: { ...prev.form, category: e.target.value } }))
-                    }
-                  >
-                    <option value="">Pilih kategori…</option>
-                    {[...new Set([
-                      ...categories,
-                      ...(productModal.form.category ? [productModal.form.category] : [])
-                    ])].map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                <Field label="Estimasi Ready">
-                  <Input
-                    value={productModal.form.readyEstimate || ''}
-                    placeholder="Desember 2026"
-                    onChange={(e) =>
-                      setProductModal((prev) => ({
-                        ...prev,
-                        form: { ...prev.form, readyEstimate: e.target.value }
-                      }))
-                    }
-                  />
-                </Field>
-              </div>
-              <Field label="Deskripsi Produk" hint="Satu deskripsi ini yang tampil di halaman detail produk.">
-                <Textarea
-                  rows={3}
-                  value={productModal.form.description || ''}
-                  onChange={(e) =>
-                    setProductModal((prev) => ({
-                      ...prev,
-                      form: { ...prev.form, description: e.target.value }
-                    }))
-                  }
-                />
-              </Field>
-            </section>
-
-            <section className="rounded-xl border border-gray-200 p-3 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">3</span>
-                <div>
-                  <p className="text-[11px] font-bold text-gray-800">Foto / Gambar Produk Katalog</p>
-                  <p className="text-[10px] text-gray-400">Pilih file foto dari laptop/HP atau masukkan URL gambar.</p>
-                </div>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-4 items-start">
-                <div className="w-28 h-28 rounded-xl border border-gray-200 bg-stone-50 overflow-hidden shrink-0 flex items-center justify-center relative group">
-                  {productModal.form.image ? (
-                    <>
-                      <img src={productModal.form.image} alt="Preview" className="w-full h-full object-cover" />
-                      <button
-                        type="button"
-                        onClick={() => setProductModal((prev) => ({ ...prev, form: { ...prev.form, image: '' } }))}
-                        className="absolute top-1 right-1 bg-black/70 hover:bg-black text-white rounded-full p-1 text-[10px] shadow"
-                        title="Hapus foto"
-                      >
-                        ✕
-                      </button>
-                    </>
-                  ) : (
-                    <div className="text-center p-2">
-                      <span className="text-3xl block mb-1">🖼️</span>
-                      <span className="text-[9px] text-gray-400 font-medium">Belum ada foto</span>
-                    </div>
-                  )}
-                </div>
-                <div className="flex-1 w-full space-y-2">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">Upload File Foto</label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onloadend = () => {
-                            setProductModal((prev) => ({
-                              ...prev,
-                              form: { ...prev.form, image: reader.result }
-                            }));
-                          };
-                          reader.readAsDataURL(file);
-                        }
-                      }}
-                      className="block w-full text-xs text-stone-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-stone-900 file:text-white hover:file:bg-black cursor-pointer border border-gray-200 rounded-lg p-1 bg-stone-50"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">Atau Masukkan URL Gambar Web</label>
-                    <Input
-                      type="url"
-                      value={productModal.form.image || ''}
-                      placeholder="https://.../gambar-produk.jpg"
-                      onChange={(e) =>
-                        setProductModal((prev) => ({ ...prev, form: { ...prev.form, image: e.target.value } }))
-                      }
-                    />
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-xl border border-gray-200 p-3 space-y-3 bg-gradient-to-r from-red-50/40 via-amber-50/20 to-transparent">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">4</span>
-                  <div>
-                    <p className="text-[11px] font-bold text-gray-800">Status Promo & Sale Katalog</p>
-                    <p className="text-[10px] text-gray-500">Tandai apakah produk ini masuk ke etalase SALE di beranda mitra.</p>
-                  </div>
-                </div>
-                <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-xs hover:border-red-300 transition">
-                  <input
-                    type="checkbox"
-                    checked={!!productModal.form.isSale}
-                    onChange={(e) =>
-                      setProductModal((prev) => ({
-                        ...prev,
-                        form: {
-                          ...prev.form,
-                          isSale: e.target.checked,
-                          discountPercent: e.target.checked ? (prev.form.discountPercent || 15) : 0
-                        }
-                      }))
-                    }
-                    className="w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500 cursor-pointer"
-                  />
-                  <span className="text-xs font-bold text-gray-800">🔥 Aktifkan Sale</span>
-                </label>
-              </div>
-
-              {productModal.form.isSale && (
-                <div className="p-3 bg-white rounded-lg border border-red-200/80 space-y-3">
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field label="Diskon Sale (%)" hint="Label diskon yang tampil di badge produk.">
-                      <Input
-                        type="number"
-                        min="1"
-                        max="99"
-                        value={productModal.form.discountPercent || ''}
-                        placeholder="Contoh: 15"
-                        onChange={(e) =>
-                          setProductModal((prev) => ({
-                            ...prev,
-                            form: { ...prev.form, discountPercent: e.target.value }
-                          }))
-                        }
-                      />
-                    </Field>
-                    <Field label="Harga Coret / Normal (Rp)" hint="Harga awal sebelum diskon (opsional, otomatis dihitung jika kosong).">
-                      <Input
-                        type="number"
-                        value={productModal.form.originalPrice || ''}
-                        placeholder="Contoh: 250000"
-                        onChange={(e) =>
-                          setProductModal((prev) => ({
-                            ...prev,
-                            form: { ...prev.form, originalPrice: e.target.value }
-                          }))
-                        }
-                      />
-                    </Field>
-                  </div>
-                  <div className="flex items-center gap-2 text-[11px] text-red-700 bg-red-50 p-2 rounded-md">
-                    <span>✨</span>
-                    <span>Produk ini otomatis tampil di <b>Bagian SALE Beranda</b>, memiliki badge <b>SALE {productModal.form.discountPercent || 0}%</b>, dan masuk dalam filter <b>Katalog Sale</b>.</span>
-                  </div>
-                </div>
-              )}
-            </section>
-
-            <section className="rounded-xl border border-gray-200 p-3 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">5</span>
-                <div>
-                  <p className="text-[11px] font-bold text-gray-800">Timeline Open & Close</p>
-                  <p className="text-[10px] text-gray-400">Tanggal buka & tutup PO yang tampil di katalog dan reminder admin.</p>
-                </div>
-              </div>
-              <div className="grid sm:grid-cols-3 gap-3">
-                <Field label="PO Dibuka">
-                  <Input
-                    type="date"
-                    value={productModal.form.openDate || ''}
-                    onChange={(e) =>
-                      setProductModal((prev) => ({ ...prev, form: { ...prev.form, openDate: e.target.value } }))
-                    }
-                  />
-                </Field>
-                <Field label="PO Ditutup">
-                  <Input
-                    type="date"
-                    value={productModal.form.closeDate || ''}
-                    onChange={(e) =>
-                      setProductModal((prev) => ({ ...prev, form: { ...prev.form, closeDate: e.target.value } }))
-                    }
-                  />
-                </Field>
-                <Field label="Jam Tutup PO">
-                  <Input
-                    type="time"
-                    value={productModal.form.closeTime || ''}
-                    onChange={(e) =>
-                      setProductModal((prev) => ({ ...prev, form: { ...prev.form, closeTime: e.target.value } }))
-                    }
-                  />
-                </Field>
-              </div>
-            </section>
-
-            <section className="rounded-xl border border-gray-200 p-3 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">6</span>
-                <div>
-                  <p className="text-[11px] font-bold text-gray-800">Termin Pembayaran</p>
-                  <p className="text-[10px] text-gray-400">Pilih 2x atau 3x, lalu atur porsi & tanggal tiap termin.</p>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {[2, 3].map((count) => (
-                  <button
-                    key={count}
-                    type="button"
-                    onClick={() => setTerminCount(count)}
-                    className={`px-3 h-8 rounded-lg border text-[11px] font-semibold transition ${
-                      productModal.form.terminCount === count
-                        ? 'bg-gray-900 border-gray-900 text-white'
-                        : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'
-                    }`}
-                  >
-                    {count}x Termin
-                  </button>
-                ))}
-                <span
-                  className={`ml-auto text-[10px] font-bold ${
-                    productFormPct === 100 ? 'text-emerald-700' : 'text-rose-600'
-                  }`}
-                >
-                  Total porsi {productFormPct}%{productFormPct === 100 ? '' : ' · harus 100%'}
-                </span>
-              </div>
-              <div className="space-y-2">
-                {productFormStages.map((stage, index) => {
-                  const total = productFormStages.length;
-                  return (
-                    <div
-                      key={index}
-                      className="grid sm:grid-cols-[1.2fr_6rem_1fr] gap-2 sm:items-end"
-                    >
-                      <div>
-                        <p className="text-[10px] font-semibold text-gray-500 mb-1">
-                          {stageLabelOf(index, total)}
-                        </p>
-                        <div className="h-9 rounded-lg border border-gray-200 bg-gray-50 px-2.5 flex items-center text-[11px] font-semibold text-gray-700">
-                          {index === 0 ? 'Uang Muka / DP' : index === total - 1 ? 'Pelunasan' : 'Cicilan'}
-                        </div>
-                      </div>
-                      <Field label="Porsi (%)">
-                        <Input
-                          type="number"
-                          min="0"
-                          max="100"
-                          value={stage.pct ?? ''}
-                          onChange={(e) => changeStage(index, { pct: e.target.value })}
-                        />
-                      </Field>
-                      <Field label="Tanggal">
-                        <Input
-                          type="date"
-                          value={stage.date || ''}
-                          onChange={(e) => changeStage(index, { date: e.target.value })}
-                        />
-                      </Field>
-                    </div>
-                  );
-                })}
-              </div>
-              <p className="text-[10px] text-gray-400">
-                Termin & tanggal tersimpan di produk, tampil di detail pesanan tim setelah checkout, dan dipakai
-                Reminder Admin.
-              </p>
-            </section>
-
-            <section className="rounded-xl border border-gray-200 p-3 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center">7</span>
-                <div>
-                  <p className="text-[11px] font-bold text-gray-800">Opsi & Varian Katalog</p>
-                  <p className="text-[10px] text-gray-400">
-                    Varian dibuat otomatis dari kombinasi model × warna × ukuran yang tampil di index publish.
-                  </p>
-                </div>
-              </div>
-              <Field
-                label="Daftar Model (satu per baris)"
-                hint="Hanya nama model. Harga jual & harga tambahan diisi per varian."
-              >
-                <Textarea
-                  rows={4}
-                  value={productModal.form.modelsText || ''}
-                  placeholder={'MOM DRESS ONLY STYLE 1\nDAD PENDEK\nPASHMINA MOM'}
-                  onChange={(e) =>
-                    setProductModal((prev) => ({ ...prev, form: { ...prev.form, modelsText: e.target.value } }))
-                  }
-                />
-              </Field>
-              <div className="grid sm:grid-cols-2 gap-3">
-                <Field label="Daftar Ukuran (pisahkan koma)">
-                  <Input
-                    value={productModal.form.sizesText || ''}
-                    placeholder="XS, S, M, L, XL, XXL, 3L"
-                    onChange={(e) =>
-                      setProductModal((prev) => ({ ...prev, form: { ...prev.form, sizesText: e.target.value } }))
-                    }
-                  />
-                </Field>
-                <Field label="Daftar Warna (pisahkan koma)">
-                  <Input
-                    value={productModal.form.colorsText || ''}
-                    placeholder="NOIR MATTE, OYSTER WHITE, SANDY COCOA"
-                    onChange={(e) =>
-                      setProductModal((prev) => ({ ...prev, form: { ...prev.form, colorsText: e.target.value } }))
-                    }
-                  />
-                </Field>
-              </div>
-              <p className="text-[10px] text-gray-400">
-                Setelah produk disimpan, modal Varian terbuka otomatis: Warna, Model, Size, Harga, Harga Tambahan,
-                Kuota. Harga jual hanya diisi di varian.
-              </p>
-              {productModal.mode === 'edit' && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    const product = products.find((x) => x.id === productModal.id);
-                    setProductModal(null);
-                    if (product) openVariantModal(product);
-                  }}
-                >
-                  Atur Varian & Harga
-                </Button>
-              )}
-            </section>
-
-            <p className="text-[10px] text-gray-400">
-              Harga varian otomatis dipotong fee mitra sesuai level saat checkout. Diskon brand dari pabrik tidak
-              memotong harga mitra.
-            </p>
-          </form>
-        </Modal>
+          onSave={handleSaveProductFromModal}
+          uploadFile={(file, type) => api.management.uploadFile(file, type)}
+          mediaUrl={mediaUrl}
+        />
       )}
 
       {variantModal &&
@@ -5675,57 +5931,15 @@ export default function MarketingDashboard({
       )}
 
       {bankModal && (
-        <Modal
-          title={bankModal.mode === 'edit' ? 'Ubah Rekening' : 'Rekening Baru'}
-          subtitle="Rekening aktif dipakai pada invoice dan rincian tagihan mitra."
+        <BankAccountModal
+          isOpen={!!bankModal}
+          mode={bankModal.mode}
+          initialData={bankModal.form}
+          brands={brands}
+          defaultType={bankModal.form?.type || bankTab || 'public'}
           onClose={() => setBankModal(null)}
-          footer={
-            <>
-              <Button variant="outline" onClick={() => setBankModal(null)}>
-                Batal
-              </Button>
-              <Button type="submit" form="bank-form" icon="check">
-                Simpan Rekening
-              </Button>
-            </>
-          }
-        >
-          <form id="bank-form" onSubmit={saveBank} className="space-y-3">
-            <div className="grid sm:grid-cols-2 gap-3">
-              <Field label="Nama Bank" required>
-                <Input
-                  placeholder="BCA / Mandiri / BRI"
-                  value={bankModal.form.bank || ''}
-                  onChange={(e) =>
-                    setBankModal((prev) => ({ ...prev, form: { ...prev.form, bank: e.target.value } }))
-                  }
-                />
-              </Field>
-              <Field label="Nomor Rekening" required>
-                <Input
-                  inputMode="numeric"
-                  value={bankModal.form.accountNo || ''}
-                  onChange={(e) =>
-                    setBankModal((prev) => ({ ...prev, form: { ...prev.form, accountNo: e.target.value } }))
-                  }
-                />
-              </Field>
-            </div>
-            <Field label="Atas Nama" required>
-              <Input
-                value={bankModal.form.holder || ''}
-                onChange={(e) =>
-                  setBankModal((prev) => ({ ...prev, form: { ...prev.form, holder: e.target.value } }))
-                }
-              />
-            </Field>
-            <Switch
-              checked={bankModal.form.active !== false}
-              label="Rekening aktif (tampil di invoice)"
-              onChange={(next) => setBankModal((prev) => ({ ...prev, form: { ...prev.form, active: next } }))}
-            />
-          </form>
-        </Modal>
+          onSave={saveBank}
+        />
       )}
 
       {courierModal && (

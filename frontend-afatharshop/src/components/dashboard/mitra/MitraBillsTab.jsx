@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   AlertTriangleIcon,
   SearchIcon,
@@ -10,6 +10,7 @@ import {
 } from '../../Icons';
 import InvoiceModal from '../../InvoiceModal';
 import { openInvoicePrintTab } from '../../../utils/printInvoice';
+import api, { mediaUrl } from '../../../services/api';
 
 // Helper format Rupiah rapi standar Indonesia
 export const formatRp = (val) => {
@@ -169,94 +170,194 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
   const [selectedPayBill, setSelectedPayBill] = useState(null);
   const [payMethod, setPayMethod] = useState('deposit');
   const [paySuccess, setPaySuccess] = useState(false);
-  const [payBank, setPayBank] = useState('BCA — 012-345-6789 (PT Afathar Niaga Indonesia)');
-  const [payProofImage, setPayProofImage] = useState(null);
+  const [payBank, setPayBank] = useState('');
+  const [payProofFile, setPayProofFile] = useState(null);
+  const [payProofPreview, setPayProofPreview] = useState('');
   const [payProofFileName, setPayProofFileName] = useState('');
+  const [paySubmitting, setPaySubmitting] = useState(false);
+  const [payError, setPayError] = useState('');
   const [previewProof, setPreviewProof] = useState(null);
 
+  const bankOptions = useMemo(
+    () =>
+      (adminBankAccounts || [])
+        .filter((b) => b.active !== false && b.bank)
+        .map((b) => ({
+          id: String(b.backendId ?? b.id ?? ''),
+          label: `${b.bank} — ${b.accountNo} (a.n ${b.holder})`
+        })),
+    [adminBankAccounts]
+  );
+
   const userBalance = Number(String(currentUser?.balance || '').replace(/[^0-9]/g, '')) || 0;
+  const fileInputRef = useRef(null);
+  const chosenBankLabel =
+    bankOptions.find((b) => b.label === payBank)?.label || bankOptions[0]?.label || '';
+
+  const installmentIdForBill = (bill) => {
+    const order = bill?.order || {};
+    if (bill?.billType === 'dp') return order.dpInstallmentId ?? null;
+    if (bill?.billType === 'pelunasan') return order.pelunasanInstallmentId ?? null;
+    return null;
+  };
+
+  const handlePayProofFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) {
+      setPayError('Ukuran bukti transfer maksimal 3 MB.');
+      e.target.value = '';
+      return;
+    }
+    setPayError('');
+    setPayProofFile(file);
+    setPayProofFileName(file.name);
+    setPayProofPreview(URL.createObjectURL(file));
+  };
 
   const totalBelumBayar = bills.reduce(
     (sum, b) => (b.status === 'Belum Bayar' ? sum + b.amount : sum),
     0
   );
 
-  const handlePayWithDepositSubmit = () => {
-    if (!selectedPayBill) return;
+  const handlePayWithDepositSubmit = async () => {
+    if (!selectedPayBill || paySubmitting) return;
     if (userBalance < selectedPayBill.amount) {
-      alert('Saldo deposit Anda tidak mencukupi untuk melunasi tagihan ini.');
+      setPayError(
+        `Saldo deposit Anda (${formatRp(userBalance)}) tidak mencukupi untuk tagihan ${formatRp(selectedPayBill.amount)}.`
+      );
       return;
     }
-    const todayDate = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
-    const updatedBill = {
-      ...selectedPayBill,
-      status: 'Lunas (Dipotong Deposit)',
-      bank: 'Saldo Deposit Mitra',
-      paidDate: todayDate
-    };
 
-    setBills((prev) =>
-      prev.map((b) => (b.id === selectedPayBill.id ? updatedBill : b))
-    );
-
-    if (onPayWithDeposit) {
-      onPayWithDeposit({
-        orderNo: selectedPayBill.orderNo,
-        billTitle: selectedPayBill.title,
-        amount: selectedPayBill.amount,
-        billType: selectedPayBill.billType
+    const bill = selectedPayBill;
+    setPaySubmitting(true);
+    setPayError('');
+    try {
+      const row = await api.my.payWithDeposit({
+        order_number: bill.orderNo,
+        invoice_number: bill.order?.invoiceNumber || '',
+        installment_id: installmentIdForBill(bill),
+        stage: bill.billType,
+        amount: bill.amount
       });
-    }
 
-    setPaySuccess(true);
-    setTimeout(() => {
-      setPaySuccess(false);
-      setSelectedPayBill(null);
-    }, 2000);
-  };
-
-  const handlePayConfirm = (e) => {
-    e.preventDefault();
-    if (!payProofImage) {
-      alert('Silakan upload file foto/bukti transfer terlebih dahulu.');
-      return;
-    }
-    if (selectedPayBill) {
-      const todayDate = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
-      const updatedBill = {
-        ...selectedPayBill,
-        status: 'Menunggu Verifikasi Finance',
-        proof: payProofImage,
-        bank: payBank,
-        paidDate: todayDate
-      };
+      const todayDate = new Date().toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
 
       setBills((prev) =>
-        prev.map((b) => (b.id === selectedPayBill.id ? updatedBill : b))
+        prev.map((b) =>
+          b.id === bill.id
+            ? {
+                ...b,
+                status: 'Lunas (Dipotong Deposit)',
+                bank: 'Saldo Deposit Mitra',
+                paidDate: todayDate
+              }
+            : b
+        )
       );
 
-      if (onUploadPayment) {
-        onUploadPayment({
-          id: Date.now(),
-          orderNo: selectedPayBill.orderNo,
-          mitraName: currentUser?.name || 'Mitra',
-          title: selectedPayBill.title,
-          nominal: selectedPayBill.amount,
-          bank: payBank,
-          note: selectedPayBill.notes || 'Pembayaran Tagihan',
-          image: payProofImage,
-          date: todayDate,
-          status: 'Menunggu Validasi'
-        });
-      }
+      onPayWithDeposit?.({
+        orderNo: bill.orderNo,
+        billTitle: bill.title,
+        amount: bill.amount,
+        billType: bill.billType,
+        depositTransactionId: row?.data?.payment?.id ?? null,
+        depositBalance: row?.data?.deposit_balance ?? null
+      });
 
       setPaySuccess(true);
       setTimeout(() => {
         setPaySuccess(false);
         setSelectedPayBill(null);
-        setPayProofImage(null);
-        setPayProofFileName('');
       }, 2000);
+    } catch (err) {
+      setPayError(err?.message || 'Pelunasan via deposit gagal dikirim ke server.');
+    } finally {
+      setPaySubmitting(false);
+    }
+  };
+
+  const handlePayConfirm = async (e) => {
+    e.preventDefault();
+    if (!selectedPayBill || paySubmitting) return;
+    if (!payProofFile) {
+      setPayError('Silakan pilih file foto/bukti transfer terlebih dahulu.');
+      return;
+    }
+    if (!chosenBankLabel) {
+      setPayError('Belum ada rekening bank aktif dari admin. Hubungi finance untuk menambahkan rekening.');
+      return;
+    }
+
+    const bill = selectedPayBill;
+    const todayDate = new Date().toLocaleDateString('id-ID', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    });
+
+    setPaySubmitting(true);
+    setPayError('');
+    try {
+      const uploaded = await api.management.uploadFile(payProofFile, 'proof');
+      const proofPath = uploaded?.data?.path || '';
+      if (!proofPath) throw new Error('Server tidak mengembalikan path berkas bukti.');
+
+      const row = await api.my.uploadPayment({
+        order_number: bill.orderNo,
+        invoice_number: bill.order?.invoiceNumber || '',
+        installment_id: installmentIdForBill(bill),
+        stage: bill.billType,
+        amount: bill.amount,
+        proof_url: proofPath
+      });
+
+      const payment = row?.data || {};
+
+      setBills((prev) =>
+        prev.map((b) =>
+          b.id === bill.id
+            ? {
+                ...b,
+                status: 'Menunggu Verifikasi Finance',
+                proof: mediaUrl(payment.proof_url || proofPath),
+                bank: chosenBankLabel,
+                paidDate: todayDate
+              }
+            : b
+        )
+      );
+
+      onUploadPayment?.({
+        id: payment.id ?? Date.now(),
+        orderNo: bill.orderNo,
+        mitraName: currentUser?.name || 'Mitra',
+        title: bill.title,
+        nominal: bill.amount,
+        bank: chosenBankLabel,
+        note: bill.notes || 'Pembayaran Tagihan',
+        image: mediaUrl(payment.proof_url || proofPath),
+        date: todayDate,
+        status: 'Menunggu Validasi'
+      });
+
+      setPaySuccess(true);
+      setPayProofFile(null);
+      setPayProofPreview('');
+      setPayProofFileName('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setTimeout(() => {
+        setPaySuccess(false);
+        setSelectedPayBill(null);
+      }, 2000);
+    } catch (err) {
+      setPayError(err?.message || 'Bukti pembayaran gagal dikirim ke server.');
+    } finally {
+      setPaySubmitting(false);
     }
   };
 
@@ -464,8 +565,11 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
                       <button
                         type="button"
                         onClick={() => {
-                          setPayProofImage(null);
+                          setPayProofFile(null);
+                          setPayProofPreview('');
                           setPayProofFileName('');
+                          setPayError('');
+                          setPayMethod(bill.billType === 'ongkir' ? 'transfer' : 'deposit');
                           setSelectedPayBill(bill);
                         }}
                         className="bg-[#6B1416] hover:bg-[#520C0E] text-white px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer whitespace-nowrap"
@@ -553,13 +657,22 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
                   </p>
                 </div>
 
+                {payError && (
+                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-[11px] font-medium">
+                    {payError}
+                  </div>
+                )}
+
                 {/* Metode Pembayaran: Pilihan Saldo Deposit vs Transfer Bank */}
                 <div className="space-y-2">
                   <p className="font-semibold text-stone-700">Pilih Metode Pembayaran:</p>
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => setPayMethod('deposit')}
+                      onClick={() => {
+                        setPayMethod('deposit');
+                        setPayError('');
+                      }}
                       className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
                         payMethod === 'deposit'
                           ? 'border-emerald-600 bg-emerald-50/70 ring-1 ring-emerald-600'
@@ -577,7 +690,10 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
 
                     <button
                       type="button"
-                      onClick={() => setPayMethod('transfer')}
+                      onClick={() => {
+                        setPayMethod('transfer');
+                        setPayError('');
+                      }}
                       className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
                         payMethod === 'transfer'
                           ? 'border-[#6B1416] bg-rose-50/70 ring-1 ring-[#6B1416]'
@@ -615,9 +731,10 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
                         <button
                           type="button"
                           onClick={handlePayWithDepositSubmit}
-                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-xs transition cursor-pointer"
+                          disabled={paySubmitting}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold rounded-xl text-xs shadow-xs transition cursor-pointer"
                         >
-                          Bayar via Deposit
+                          {paySubmitting ? 'Memproses...' : 'Bayar via Deposit'}
                         </button>
                       </div>
                     ) : (
@@ -634,53 +751,47 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
                     <div className="space-y-1">
                       <label className="font-medium text-stone-700">Bank Tujuan Transfer</label>
                       <select
-                        value={payBank}
+                        value={chosenBankLabel}
                         onChange={(e) => setPayBank(e.target.value)}
-                        className="w-full bg-white border border-stone-200 rounded-xl px-3 py-2 text-stone-800"
+                        disabled={bankOptions.length === 0}
+                        className="w-full bg-white border border-stone-200 rounded-xl px-3 py-2 text-stone-800 disabled:bg-stone-50 disabled:text-stone-400"
                       >
-                        {adminBankAccounts && adminBankAccounts.length > 0 ? (
-                          adminBankAccounts.map((b) => (
-                            <option key={b.id || b.accountNo} value={`${b.bank} — ${b.accountNo} (a.n ${b.holder})`}>
-                              {b.bank} — {b.accountNo} (a.n {b.holder})
-                            </option>
-                          ))
-                        ) : (
-                          <>
-                            <option value="BCA — 012-345-6789 (PT Afathar Niaga Indonesia)">
-                              BCA — 012-345-6789 (PT Afathar Niaga Indonesia)
-                            </option>
-                            <option value="Mandiri — 133-00-9876543-2 (Afathar Shop)">
-                              Mandiri — 133-00-9876543-2 (Afathar Shop)
-                            </option>
-                            <option value="BRI — 0021-01-001234-56-7 (Afathar Official)">
-                              BRI — 0021-01-001234-56-7 (Afathar Official)
-                            </option>
-                          </>
+                        {bankOptions.map((b) => (
+                          <option key={b.id || b.label} value={b.label}>
+                            {b.label}
+                          </option>
+                        ))}
+                        {bankOptions.length === 0 && (
+                          <option value="">Belum ada rekening bank dari admin</option>
                         )}
                       </select>
+                      {bankOptions.length === 0 && (
+                        <p className="text-[11px] text-amber-700 font-medium">
+                          Rekening transfer dibaca langsung dari data bank yang diisi admin finance.
+                        </p>
+                      )}
                     </div>
 
                     <div className="space-y-1">
                       <label className="font-medium text-stone-700">Unggah Bukti Transfer</label>
                       <input
+                        ref={fileInputRef}
                         type="file"
                         accept="image/*"
-                        required
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            setPayProofFileName(file.name);
-                            const reader = new FileReader();
-                            reader.onloadend = () => {
-                              setPayProofImage(reader.result);
-                            };
-                            reader.readAsDataURL(file);
-                          }
-                        }}
+                        onChange={handlePayProofFile}
                         className="w-full text-xs text-stone-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-stone-100 file:text-stone-700 hover:file:bg-stone-200 cursor-pointer"
                       />
                       {payProofFileName && (
-                        <p className="text-[11px] text-emerald-600 font-medium">✓ File terpilih: {payProofFileName}</p>
+                        <div className="flex items-center gap-2 pt-1">
+                          <img
+                            src={payProofPreview}
+                            alt="Pratinjau bukti transfer"
+                            className="w-12 h-12 object-cover rounded-lg border border-stone-200"
+                          />
+                          <p className="text-[11px] text-emerald-600 font-medium">
+                            ✓ File terpilih: {payProofFileName}
+                          </p>
+                        </div>
                       )}
                     </div>
 
@@ -694,9 +805,10 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
                       </button>
                       <button
                         type="submit"
-                        className="px-5 py-2 bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold rounded-xl shadow-xs transition cursor-pointer"
+                        disabled={paySubmitting}
+                        className="px-5 py-2 bg-[#6B1416] hover:bg-[#520C0E] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-xs transition cursor-pointer"
                       >
-                        Kirim Bukti Pembayaran
+                        {paySubmitting ? 'Mengirim ke server...' : 'Kirim Bukti Pembayaran'}
                       </button>
                     </div>
                   </form>

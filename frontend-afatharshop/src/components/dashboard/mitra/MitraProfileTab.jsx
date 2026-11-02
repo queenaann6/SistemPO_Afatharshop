@@ -80,7 +80,7 @@ export default function MitraProfileTab({
               className="w-24 h-24 rounded-t-full rounded-b-lg bg-[#9CA3AF] hover:bg-stone-500 overflow-hidden relative cursor-pointer group flex items-center justify-center transition shadow-xs border-2 border-dashed border-stone-300"
               title="Unggah Foto Profil"
             >
-              {currentUser?.avatar ? (
+              {currentUser?.avatar && !currentUser.avatar.includes('unsplash.com') ? (
                 <img
                   src={currentUser.avatar}
                   alt={name}
@@ -103,6 +103,15 @@ export default function MitraProfileTab({
             <div className="text-[11px] text-stone-500 space-y-0.5 mt-1">
               <p>Ukuran gambar: maks. 1 MB</p>
               <p>Format gambar: JPEG, .PNG</p>
+              {currentUser?.avatar && !currentUser.avatar.includes('unsplash.com') && (
+                <button
+                  type="button"
+                  onClick={() => onUpdateAvatar && onUpdateAvatar('')}
+                  className="text-xs text-rose-600 font-semibold hover:underline mt-1.5 inline-block cursor-pointer"
+                >
+                  Hapus Foto Profil
+                </button>
+              )}
             </div>
           </div>
         </div>

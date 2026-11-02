@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { openInvoicePrintTab } from '../../utils/printInvoice';
+import ProductCatalogModal from './ProductCatalogModal';
 
 /* ============================================================
    HELPERS & FORMATTERS
@@ -255,8 +256,7 @@ const MENU = [
     ]
   },
   { id: 'ledger', label: 'Buku Kas Masuk', title: 'Buku Kas & Riwayat Aliran Dana' },
-  { id: 'ekspedisi', label: 'Logistik & Ongkir', title: 'Manajemen Ongkir & Status Kurir' },
-  { id: 'pengaturan', label: 'Konfigurasi Bisnis', title: 'Rekening Bank, Batas Tempo, & Master Produk' }
+  { id: 'ekspedisi', label: 'Logistik & Ongkir', title: 'Manajemen Ongkir & Status Kurir' }
 ];
 
 const ALL_MENU = MENU.flatMap((m) => (m.children ? m.children : [m]));
@@ -729,7 +729,8 @@ export default function OwnerFinanceDashboard({
 
   /* WhatsApp Dispatcher */
   const composeMessage = (target) => {
-    const bankLines = bankAccountsList.filter((b) => b.active).map((b) => `• ${b.bank} ${b.accountNo} a.n ${b.holder}`).join('\n');
+    const publicBanks = (bankAccounts?.length ? bankAccounts : bankAccountsList).filter((b) => (b.type || 'public') === 'public' && b.active);
+    const bankLines = publicBanks.map((b) => `• ${b.bank} ${b.accountNo} a.n ${b.holder}`).join('\n');
     const footer = `\n\nTransfer melalui rekening:\n${bankLines}\n\nKirimkan bukti transfer setelah pembayaran.\nTerima kasih 🙏\n${settings.senderName}`;
 
     if (target.mode === 'invoice') {
@@ -1397,9 +1398,13 @@ export default function OwnerFinanceDashboard({
                       onChange={(e) => setInputBuktiForm({ ...inputBuktiForm, targetBank: e.target.value })}
                       className={INPUT}
                     >
-                      {bankAccountsList.filter((b) => b.active).map((b) => (
-                        <option key={b.id} value={`${b.bank} ${b.accountNo}`}>{b.bank} - {b.accountNo} (a.n {b.holder})</option>
-                      ))}
+                      {(bankAccounts?.length ? bankAccounts : bankAccountsList)
+                        .filter((b) => (b.type || 'public') === 'public' && b.active)
+                        .map((b) => (
+                          <option key={b.id} value={`${b.bank} ${b.accountNo}`}>
+                            {b.bank} - {b.accountNo} (a.n {b.holder})
+                          </option>
+                        ))}
                     </select>
                   </div>
 
@@ -1464,74 +1469,6 @@ export default function OwnerFinanceDashboard({
               </Card>
             </div>
           )}
-
-          {/* ================= SECTION: KONFIGURASI BISNIS ================= */}
-          {activeMenu === 'pengaturan' && (
-            <div className="space-y-6">
-              <Card title="Katalog Produk & HPP (Dasar Perhitungan Margin)">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-gray-50 border-b border-gray-100">
-                      <tr>
-                        <th className="px-5 py-3 font-semibold text-[10px] uppercase">Nama Produk</th>
-                        <th className={TH}>Brand</th>
-                        <th className={TH}>HPP / Modal per Pcs</th>
-                        <th className={TH}>Batas Akhir PO</th>
-                        <th className="px-5 py-3 font-semibold text-right text-[10px] uppercase">Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 text-gray-700">
-                      {productsList.map((p) => (
-                        <tr key={p.name} className="hover:bg-gray-50/70">
-                          <td className="px-5 py-3 font-bold text-gray-900">{p.name}</td>
-                          <td className={TD}>{p.brand}</td>
-                          <td className={TD}>
-                            <input
-                              type="number"
-                              value={p.hpp}
-                              onChange={(e) => {
-                                const val = Number(e.target.value) || 0;
-                                setProductsList((prev) => prev.map((x) => (x.name === p.name ? { ...x, hpp: val } : x)));
-                              }}
-                              className="w-32 bg-white border border-gray-200 rounded px-2 py-1 text-xs"
-                            />
-                          </td>
-                          <td className={TD}>{fmtDate(p.poClose)}</td>
-                          <td className="px-5 py-3 text-right">
-                            <Badge tone={poInfo(p.poClose, todayISO).tone}>
-                              {poInfo(p.poClose, todayISO).label}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-
-              <Card title="Rekening Bank Tujuan Resmi">
-                <div className="divide-y divide-gray-100 text-xs">
-                  {bankAccountsList.map((b) => (
-                    <div key={b.id} className="p-4 flex items-center justify-between">
-                      <div>
-                        <p className="font-bold text-gray-900">{b.bank} - {b.accountNo}</p>
-                        <p className="text-gray-400 text-[11px]">Atas Nama: {b.holder}</p>
-                      </div>
-                      <Switch
-                        checked={b.active}
-                        label={b.active ? 'Aktif' : 'Non-aktif'}
-                        onChange={() => {
-                          const next = bankAccountsList.map((x) => (x.id === b.id ? { ...x, active: !x.active } : x));
-                          setBankAccountsList(next);
-                          onUpdateBankAccounts && onUpdateBankAccounts(next);
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            </div>
-          )}
         </main>
       </div>
 
@@ -1569,78 +1506,26 @@ export default function OwnerFinanceDashboard({
         </Modal>
       )}
 
-      {/* MODAL BUAT PO / TAMBAH PRODUK */}
+      {/* MODAL BUAT PO / TAMBAH PRODUK (REVISI KATALOG + TERMIN MATRIX) */}
       {isAddProductModalOpen && (
-        <Modal title="Tambah Katalog / Buka Pre-Order Baru" onClose={() => setIsAddProductModalOpen(false)}>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!newProductForm.name) return alert('Nama produk wajib diisi.');
-              setProductsList((prev) => [
-                ...prev,
-                {
-                  name: newProductForm.name,
-                  brand: newProductForm.brand || 'General',
-                  hpp: Number(newProductForm.hpp) || 0,
-                  poClose: newProductForm.poClose
-                }
-              ]);
-              setIsAddProductModalOpen(false);
-              showToast(`Produk PO ${newProductForm.name} dibuka.`);
-            }}
-            className="space-y-3 text-xs"
-          >
-            <div>
-              <label className="block text-gray-600 font-semibold mb-1">Nama Produk PO</label>
-              <input
-                type="text"
-                placeholder="Misal: Gamis Rayyan Series"
-                value={newProductForm.name}
-                onChange={(e) => setNewProductForm({ ...newProductForm, name: e.target.value })}
-                className={INPUT}
-              />
-            </div>
-            <div>
-              <label className="block text-gray-600 font-semibold mb-1">Nama Brand</label>
-              <input
-                type="text"
-                placeholder="Misal: Hanara"
-                value={newProductForm.brand}
-                onChange={(e) => setNewProductForm({ ...newProductForm, brand: e.target.value })}
-                className={INPUT}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-gray-600 font-semibold mb-1">HPP Modal (Rp/pcs)</label>
-                <input
-                  type="number"
-                  placeholder="0"
-                  value={newProductForm.hpp}
-                  onChange={(e) => setNewProductForm({ ...newProductForm, hpp: e.target.value })}
-                  className={INPUT}
-                />
-              </div>
-              <div>
-                <label className="block text-gray-600 font-semibold mb-1">Tanggal Tutup PO</label>
-                <input
-                  type="date"
-                  value={newProductForm.poClose}
-                  onChange={(e) => setNewProductForm({ ...newProductForm, poClose: e.target.value })}
-                  className={INPUT}
-                />
-              </div>
-            </div>
-            <div className="pt-2 flex justify-end gap-2">
-              <button type="button" onClick={() => setIsAddProductModalOpen(false)} className={BTN_OUTLINE}>
-                Batal
-              </button>
-              <button type="submit" className={BTN_GREEN}>
-                Buka PO Sekarang
-              </button>
-            </div>
-          </form>
-        </Modal>
+        <ProductCatalogModal
+          isOpen={isAddProductModalOpen}
+          mode="create"
+          onClose={() => setIsAddProductModalOpen(false)}
+          onSave={(payload) => {
+            setProductsList((prev) => [
+              ...prev,
+              {
+                name: payload.title || payload.name,
+                brand: payload.brand || 'General',
+                hpp: Number(payload.hpp) || 0,
+                poClose: payload.closeDate
+              }
+            ]);
+            showToast(`Produk PO ${payload.title || payload.name} berhasil disimpan.`);
+            setIsAddProductModalOpen(false);
+          }}
+        />
       )}
     </div>
   );

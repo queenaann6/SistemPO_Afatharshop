@@ -50,12 +50,18 @@ export default function MitraAccountOverviewTab({ currentUser, onSelectTab }) {
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="flex items-center gap-5">
             <div className="relative">
-              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden bg-white/10 ring-4 ring-white/20 shadow-lg shrink-0">
-                <img
-                  src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-                  alt={currentUser?.name || 'Mitra'}
-                  className="w-full h-full object-cover"
-                />
+              <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl overflow-hidden bg-white/10 ring-4 ring-white/20 shadow-lg shrink-0 flex items-center justify-center">
+                {currentUser?.avatar && !currentUser.avatar.includes('unsplash.com') ? (
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser?.name || 'Mitra'}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span className="text-2xl sm:text-3xl font-extrabold text-white/80 uppercase">
+                    {String(currentUser?.name || 'M').charAt(0).toUpperCase()}
+                  </span>
+                )}
               </div>
               <span className="absolute -bottom-1 -right-1 bg-emerald-500 text-white p-1 rounded-full shadow-md" title="Akun Terverifikasi">
                 <CheckIcon className="w-3.5 h-3.5" />

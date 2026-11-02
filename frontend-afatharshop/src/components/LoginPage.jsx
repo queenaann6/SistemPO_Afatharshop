@@ -3,147 +3,6 @@ import { ROLES } from '../data/mockData';
 import { api } from '../services/api';
 import { mapApiUser, roleIdFromApiUser } from '../services/adapters';
 
-// Registered Accounts for Role-based Authentication
-export const REGISTERED_ACCOUNTS = [
-  {
-    roleId: 'mitra',
-    roleName: 'Mitra Agen',
-    email: 'Silakan masukkan email terdaftar Anda',
-    phone: 'Nomor HP terdaftar Anda',
-    username: 'mitra',
-    displayName: 'Mitra Distributor',
-    dashboardPage: 'mitra_dashboard',
-    dashboardName: 'Dashboard Mitra',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80',
-    balance: 'Rp 0',
-    totalBill: 'Rp 0',
-    address: ''
-  },
-  {
-    roleId: 'marketing',
-    roleName: 'Admin Purchasing',
-    email: 'marketing@afatharshop.com',
-    phone: '0812-2222-3333',
-    username: 'marketing',
-    displayName: 'RINA MARKETING',
-    dashboardPage: 'marketing_dashboard',
-    dashboardName: 'Dashboard Admin Purchasing',
-    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=256&q=80',
-    balance: 'Rp 0',
-    totalBill: 'Rp 0',
-    address: 'Kantor Pusat AfatharShop - Divisi Purchasing, Bekasi'
-  },
-  {
-    roleId: 'finance',
-    roleName: 'Admin Finance',
-    email: 'finance@afatharshop.com',
-    phone: '0812-4444-5555',
-    username: 'finance',
-    displayName: 'Dewi',
-    dashboardPage: 'finance_dashboard',
-    dashboardName: 'Dashboard Admin Finance',
-    avatar: 'https://images.unsplash.com/photo-1580489944761-15a19d654956?auto=format&fit=crop&w=256&q=80',
-    balance: 'Rp 0',
-    totalBill: 'Rp 0',
-    address: 'Kantor Pusat AfatharShop - Divisi Keuangan & Validasi, Bogor'
-  },
-  {
-    roleId: 'owner',
-    roleName: 'Owner / Direksi',
-    email: 'owner@afatharshop.com',
-    phone: '0812-8888-9999',
-    username: 'owner',
-    displayName: 'FATURAHMAN OWNER',
-    dashboardPage: 'owner_dashboard',
-    dashboardName: 'Dashboard Owner / Direksi',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=256&q=80',
-    balance: 'Rp 0',
-    totalBill: 'Rp 0',
-    address: 'Kantor Direksi AfatharShop, Bogor'
-  }
-];
-
-// Helper to determine role and account profile based strictly on credentials entered
-export function resolveAccountByCredentials(identifier) {
-  if (!identifier) return REGISTERED_ACCOUNTS[0];
-
-  const clean = identifier.trim().toLowerCase();
-  const digits = clean.replace(/\D/g, '');
-
-  // 1. Check exact presets first
-  const exactMatch = REGISTERED_ACCOUNTS.find(
-    (acc) =>
-      acc.email.toLowerCase() === clean ||
-      acc.username.toLowerCase() === clean ||
-      (digits.length >= 8 && acc.phone.replace(/\D/g, '') === digits)
-  );
-  if (exactMatch) return exactMatch;
-
-  // 2. Check Marketing keywords
-  if (
-    clean.includes('marketing') ||
-    clean.includes('rina') ||
-    clean.startsWith('mkt') ||
-    clean.includes('sales')
-  ) {
-    return {
-      ...REGISTERED_ACCOUNTS[1],
-      email: clean.includes('@') ? clean : 'marketing@afatharshop.com'
-    };
-  }
-
-  // 3. Check Finance keywords
-  if (
-    clean.includes('finance') ||
-    clean.includes('keuangan') ||
-    clean.includes('dewi') ||
-    clean.includes('kasir') ||
-    clean.includes('akunting')
-  ) {
-    return {
-      ...REGISTERED_ACCOUNTS[2],
-      email: clean.includes('@') ? clean : 'finance@afatharshop.com'
-    };
-  }
-
-  // 4. Check Owner / Direksi keywords
-  if (
-    clean.includes('owner') ||
-    clean.includes('direksi') ||
-    clean.includes('Heny') ||
-    clean.includes('bos') ||
-    clean.includes('pimpinan')
-  ) {
-    return {
-      ...REGISTERED_ACCOUNTS[3],
-      email: clean.includes('@') ? clean : 'owner@afatharshop.com'
-    };
-  }
-
-  // 5. Default: Mitra Distributor (All standard accounts or newly registered members are Mitra)
-  const isHeny = clean.includes('heni');
-  const derivedName = isHeny
-    ? 'Heny'
-    : clean.includes('@')
-    ? clean.split('@')[0].replace(/[^a-zA-Z0-9]/g, ' ').trim().replace(/\b\w/g, (c) => c.toUpperCase())
-    : 'Mitra';
-
-  return {
-    roleId: 'mitra',
-    roleName: 'Mitra',
-    email: clean.includes('@') ? clean : `${clean}@afatharshop.com`,
-    phone: digits.length >= 8 ? identifier : '',
-    username: clean.includes('@') ? clean.split('@')[0] : clean || 'mitra',
-    displayName: derivedName,
-    dashboardPage: 'mitra_dashboard',
-    dashboardName: 'Dashboard Mitra',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80',
-    balance: 'Rp 0',
-    totalBill: 'Rp 0',
-    address: ''
-  };
-}
-
 export default function LoginPage({
   onLoginSuccess,
   onNavigateRegister,
@@ -157,15 +16,8 @@ export default function LoginPage({
   const [validationError, setValidationError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Handle Quick Fill for test credentials
-  const handleQuickFill = (accEmail, accPass = 'password123') => {
-    setIdentifier(accEmail);
-    setPassword(accPass);
-    setValidationError('');
-  };
-
-  const finishLogin = (matchedRole, userData, account, offline) => {
-    setLoginResult({ role: matchedRole, user: userData, account, offline: Boolean(offline) });
+  const finishLogin = (matchedRole, userData) => {
+    setLoginResult({ role: matchedRole, user: userData });
     setShowSuccessModal(true);
   };
 
@@ -183,10 +35,11 @@ export default function LoginPage({
       return;
     }
 
-    const savedAvatar =
+    const rawSaved =
       typeof window !== 'undefined'
         ? localStorage.getItem('afatharshop_user_avatar')
         : null;
+    const savedAvatar = rawSaved && !rawSaved.includes('unsplash.com') ? rawSaved : '';
 
     setIsSubmitting(true);
 
@@ -198,56 +51,23 @@ export default function LoginPage({
         id: roleId,
         name: apiUser.role || roleId
       };
-      const demoAccount =
-        REGISTERED_ACCOUNTS.find((account) => account.roleId === roleId) ||
-        REGISTERED_ACCOUNTS[0];
-      const mappedUser = mapApiUser(apiUser, demoAccount);
+      const mappedUser = mapApiUser(apiUser);
 
-      finishLogin(
-        matchedRole,
-        {
-          ...mappedUser,
-          identifier: identifier.trim(),
-          role: matchedRole.name,
-          roleId,
-          avatar: savedAvatar || mappedUser.avatar,
-          totalBill: demoAccount.totalBill || 'Rp 0',
-          address: demoAccount.address || mappedUser.address
-        },
-        demoAccount,
-        false
-      );
+      finishLogin(matchedRole, {
+        ...mappedUser,
+        identifier: identifier.trim(),
+        role: matchedRole.name,
+        roleId,
+        avatar: (mappedUser.avatar && !mappedUser.avatar.includes('unsplash.com'))
+          ? mappedUser.avatar
+          : (savedAvatar || '')
+      });
     } catch (error) {
-      if (error?.status === 0) {
-        // Backend belum berjalan: tetap izinkan demo lokal agar UI bisa diuji.
-        const detectedAccount = resolveAccountByCredentials(identifier);
-        const roleId =
-          detectedAccount.roleId === 'purchasing' ? 'marketing' : detectedAccount.roleId;
-        const matchedRole = ROLES.find((r) => r.id === roleId) || {
-          id: roleId,
-          name: detectedAccount.roleName
-        };
-
-        finishLogin(
-          matchedRole,
-          {
-            name: detectedAccount.displayName,
-            identifier: identifier.trim(),
-            role: matchedRole.name,
-            roleId,
-            avatar: savedAvatar || detectedAccount.avatar,
-            balance: detectedAccount.balance || 'Rp 0',
-            totalBill: detectedAccount.totalBill || 'Rp 0',
-            phone: detectedAccount.phone,
-            email: detectedAccount.email,
-            address: detectedAccount.address
-          },
-          detectedAccount,
-          true
-        );
-      } else {
-        setValidationError(error?.message || 'Login gagal. Silakan coba lagi.');
-      }
+      setValidationError(
+        error?.status === 0
+          ? 'Server tidak dapat dihubungi. Pastikan backend berjalan agar data asli bisa dipakai.'
+          : error?.message || 'Login gagal. Periksa email dan password Anda.'
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -436,11 +256,6 @@ export default function LoginPage({
               <p className="text-xs text-stone-600">
                 Sebagai <span className="font-bold text-stone-900">{loginResult.user.name}</span>
               </p>
-              {loginResult.offline && (
-                <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
-                  Backend tidak terdeteksi — masuk dengan akun demo lokal.
-                </p>
-              )}
             </div>
 
             {/* Clean Proceed Button */}

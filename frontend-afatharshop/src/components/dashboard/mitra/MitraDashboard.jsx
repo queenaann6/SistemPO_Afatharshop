@@ -140,6 +140,7 @@ export default function MitraDashboard({
                 poBatches={poBatches}
                 orders={orders}
                 adminBankAccounts={adminBankAccounts}
+                adminCouriers={adminCouriers}
                 onUpdateOrder={onUpdateOrder}
               />
             )}

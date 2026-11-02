@@ -35,7 +35,6 @@ export default function Header({
   onOpenWishlist,
   onNavigateDashboard,
   currentPage,
-  onQuickSwitchRole,
   notifications = [],
   onNotificationClick,
   onMarkAllRead
@@ -306,12 +305,16 @@ export default function Header({
                     className="bg-[#0B0F19] hover:bg-[#181F30] border border-white/10 hover:border-white/25 text-white p-0.5 sm:pl-1.5 sm:pr-3 rounded-full text-xs sm:text-sm font-bold flex items-center gap-2 cursor-pointer transition shadow-md"
                     title="Menu Akun Saya"
                   >
-                    <div className="w-7 h-7 rounded-full overflow-hidden bg-stone-700 shrink-0 border border-emerald-400/40">
-                      <img
-                        src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-                        alt={currentUser?.name || 'Mitra'}
-                        className="w-full h-full object-cover"
-                      />
+                    <div className="w-7 h-7 rounded-full overflow-hidden bg-stone-700 shrink-0 border border-emerald-400/40 flex items-center justify-center text-[11px] font-bold text-white uppercase">
+                      {currentUser?.avatar && !currentUser.avatar.includes('unsplash.com') ? (
+                        <img
+                          src={currentUser.avatar}
+                          alt={currentUser?.name || 'Mitra'}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span>{String(currentUser?.name || 'M').charAt(0).toUpperCase()}</span>
+                      )}
                     </div>
                     <span className="hidden sm:inline uppercase tracking-wide text-white text-xs sm:text-sm font-bold">{currentUser?.name || 'Mitra'}</span>
                     <ChevronDownIcon className={`hidden sm:block w-3.5 h-3.5 text-stone-300 transition-transform duration-200 ${isUserMenuOpen ? 'rotate-180' : ''}`} />
@@ -322,12 +325,16 @@ export default function Header({
                     <div className="absolute right-0 mt-2.5 w-72 sm:w-80 bg-white rounded-2xl shadow-2xl border border-stone-100 overflow-hidden z-[60] text-stone-800 animate-in fade-in zoom-in-95 duration-150">
                       {/* 1. Dark Profile Header */}
                       <div className="bg-[#111827] text-white p-3.5 sm:p-4 flex items-center gap-3.5">
-                        <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full overflow-hidden bg-stone-700 shrink-0 ring-2 ring-emerald-500/40">
-                          <img
-                            src={currentUser?.avatar || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=256&q=80'}
-                            alt={currentUser?.name || 'Mitra'}
-                            className="w-full h-full object-cover"
-                          />
+                        <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full overflow-hidden bg-stone-800 shrink-0 ring-2 ring-emerald-500/40 flex items-center justify-center text-base sm:text-lg font-bold text-stone-200 uppercase">
+                          {currentUser?.avatar && !currentUser.avatar.includes('unsplash.com') ? (
+                            <img
+                              src={currentUser.avatar}
+                              alt={currentUser?.name || 'Mitra'}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <span className="font-extrabold">{String(currentUser?.name || 'M').charAt(0).toUpperCase()}</span>
+                          )}
                         </div>
                         <div className="flex-1 min-w-0">
                           <h3 className="font-bold text-white text-sm sm:text-base tracking-wide leading-tight truncate uppercase">

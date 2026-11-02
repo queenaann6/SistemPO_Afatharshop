@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import api, { mediaUrl } from '../../../services/api';
 import { WalletIcon, PlusIcon, CheckIcon, EyeIcon, CameraIcon, XIcon } from '../../Icons';
 
 export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBankAccounts = [], deposits = [] }) {
@@ -6,9 +7,12 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
 
   // Form States
   const [nominal, setNominal] = useState('');
-  const [selectedBank, setSelectedBank] = useState('bca');
+  const [selectedBank, setSelectedBank] = useState('');
   const [notes, setNotes] = useState('');
   const [proofImage, setProofImage] = useState(null);
+  const [proofFile, setProofFile] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
   const [previewModalImg, setPreviewModalImg] = useState(null);
 
@@ -27,45 +31,17 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
     };
   }, [previewModalImg]);
 
-  // Bank Options (Configurable / updated dynamically by Admin Finance)
-  const bankOptions = adminBankAccounts && adminBankAccounts.length > 0
-    ? adminBankAccounts.filter((b) => b.active !== false).map((b) => ({
-        id: b.id,
-        name: `Bank ${b.bank}`,
-        accountNumber: b.accountNo,
-        holder: b.holder,
-        logo: b.bank
-      }))
-    : [
-        {
-          id: 'bca',
-          name: 'Bank BCA',
-          accountNumber: '739-082-9988',
-          holder: 'CV AFATHAR SHOP DISTRIBUTOR',
-          logo: 'BCA'
-        },
-        {
-          id: 'mandiri',
-          name: 'Bank Mandiri',
-          accountNumber: '133-00-2998801',
-          holder: 'CV AFATHAR SHOP DISTRIBUTOR',
-          logo: 'MANDIRI'
-        },
-        {
-          id: 'bsi',
-          name: 'Bank BSI Syariah',
-          accountNumber: '718-002-9988',
-          holder: 'CV AFATHAR SHOP DISTRIBUTOR',
-          logo: 'BSI'
-        },
-        {
-          id: 'bri',
-          name: 'Bank BRI',
-          accountNumber: '0120-01-002998-50-2',
-          holder: 'CV AFATHAR SHOP DISTRIBUTOR',
-          logo: 'BRI'
-        }
-      ];
+  // Rekening resmi dari database (dikelola admin finance); tanpa daftar bawaan.
+  const bankOptions = (adminBankAccounts || [])
+    .filter((b) => b.active !== false)
+    .map((b) => ({
+      id: b.backendId ?? b.id,
+      clientId: b.id,
+      name: `Bank ${b.bank}`,
+      accountNumber: b.accountNo,
+      holder: b.holder,
+      logo: b.bank
+    }));
 
   // Deposit Submissions History
   const [depositHistory, setDepositHistory] = useState([]);
@@ -89,14 +65,14 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
         id: String(d.id || '').toUpperCase().startsWith('DEP') ? d.id : `DEP-${d.id}`,
         date: d.date || 'Hari ini',
         nominal: Number(d.nominal || 0),
-        bank: d.bank || 'Bank BCA (739-082-9988)',
+        bank: d.bank || '-',
         status: isAcc ? 'Berhasil Masuk Saldo' : isTolak ? 'Ditolak Finance' : 'Menunggu Validasi Admin Finance',
         statusColor: isAcc
           ? 'bg-emerald-100 text-emerald-800'
           : isTolak
           ? 'bg-rose-100 text-rose-800'
           : 'bg-amber-100 text-amber-800',
-        proof: d.proof || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
+        proof: mediaUrl(d.proof || ''),
         note: d.note || ''
       };
     });
@@ -109,71 +85,99 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
   // Handle Image File Selection
   const handleImageChange = (e) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        alert('Ukuran gambar maksimal 5 MB');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setProofImage(reader.result);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) {
+      setFormError('Ukuran gambar maksimal 3 MB.');
+      return;
     }
+    setFormError('');
+    setProofFile(file);
+    const reader = new FileReader();
+    reader.onloadend = () => setProofImage(reader.result);
+    reader.readAsDataURL(file);
   };
 
   // Submit Handler
-  const handleSubmitDeposit = (e) => {
+  const handleSubmitDeposit = async (e) => {
     e.preventDefault();
-    if (!nominal || parseInt(nominal) < 50000) {
-      alert('Minimal pengajuan deposit adalah Rp 50.000');
+    setFormError('');
+    const amount = parseInt(nominal, 10);
+    if (!amount || amount < 50000) {
+      setFormError('Minimal pengajuan deposit adalah Rp 50.000.');
       return;
     }
-    if (!proofImage) {
-      alert('Silakan upload foto/gambar bukti transfer terlebih dahulu.');
+    if (!proofFile) {
+      setFormError('Silakan upload foto/gambar bukti transfer terlebih dahulu.');
+      return;
+    }
+    if (!bankOptions.length) {
+      setFormError('Rekening tujuan belum dikonfigurasi admin. Hubungi admin finance.');
       return;
     }
 
-    const currentBankObj = bankOptions.find((b) => b.id === selectedBank) || bankOptions[0];
+    const currentBankObj =
+      bankOptions.find((b) => String(b.id) === chosenBankId) || bankOptions[0];
 
-    const newDepositEntry = {
-      id: `DEP-${Date.now().toString().slice(-6)}`,
-      date: 'Hari ini',
-      nominal: parseInt(nominal),
-      bank: `${currentBankObj.name} (${currentBankObj.accountNumber})`,
-      status: 'Menunggu Validasi Admin Finance',
-      statusColor: 'bg-amber-100 text-amber-800',
-      proof: proofImage
-    };
+    setIsSubmitting(true);
+    try {
+      const uploaded = await api.management.uploadFile(proofFile, 'proof');
+      const proofPath = uploaded?.data?.path;
+      if (!proofPath) throw new Error('Bukti transfer tidak tersimpan di server.');
 
-    setDepositHistory([newDepositEntry, ...depositHistory]);
-
-    if (onDepositSubmit) {
-      onDepositSubmit({
-        id: Date.now(),
-        orderNo: newDepositEntry.id,
-        mitraName: currentUser?.name || 'Mitra',
-        title: 'Top Up Deposit Saldo Mitra',
-        nominal: parseInt(nominal),
-        bank: `${currentBankObj.name} (${currentBankObj.accountNumber})`,
-        note: notes || 'Pengajuan deposit saldo reseller',
-        image: proofImage,
-        date: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
-        status: 'Menunggu Validasi'
+      const created = await api.my.createDeposit({
+        bank_account_id: currentBankObj.id,
+        amount,
+        proof_url: proofPath,
+        description: notes || 'Pengajuan deposit saldo reseller'
       });
+      const row = created?.data;
+
+      setDepositHistory([
+        {
+          id: row?.id != null ? `DEP-${row.id}` : `DEP-${Date.now().toString().slice(-6)}`,
+          date: 'Hari ini',
+          nominal: amount,
+          bank: `${currentBankObj.name} (${currentBankObj.accountNumber})`,
+          status: 'Menunggu Validasi Admin Finance',
+          statusColor: 'bg-amber-100 text-amber-800',
+          proof: mediaUrl(row?.proof || proofPath)
+        },
+        ...depositHistory
+      ]);
+
+      if (onDepositSubmit) {
+        onDepositSubmit({
+          ...(row || {}),
+          id: row?.id ?? Date.now(),
+          orderNo: row?.code || `DEP-${row?.id ?? Date.now()}`,
+          mitraName: currentUser?.name || 'Mitra',
+          title: 'Top Up Deposit Saldo Mitra',
+          nominal: amount,
+          bank: `${currentBankObj.name} (${currentBankObj.accountNumber})`,
+          note: row?.note || notes || 'Pengajuan deposit saldo reseller',
+          image: mediaUrl(row?.proof || proofPath),
+          date: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
+          status: 'Menunggu Validasi'
+        });
+      }
+
+      setShowSuccess(true);
+      setNominal('');
+      setProofImage(null);
+      setProofFile(null);
+      setNotes('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setTimeout(() => setShowSuccess(false), 4000);
+    } catch (err) {
+      setFormError(err?.message || 'Pengajuan deposit gagal dikirim ke server.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setShowSuccess(true);
-    setNominal('');
-    setProofImage(null);
-    setNotes('');
-
-    setTimeout(() => {
-      setShowSuccess(false);
-    }, 4000);
   };
 
-  const selectedBankObj = bankOptions.find((b) => b.id === selectedBank) || bankOptions[0];
+  const selectedBankObj =
+    bankOptions.find((b) => String(b.id) === String(selectedBank)) || bankOptions[0];
+  const chosenBankId = selectedBank ? String(selectedBank) : String(bankOptions[0]?.id ?? '');
 
   return (
     <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-xs border border-stone-200/80 space-y-8">
@@ -287,7 +291,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
                 <label
                   key={bank.id}
                   className={`p-3.5 rounded-2xl border cursor-pointer transition flex items-start gap-3 ${
-                    selectedBank === bank.id
+                    chosenBankId === String(bank.id)
                       ? 'bg-white border-[#6B1416] ring-2 ring-[#6B1416]/30 shadow-xs'
                       : 'bg-white/70 border-stone-200 hover:bg-white'
                   }`}
@@ -296,7 +300,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
                     type="radio"
                     name="bankChoice"
                     value={bank.id}
-                    checked={selectedBank === bank.id}
+                    checked={chosenBankId === String(bank.id)}
                     onChange={() => setSelectedBank(bank.id)}
                     className="mt-1 text-[#6B1416] focus:ring-[#6B1416]"
                   />
@@ -394,13 +398,19 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
           </div>
 
           {/* Submit CTA */}
-          <div className="pt-2">
+          <div className="pt-2 space-y-3">
+            {formError && (
+              <p className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">
+                {formError}
+              </p>
+            )}
             <button
               type="submit"
-              className="w-full sm:w-auto bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs px-8 py-3 rounded-2xl shadow-sm transition flex items-center justify-center gap-2 cursor-pointer"
+              disabled={isSubmitting}
+              className="w-full sm:w-auto bg-[#6B1416] hover:bg-[#520C0E] disabled:opacity-60 text-white font-bold text-xs px-8 py-3 rounded-2xl shadow-sm transition flex items-center justify-center gap-2 cursor-pointer"
             >
               <PlusIcon className="w-4 h-4" />
-              <span>Kirim Konfirmasi Deposit</span>
+              <span>{isSubmitting ? 'Mengirim ke server...' : 'Kirim Konfirmasi Deposit'}</span>
             </button>
           </div>
 
