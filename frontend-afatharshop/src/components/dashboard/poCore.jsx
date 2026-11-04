@@ -396,6 +396,42 @@ export const orderPatchToServer = (patch = {}) => {
   return body;
 };
 
+/**
+ * Patch rincian tagihan -> body endpoint PATCH /management/orders/{id}/invoice.
+ * Hanya dikirim bahan perhitungannya (produk, diskon, addon, DP); subtotal,
+ * termin, dan sisa dihitung ulang oleh server supaya angkanya satu sumber.
+ * Mengembalikan null bila patch bukan edit invoice.
+ */
+export const invoicePatchToServer = (patch = {}) => {
+  const rows = Array.isArray(patch.invoiceItems) ? patch.invoiceItems : null;
+  if (!rows || !rows.length) return null;
+
+  const dbNumber = (value) => {
+    const text = String(value ?? '').trim();
+    return /^[1-9]\d*$/.test(text) ? Number(text) : undefined;
+  };
+
+  const body = {
+    items: rows.map((row) => ({
+      id: dbNumber(row.id),
+      product_variant_id: dbNumber(row.variantId),
+      quantity: Math.max(1, num(row.qty)),
+      unit_price: num(row.price),
+      discount_pct: Math.min(100, Math.max(0, num(row.discountPct))),
+      addon: Math.max(0, num(row.addon))
+    }))
+  };
+
+  const dpPct = Math.min(100, Math.max(1, num(patch.dpPct)));
+  if (dpPct > 0) body.dp_pct = dpPct;
+  if (patch.ongkir !== undefined && patch.ongkir !== null && patch.ongkir !== '') {
+    body.shipping_cost = Math.max(0, num(patch.ongkir));
+  }
+  if (patch.notes !== undefined) body.notes = String(patch.notes ?? '');
+
+  return body;
+};
+
 export const orderStage = (o) => {
   if (!o) return 'baru';
   if (o.marketingStatus === MKT.TOLAK) return 'ditolak';

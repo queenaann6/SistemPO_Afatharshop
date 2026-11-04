@@ -136,3 +136,97 @@ Artisan::command('data:reset-for-testing', function () {
     $this->info('Pembersihan selesai! Semua data transaksi, pesanan, dan katalog telah kosong dan siap diisi data real.');
 })->purpose('Reset all transactional data, orders, deposits, and catalog products for real data testing');
 
+Artisan::command('termin:sync-invoices', function () {
+    $this->info('Menyelaraskan termin invoice (belum dibayar, tanpa bukti transfer) dengan payment_stages katalog...');
+
+    $handledInvoiceIds = [];
+    $rebuilt = 0;
+
+    foreach (App\Models\Product::whereNotNull('payment_stages')->get() as $product) {
+        $stages = $product->payment_stages;
+        if (is_string($stages)) {
+            $stages = json_decode($stages, true);
+        }
+        if (!is_array($stages)) {
+            continue;
+        }
+        $stages = array_values(array_filter(
+            $stages,
+            fn ($s) => is_array($s) && isset($s['pct']) && (float) $s['pct'] > 0
+        ));
+        if (count($stages) < 2) {
+            continue;
+        }
+        $pctSum = array_sum(array_map(fn ($s) => (float) $s['pct'], $stages));
+        if (abs($pctSum - 100) > 0.01) {
+            $this->line("  ! Lewati {$product->name}: porsi termin tidak berjumlah 100% ({$pctSum}%).");
+            continue;
+        }
+
+        $variantIds = $product->variants()->pluck('id');
+        if ($variantIds->isEmpty()) {
+            continue;
+        }
+
+        $invoices = App\Models\Invoice::where('paid_amount', 0)
+            ->where('status', '!=', 'lunas')
+            ->whereHas('order', function ($q) {
+                $q->where('status', 'not like', '%batal%')->where('status', 'not like', '%tolak%');
+            })
+            ->whereHas('order.items.variant', fn ($q) => $q->whereIn('id', $variantIds))
+            ->get();
+
+        foreach ($invoices as $invoice) {
+            if (in_array($invoice->id, $handledInvoiceIds, true)) {
+                continue;
+            }
+            $handledInvoiceIds[] = $invoice->id;
+            if ($invoice->payments()->count() > 0) {
+                $this->line("  ! Lewati {$invoice->invoice_number}: sudah ada pembayaran/bukti transfer.");
+                continue;
+            }
+            $total = (float) $invoice->total_amount;
+            if ($total <= 0) {
+                continue;
+            }
+
+            DB::transaction(function () use ($invoice, $stages, $total) {
+                $invoice->installments()->delete();
+                $allocated = 0;
+                $totalStages = count($stages);
+                foreach ($stages as $idx => $stg) {
+                    $pct = (float) $stg['pct'] / 100;
+                    $isFirst = $idx === 0;
+                    $isLast = $idx === $totalStages - 1;
+                    $type = $isFirst ? 'dp' : ($isLast ? 'pelunasan' : ('cicilan_' . $idx));
+                    $amount = $isLast ? round($total - $allocated, 2) : round($total * $pct, 2);
+                    $allocated += $amount;
+                    $dueDays = $isFirst ? 3 : ($isLast ? 60 : (30 * $idx));
+                    if (!empty($stg['date'])) {
+                        try {
+                            $diff = now()->diffInDays(\Carbon\Carbon::parse($stg['date']), false);
+                            if ($diff > 0) {
+                                $dueDays = $diff;
+                            }
+                        } catch (\Throwable $e) {
+                        }
+                    }
+                    App\Models\Installment::create([
+                        'invoice_id'      => $invoice->id,
+                        'type'            => $type,
+                        'sequence_number' => $idx + 1,
+                        'amount'          => $amount,
+                        'paid_amount'     => 0,
+                        'status'          => 'belum_bayar',
+                        'due_at'          => now()->addDays($dueDays),
+                    ]);
+                }
+            });
+            $rebuilt++;
+            $this->line("  ✓ {$invoice->invoice_number} diselaraskan ke termin katalog {$product->name} (" . count($stages) . " tahap).");
+        }
+    }
+
+    $this->info("Selesai. {$rebuilt} invoice diperbarui mengikuti termin katalog.");
+})->purpose('Rebuild unpaid invoice installments from catalog product payment_stages');
+

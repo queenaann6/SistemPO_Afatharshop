@@ -143,7 +143,8 @@ export default function ProductCatalogModal({
 
       const initialBrand = initialData.brand || brands[0]?.name || '';
       setBrand(initialBrand);
-      setBrandId(initialData.brand_id || initialData.brandId || brands.find((b) => b.name === initialBrand)?.id || '');
+      const matchedBrand = brands.find((b) => b.name === initialBrand);
+      setBrandId(initialData.brand_id || initialData.brandId || matchedBrand?.backendId || matchedBrand?.id || '');
 
       const initialCategory = initialData.category || categories[0] || 'Gamis & Abaya';
       setCategory(initialCategory);
@@ -267,7 +268,7 @@ export default function ProductCatalogModal({
       setCategory(categories[0] || 'Gamis & Abaya');
       setCategoryId('');
       setBrand(brands[0]?.name || '');
-      setBrandId(brands[0]?.id || brands[0]?.backendId || '');
+      setBrandId(brands[0]?.backendId || brands[0]?.id || '');
       setSeries('');
       setMaterialDetail('');
       setDescription('');
@@ -387,7 +388,7 @@ export default function ProductCatalogModal({
   const handleBrandChange = (brandName) => {
     setBrand(brandName);
     const bObj = brands.find((b) => b.name === brandName);
-    if (bObj) setBrandId(bObj.id || bObj.backendId || '');
+    if (bObj) setBrandId(bObj.backendId || bObj.id || '');
   };
 
   const handleCategoryChange = (catName) => {
@@ -415,10 +416,18 @@ export default function ProductCatalogModal({
       alert('Nama batch PO wajib diisi.');
       return;
     }
+    const selectedBrandObj = brands.find((b) => b.name === brand || b.id === brandId || b.backendId === brandId);
+    const numericBrandId =
+      (selectedBrandObj && (selectedBrandObj.backendId || (typeof selectedBrandObj.id === 'number' ? selectedBrandObj.id : null))) ||
+      (typeof brandId === 'number' ? brandId : null) ||
+      (typeof brandId === 'string' && /^\d+$/.test(brandId.trim()) ? Number(brandId.trim()) : null) ||
+      (typeof brandId === 'string' && /^b-(\d+)$/i.test(brandId.trim()) ? Number(brandId.trim().replace(/^b-/i, '')) : null) ||
+      undefined;
+
     const payload = {
       name: newBatchName.trim(),
-      brand: brand,
-      brand_id: brandId || undefined,
+      brand: brand || (selectedBrandObj ? selectedBrandObj.name : undefined),
+      brand_id: numericBrandId,
       start_date: newBatchStartDate || openDate || new Date().toISOString().split('T')[0],
       close_date: newBatchCloseDate || closeDate || '',
       status: 'open'
@@ -670,16 +679,39 @@ export default function ProductCatalogModal({
       const activePrices = variants.filter((v) => v.is_active && Number(v.price) > 0).map((v) => Number(v.price));
       const effectiveBasePrice = activePrices.length > 0 ? Math.min(...activePrices) : Number(variants[0]?.price) || 0;
 
+      const selectedBrandObj = brands.find((b) => b.name === brand || b.id === brandId || b.backendId === brandId);
+      const numericBrandId =
+        (selectedBrandObj && (selectedBrandObj.backendId || (typeof selectedBrandObj.id === 'number' ? selectedBrandObj.id : null))) ||
+        (typeof brandId === 'number' ? brandId : null) ||
+        (typeof brandId === 'string' && /^\d+$/.test(brandId.trim()) ? Number(brandId.trim()) : null) ||
+        (typeof brandId === 'string' && /^b-(\d+)$/i.test(brandId.trim()) ? Number(brandId.trim().replace(/^b-/i, '')) : null) ||
+        undefined;
+
+      const selectedCatObj = categories.find((c) => (typeof c === 'object' ? c.id === categoryId || c.name === category : c === category));
+      const numericCatId =
+        (selectedCatObj && typeof selectedCatObj === 'object' && (selectedCatObj.id || selectedCatObj.backendId)) ||
+        (typeof categoryId === 'number' ? categoryId : null) ||
+        (typeof categoryId === 'string' && /^\d+$/.test(categoryId.trim()) ? Number(categoryId.trim()) : null) ||
+        (typeof categoryId === 'string' && /^cat-(\d+)$/i.test(categoryId.trim()) ? Number(categoryId.trim().replace(/^cat-/i, '')) : null) ||
+        undefined;
+
+      const selectedBatchObj = poBatches.find((b) => b.id === poBatchId || b.name === batch);
+      const numericBatchId =
+        (selectedBatchObj && (selectedBatchObj.id || selectedBatchObj.backendId)) ||
+        (typeof poBatchId === 'number' ? poBatchId : null) ||
+        (typeof poBatchId === 'string' && /^\d+$/.test(poBatchId.trim()) ? Number(poBatchId.trim()) : null) ||
+        undefined;
+
       const productPayload = {
         title: title.trim(),
         name: title.trim(),
         brand: brand || 'Afathar Exclusive',
-        brand_id: brandId || undefined,
+        brand_id: numericBrandId,
         category: category,
-        category_id: categoryId || undefined,
+        category_id: numericCatId,
         series: series.trim(),
         batch: batch || undefined,
-        po_batch_id: poBatchId || undefined,
+        po_batch_id: numericBatchId,
         description: description,
         material_detail: materialDetail.trim(),
         materialDetail: materialDetail.trim(),

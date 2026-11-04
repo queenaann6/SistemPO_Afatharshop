@@ -68,7 +68,10 @@ export default function OrderDetailView({
     order?.stage === 'baru' ||
     String(order?.status || '').toLowerCase().includes('menunggu acc');
 
+  const [selectedBillingAddress, setSelectedBillingAddress] = useState(null);
+
   const primaryAddress = useMemo(() => {
+    if (selectedBillingAddress) return selectedBillingAddress;
     if (order?.addressObject) return order.addressObject;
     const list = getStoredAddresses();
     if (order?.addressId) {
@@ -87,8 +90,29 @@ export default function OrderDetailView({
         city: order.mitraCity || ''
       };
     }
+    if (currentUser?.address) {
+      return {
+        id: 'user-default',
+        recipient: currentUser.name || 'Penerima',
+        phone: currentUser.phone || '',
+        address: currentUser.address,
+        city: currentUser.city || ''
+      };
+    }
     return null;
-  }, [order?.addressObject, order?.addressId, order?.address, order?.mitraName, order?.mitraPhone, order?.phone, order?.mitraCity, currentUser?.name]);
+  }, [selectedBillingAddress, order?.addressObject, order?.addressId, order?.address, order?.mitraName, order?.mitraPhone, order?.phone, order?.mitraCity, currentUser]);
+
+  const setPrimaryAddress = (addr) => {
+    setSelectedBillingAddress(addr);
+    if (onUpdateOrder) {
+      onUpdateOrder({
+        addressId: addr?.id,
+        addressObject: addr,
+        billingAddress: addr,
+        invoice: orderInvoice || order?.orderNo || order?.id
+      });
+    }
+  };
 
   // Identitas pengirim pada label dropship (nama toko, telepon, catatan).
   // Hanya bisa disunting selama alamat belum terkunci oleh konfirmasi.
@@ -301,6 +325,15 @@ export default function OrderDetailView({
     return [...groups.values()];
   }, [items, extraAddresses]);
 
+  // Penamaan termin untuk tampilan mitra: 2x => DP & Pelunasan + Ongkir,
+  // 3x => DP 1, DP 2 & Pelunasan + Ongkir (porsi % tetap dari admin).
+  const stageDisplayName = (stg, idx, total) => {
+    const isLast = idx === total - 1 || String(stg?.type || '').includes('pelunasan');
+    if (isLast) return 'Pelunasan + Ongkir';
+    if (total <= 2) return 'DP';
+    return `DP ${idx + 1}`;
+  };
+
   const handlePickAddress = (address) => {
     setExtraAddresses((prev) =>
       prev.some((a) => String(a.id) === String(address.id)) ? prev : [...prev, address]
@@ -453,7 +486,7 @@ export default function OrderDetailView({
         const proof = stg.proof || stg.payment?.image || '';
         if (proof || isLunas || isMenunggu) {
           map[key] = {
-            title: stg.label || `Tahap ${i + 1}`,
+            title: stageDisplayName(stg, i, ord.paymentStages.length),
             nominal: Number(stg.amount) || 0,
             bank: stg.payment?.bank || ord.dpBank || 'BCA (PT Afathar Niaga Indonesia)',
             status: isLunas ? 'Lunas' : 'Menunggu Validasi',
@@ -511,6 +544,61 @@ export default function OrderDetailView({
   const buyerName = String(order?.mitraName || currentUser?.name || 'Mitra').split(' (')[0];
   const buyerAddress =
     order?.address || order?.alamat || '-';
+
+  const billingName =
+    primaryAddress?.recipient ||
+    primaryAddress?.name ||
+    order?.mitraName ||
+    currentUser?.name ||
+    'Mitra Afathar';
+
+  const billingPhone =
+    primaryAddress?.phone ||
+    order?.mitraPhone ||
+    order?.phone ||
+    currentUser?.phone ||
+    '';
+
+  const billingEmail =
+    primaryAddress?.email ||
+    order?.mitraEmail ||
+    order?.email ||
+    currentUser?.email ||
+    '';
+
+  const billingLevel =
+    order?.mitraLevel ||
+    order?.level ||
+    currentUser?.level ||
+    currentUser?.role ||
+    '';
+
+  const billingFullAddress = useMemo(() => {
+    if (primaryAddress && typeof primaryAddress === 'object') {
+      const full = formatFullAddress(primaryAddress);
+      if (full) return full;
+      if (primaryAddress.address) {
+        return [primaryAddress.address, primaryAddress.city, primaryAddress.province]
+          .filter(Boolean)
+          .join(', ');
+      }
+    }
+    if (typeof primaryAddress === 'string' && primaryAddress.trim()) {
+      return primaryAddress.trim();
+    }
+    if (order?.address && typeof order.address === 'string' && order.address.trim()) {
+      return order.address.trim();
+    }
+    if (order?.alamat && typeof order.alamat === 'string' && order.alamat.trim()) {
+      return order.alamat.trim();
+    }
+    if (currentUser?.address) {
+      return [currentUser.address, currentUser.city, currentUser.province]
+        .filter(Boolean)
+        .join(', ');
+    }
+    return 'Alamat penagihan belum diatur';
+  }, [primaryAddress, order?.address, order?.alamat, currentUser]);
   const dpDue =
     order?.dpDueDate ||
     (order?.closeDate && order.closeDate !== '-' ? order.closeDate : '27 Oktober 2026');
@@ -793,7 +881,7 @@ export default function OrderDetailView({
     if (onPayWithDeposit) {
       onPayWithDeposit({
         orderNo: orderNum,
-        billTitle: proofStage?.label || proofTitle || (isDp ? 'DP PO' : isPelunasan ? 'Pelunasan PO' : 'Cicilan PO'),
+        billTitle: proofStage?.displayName || proofStage?.label || proofTitle || (isDp ? 'DP PO' : isPelunasan ? 'Pelunasan PO' : 'Cicilan PO'),
         amount: amountToPay,
         billType: stageKey,
         installmentId: instId
@@ -803,7 +891,7 @@ export default function OrderDetailView({
     setLocalPayments((prev) => ({
       ...prev,
       [stageKey]: {
-        title: proofStage?.label || (isDp ? 'DP' : isPelunasan ? 'Pelunasan' : 'Cicilan'),
+        title: proofStage?.displayName || proofStage?.label || (isDp ? 'DP' : isPelunasan ? 'Pelunasan + Ongkir' : 'Cicilan'),
         nominal: amountToPay,
         bank: 'Saldo Deposit Mitra',
         status: 'Lunas',
@@ -902,7 +990,7 @@ export default function OrderDetailView({
 
     const key = isDp ? 'dp' : isPelunasan ? 'pelunasan' : stageKey;
     const paymentEntry = {
-      title: proofStage?.label || proofTitle || (isDp ? 'DP' : isPelunasan ? 'Pelunasan' : 'Cicilan'),
+      title: proofStage?.displayName || proofStage?.label || proofTitle || (isDp ? 'DP' : isPelunasan ? 'Pelunasan + Ongkir' : 'Cicilan'),
       nominal: parseInt(proofAmount || '0', 10),
       bank: proofBank,
       note: proofNote,
@@ -1180,11 +1268,8 @@ export default function OrderDetailView({
               const hasProof = Boolean(stg.proof || stg.payment?.image || localPay?.image);
               const isWaiting = stg.status === 'Menunggu Verifikasi' || stg.status === 'Menunggu Validasi' || (hasProof && !isLunas);
 
-              const stageTitle = isFirst
-                ? `DP ${summaryTitle}`
-                : isLast
-                ? `Pelunasan + Ongkir ${summaryTitle}`
-                : `${stg.label || `Cicilan ${sIdx}`} ${summaryTitle}`;
+              const stageName = stageDisplayName(stg, sIdx, order.paymentStages.length);
+              const stageTitle = `${stageName} ${summaryTitle}`;
               const nominal = isLast
                 ? (Number(stg.amount || pelunasanNominal) + ongkirAmount)
                 : Number(stg.amount || Math.round(totalItemsPrice * (stg.pct || 30) / 100));
@@ -1266,7 +1351,7 @@ export default function OrderDetailView({
                     </span>
                   ) : (
                     <button
-                      onClick={() => handleOpenProof(stageTitle, nominal, stg)}
+                      onClick={() => handleOpenProof(stageTitle, nominal, { ...stg, displayName: stageName })}
                       className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer"
                     >
                       Upload Bukti Pembayaran
@@ -1799,7 +1884,18 @@ export default function OrderDetailView({
           </div>
         ) : (
           <div className="space-y-3">
-            {addressGroups.map((group) => (
+            {addressGroups.map((group) => {
+              // Saat alamat sudah terkunci & mitra belum sempat split,
+              // tampilkan seluruh item pesanan sebagai alokasi implisit.
+              const displayRows = group.rows.length > 0
+                ? group.rows
+                : !canManageAddress && items.length > 0
+                  ? items.map((item) => ({
+                      item,
+                      split: { id: `fallback-${item.id}`, qty: Number(item.qty) || 1 }
+                    }))
+                  : [];
+              return (
               <div
                 key={group.address?.id ?? group.address?.recipient}
                 className="border border-stone-200 rounded-2xl overflow-hidden"
@@ -1873,11 +1969,11 @@ export default function OrderDetailView({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-stone-100">
-                    {group.rows.length === 0 ? (
+                    {displayRows.length === 0 ? (
                       <tr>
                         <td colSpan={3} className="px-3 py-4 text-center text-stone-400 italic">
                           <div className="space-y-1.5">
-                            <p>Belum ada produk. Klik tombol di bawah untuk mengatur produk ke alamat ini.</p>
+                            <p>{canManageAddress ? 'Belum ada produk. Klik tombol di bawah untuk mengatur produk ke alamat ini.' : 'Belum ada produk pada pesanan ini.'}</p>
                             {canManageAddress && (
                               <button
                                 type="button"
@@ -1891,7 +1987,7 @@ export default function OrderDetailView({
                         </td>
                       </tr>
                     ) : (
-                      group.rows.map(({ item, split }) => (
+                      displayRows.map(({ item, split }) => (
                         <tr key={split.id}>
                           <td className="px-3 py-2">
                             <p className="font-semibold text-stone-800">{item.title}</p>
@@ -1917,7 +2013,8 @@ export default function OrderDetailView({
                   </tbody>
                 </table>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -1964,112 +2061,106 @@ export default function OrderDetailView({
       {/* Bottom Section: Informasi Pre-Order & Rincian Pembayaran */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
         
-        {/* Left: Detail Pengiriman & Label Dropship */}
-        <div className="md:col-span-7 bg-white rounded-3xl p-6 sm:p-7 shadow-xs border border-stone-200/80 space-y-4 text-xs text-stone-700">
-          <div className="flex items-center gap-2 pb-3 border-b border-stone-100">
-            <TruckIcon className="w-4 h-4 text-[#6B1416]" />
-            <h4 className="font-bold text-stone-900 text-xs sm:text-sm">
-              Detail Pengiriman &amp; Label Dropship
-            </h4>
+        {/* Left: Alamat Penagihan */}
+        <div className="md:col-span-6 bg-white rounded-3xl p-6 sm:p-7 shadow-xs border border-stone-200/80 space-y-4 text-xs text-stone-700">
+          <div className="flex items-center justify-between pb-3 border-b border-stone-100">
+            <div className="flex items-center gap-2">
+              <MapPinIcon className="w-4 h-4 text-[#6B1416]" />
+              <h4 className="font-bold text-stone-900 text-xs sm:text-sm">
+                Alamat Penagihan
+              </h4>
+            </div>
+            {canManageAddress && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPickingAddressFor('primary');
+                  setIsAddressPickerOpen(true);
+                }}
+                className="text-[10px] font-bold text-[#6B1416] hover:text-[#520C0E] px-2.5 py-1 rounded-md border border-stone-200 bg-white hover:bg-stone-50 transition cursor-pointer shadow-2xs flex items-center gap-1"
+              >
+                <PencilIcon className="w-3 h-3" />
+                <span>Ubah Alamat</span>
+              </button>
+            )}
           </div>
 
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200/70 space-y-1.5">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Label Pengirim (Dropship)</p>
-                {canManageAddress && !isEditingSender && (
-                  <button
-                    type="button"
-                    onClick={() => setIsEditingSender(true)}
-                    className="text-[10px] font-bold text-[#6B1416] hover:text-[#520C0E] px-2 py-0.5 rounded-md border border-stone-200 bg-white hover:bg-stone-50 transition cursor-pointer"
-                  >
-                    Ubah
-                  </button>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200/70 space-y-2 flex flex-col justify-between">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Ditagihkan Kepada</p>
+                  {canManageAddress && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPickingAddressFor('primary');
+                        setIsAddressPickerOpen(true);
+                      }}
+                      className="text-[10px] font-bold text-[#6B1416] hover:text-[#520C0E] px-2 py-0.5 rounded-md border border-stone-200 bg-white hover:bg-stone-50 transition cursor-pointer"
+                    >
+                      Ubah
+                    </button>
+                  )}
+                </div>
+
+                <p className="font-bold text-stone-800 text-xs flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  {billingName}
+                </p>
+                {billingPhone && (
+                  <p className="text-[11px] text-stone-600 font-medium">Telp: {billingPhone}</p>
+                )}
+                {billingEmail && (
+                  <p className="text-[11px] text-stone-500 font-mono">{billingEmail}</p>
+                )}
+                {billingLevel && (
+                  <span className="inline-block px-2 py-0.5 rounded bg-stone-200/70 text-stone-700 text-[9px] font-semibold">
+                    {billingLevel}
+                  </span>
                 )}
               </div>
 
-              {isEditingSender ? (
-                <div className="space-y-2">
-                  <input
-                    type="text"
-                    value={senderIdentity.name}
-                    onChange={(e) => setSenderIdentity((p) => ({ ...p, name: e.target.value }))}
-                    placeholder="Nama toko pengirim"
-                    className="w-full bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-1 focus:ring-[#6B1416]/40"
-                  />
-                  <input
-                    type="text"
-                    value={senderIdentity.phone}
-                    onChange={(e) => setSenderIdentity((p) => ({ ...p, phone: e.target.value }))}
-                    placeholder="Telepon pengirim (mis. 0812xxxx)"
-                    className="w-full bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-1 focus:ring-[#6B1416]/40"
-                  />
-                  <textarea
-                    value={senderIdentity.notes}
-                    onChange={(e) => setSenderIdentity((p) => ({ ...p, notes: e.target.value }))}
-                    placeholder="Catatan label (opsional, mis. 'Jangan cantumkan harga')"
-                    rows={2}
-                    className="w-full bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-1 focus:ring-[#6B1416]/40 resize-none"
-                  />
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleSaveSenderIdentity}
-                      className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition cursor-pointer"
-                    >
-                      Simpan Identitas
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingSender(false)}
-                      className="bg-white border border-stone-300 hover:bg-stone-50 text-stone-700 font-semibold text-[10px] px-3 py-1.5 rounded-lg transition cursor-pointer"
-                    >
-                      Batal
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <p className="font-bold text-stone-800 text-xs flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                    {senderIdentity.name || 'Toko Mitra'}
-                  </p>
-                  {senderIdentity.phone && (
-                    <p className="text-[11px] text-stone-600 font-medium">Telp: {senderIdentity.phone}</p>
-                  )}
-                  {senderIdentity.notes && (
-                    <p className="text-[11px] text-stone-600 italic">"{senderIdentity.notes}"</p>
-                  )}
-                  <p className="text-[10px] text-stone-500">
-                    {canManageAddress
-                      ? 'Identitas ini dicantumkan sebagai pengirim paket di label ekspedisi. Ubah sebelum alamat dikonfirmasi.'
-                      : 'Identitas pengirim terkunci bersama alamat — menunggu input ongkir Admin.'}
-                  </p>
-                </>
-              )}
+              <p className="text-[10px] text-stone-500 pt-1">
+                {canManageAddress
+                  ? 'Identitas resmi mitra yang ditagihkan pada faktur pemesanan ini.'
+                  : 'Identitas penagihan terkunci bersama pesanan.'}
+              </p>
             </div>
 
-            <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200/70 space-y-1">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Ringkasan Logistik</p>
-              <p className="font-bold text-stone-800 text-xs">
-                {selectedCourier || order?.courier || 'Ekspedisi Reguler / Cargo'}
-              </p>
-              <p className="text-[10px] text-stone-500">
-                Total muatan: <strong>{totalQty} pcs</strong> &bull; Estimasi berat: <strong>{(totalQty * 0.3).toFixed(1)} Kg</strong>
+            <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200/70 space-y-2 flex flex-col justify-between">
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Alamat Penagihan</p>
+                <p className="font-semibold text-stone-800 text-xs leading-relaxed">
+                  {billingFullAddress}
+                </p>
+              </div>
+
+              <p className="text-[10px] text-stone-500 pt-1">
+                Alamat domisili / kantor penagihan mitra yang terdaftar.
               </p>
             </div>
           </div>
 
-          <div className="bg-amber-50/70 rounded-2xl p-3.5 border border-amber-200/70 text-[11px] text-amber-900 flex items-start gap-2.5">
-            <InfoIcon className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <div className="leading-relaxed">
-              <strong className="font-semibold text-amber-950">Catatan Ongkir:</strong> Biaya ongkos kirim belum termasuk pada total tagihan di samping. Admin Finance akan menginput nominal ongkir resmi setelah paket selesai produksi, ditimbang di gudang, dan siap dikirim.
+          {hasOngkir ? (
+            <div className="bg-emerald-50/70 rounded-2xl p-3.5 border border-emerald-200/70 text-[11px] text-emerald-900 flex items-start gap-2.5">
+              <CheckIcon className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <div className="leading-relaxed">
+                <strong className="font-semibold text-emerald-950">Ongkir Sudah Diinput:</strong> Biaya kirim Rp {ongkirAmount.toLocaleString('id-ID')} telah ditetapkan Admin Finance dan ditagihkan bersama termin Pelunasan.
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="bg-amber-50/70 rounded-2xl p-3.5 border border-amber-200/70 text-[11px] text-amber-900 flex items-start gap-2.5">
+              <InfoIcon className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="leading-relaxed">
+                <strong className="font-semibold text-amber-950">Catatan Ongkir:</strong> Biaya ongkos kirim belum termasuk pada total tagihan di samping. Admin Finance akan menginput nominal ongkir resmi setelah paket selesai produksi, ditimbang di gudang, dan siap dikirim.
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right: Rincian Pembayaran */}
-        <div className="md:col-span-5 bg-white rounded-3xl p-6 sm:p-7 shadow-xs border border-stone-200/80 space-y-3.5 text-xs text-stone-700">
+        <div className="md:col-span-6 bg-white rounded-3xl p-6 sm:p-7 shadow-xs border border-stone-200/80 space-y-3.5 text-xs text-stone-700">
           <h4 className="font-bold text-xs sm:text-sm text-stone-900 pb-2.5 border-b border-stone-100">
             Rincian Pembayaran
           </h4>
@@ -2084,10 +2175,14 @@ export default function OrderDetailView({
               <span className="font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full text-[10px]">Gratis (Rp 0)</span>
             </div>
             <div className="flex justify-between items-start gap-2">
-              <span className="text-stone-500">Ongkos kirim</span>
-              <span className="font-semibold text-amber-700 text-right text-[11px]">
-                Dihitung setelah penimbangan koli di gudang
-              </span>
+              <span className="text-stone-500 whitespace-nowrap">Ongkos kirim</span>
+              {hasOngkir ? (
+                <span className="font-semibold text-emerald-700">Rp {ongkirAmount.toLocaleString('id-ID')}</span>
+              ) : (
+                <span className="font-semibold text-amber-700 text-right text-[11px]">
+                  Dihitung setelah penimbangan koli di gudang
+                </span>
+              )}
             </div>
 
             <div className="pt-2.5 border-t border-dashed border-stone-200 space-y-1.5 text-[11px]">
@@ -2096,7 +2191,7 @@ export default function OrderDetailView({
                   const sNominal = Number(stg.amount || Math.round(totalItemsPrice * (stg.pct || 0) / 100));
                   return (
                     <div key={sIdx} className="flex justify-between text-stone-600">
-                      <span>Termin {stg.label || `Tahap ${sIdx + 1}`} ({stg.pct}%)</span>
+                      <span>Termin {stageDisplayName(stg, sIdx, order.paymentStages.length)} ({stg.pct}%)</span>
                       <span className="font-semibold text-stone-800">Rp {sNominal.toLocaleString('id-ID')}</span>
                     </div>
                   );
@@ -2108,7 +2203,7 @@ export default function OrderDetailView({
                     <span className="font-semibold text-stone-800">Rp {dpNominal.toLocaleString('id-ID')}</span>
                   </div>
                   <div className="flex justify-between text-stone-600">
-                    <span>Termin Pelunasan ({pelunasanPct}%)</span>
+                    <span>Termin Pelunasan + Ongkir ({pelunasanPct}%)</span>
                     <span className="font-semibold text-stone-800">Rp {pelunasanNominal.toLocaleString('id-ID')}</span>
                   </div>
                 </>
@@ -2118,7 +2213,11 @@ export default function OrderDetailView({
             <div className="pt-3 border-t border-stone-200 flex justify-between items-center">
               <div>
                 <p className="font-bold text-stone-900 text-xs sm:text-sm">Total Tagihan Produk</p>
-                <p className="text-[10px] text-stone-400">Belum termasuk ongkir</p>
+                <p className="text-[10px] text-stone-400">
+                  {hasOngkir
+                    ? `Ditagihkan bersama ongkir Rp ${ongkirAmount.toLocaleString('id-ID')} pada pelunasan`
+                    : 'Belum termasuk ongkir'}
+                </p>
               </div>
               <span className="font-extrabold text-base sm:text-lg text-[#6B1416]">
                 Rp {totalItemsPrice.toLocaleString('id-ID')}
@@ -2170,7 +2269,7 @@ export default function OrderDetailView({
                 <MapPinIcon className="w-4 h-4 text-[#6B1416]" />
                 <h4 className="font-bold text-sm text-stone-900">
                   {pickingAddressFor === 'primary'
-                    ? 'Pilih Alamat Pengiriman Utama'
+                    ? 'Pilih Alamat Penagihan'
                     : 'Tambah Alamat Penerima (Split Alamat)'}
                 </h4>
               </div>
@@ -2186,7 +2285,7 @@ export default function OrderDetailView({
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] text-stone-500">
                   {pickingAddressFor === 'primary'
-                    ? 'Pilih alamat dari buku alamat untuk tujuan utama pesanan ini.'
+                    ? 'Pilih alamat dari buku alamat untuk identitas penagihan pesanan ini.'
                     : 'Pilih alamat dari buku alamat, lalu atur produk yang dikirim ke alamat tersebut.'}
                 </p>
                 <button
@@ -2217,7 +2316,7 @@ export default function OrderDetailView({
                         if (pickingAddressFor === 'primary') {
                           setPrimaryAddress(addr);
                           setIsAddressPickerOpen(false);
-                          setNotification(`Alamat utama diubah ke: ${addr.recipient || addr.name}`);
+                          setNotification(`Alamat penagihan diubah ke: ${addr.recipient || addr.name}`);
                           setTimeout(() => setNotification(''), 3000);
                         } else {
                           handlePickAddress(addr);
@@ -2541,17 +2640,18 @@ export default function OrderDetailView({
                       <div className="flex justify-between">
                         <span>Tahap:</span>
                         <span className="font-semibold text-stone-800">
-                          {(() => {
-                            const s = proofStage?.type
-                              || (String(proofTitle || '').toLowerCase().includes('dp')
-                                ? 'dp'
-                                : String(proofTitle || '').toLowerCase().includes('cicilan')
-                                ? 'cicilan'
-                                : 'pelunasan');
-                            if (s === 'dp') return proofStage?.label || 'Uang Muka (DP)';
-                            if (s === 'pelunasan') return proofStage?.label || 'Pelunasan PO';
-                            return proofStage?.label || `Cicilan PO${proofStage?.sequence ? ` ${proofStage.sequence}` : ''}`;
-                          })()}
+                          {proofStage?.displayName
+                            || (proofStage?.type === 'dp'
+                              ? 'DP'
+                              : proofStage?.type === 'pelunasan'
+                              ? 'Pelunasan + Ongkir'
+                              : proofStage
+                              ? `DP ${proofStage.sequence || 2}`
+                              : (proofTitle || '').toLowerCase().includes('pelunasan')
+                              ? 'Pelunasan + Ongkir'
+                              : (proofTitle || '').toLowerCase().includes('cicilan')
+                              ? 'DP 2'
+                              : 'DP')}
                         </span>
                       </div>
                     </div>

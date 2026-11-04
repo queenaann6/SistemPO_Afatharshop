@@ -26,13 +26,22 @@ export function saveStoredAddresses(addresses) {
 }
 
 export function formatFullAddress({ address, subdistrict, district, city, province, postalCode }) {
+  const base = (address || '').trim();
+  const baseLower = base.toLowerCase();
   const parts = [];
-  if (address && address.trim()) parts.push(address.trim());
-  if (subdistrict && subdistrict.trim()) parts.push(`Kelurahan ${subdistrict.trim()}`);
-  if (district && district.trim()) parts.push(`Kecamatan ${district.trim()}`);
-  if (city && city.trim()) parts.push(city.trim());
-  if (province && province.trim()) parts.push(province.trim());
-  if (postalCode && postalCode.trim()) parts.push(postalCode.trim());
+  if (base) parts.push(base);
+  const push = (value, prefix = '') => {
+    const v = (value || '').trim();
+    if (!v) return;
+    // Lewati segmen yang sudah tercantum di string alamat utama agar tidak dobel.
+    if (baseLower.includes(v.toLowerCase())) return;
+    parts.push(prefix ? `${prefix} ${v}` : v);
+  };
+  push(subdistrict, 'Kelurahan');
+  push(district, 'Kecamatan');
+  push(city);
+  push(province);
+  push(postalCode);
   return parts.join(', ');
 }
 

@@ -40,6 +40,17 @@
   background: #B68664;
 }
 
+/* Hilangkan tombol spinner (panah naik/turun) pada seluruh input angka / harga di semua halaman */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
 /* Dedicated Print Stylesheet: Ensures clean 1-page A4 print without website clutter */
 @media print {
   body {

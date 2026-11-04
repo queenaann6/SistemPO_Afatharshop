@@ -10,6 +10,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\OrderStatusHistory;
 use App\Models\ProductVariant;
+use App\Support\TerminPlan;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -196,68 +197,18 @@ class OrderController extends Controller
             ]);
 
             $product = $variants->first()?->product;
-            $productStages = $product?->payment_stages;
-            if (is_string($productStages)) {
-                $productStages = json_decode($productStages, true);
-            }
 
-            $stages = [];
-            if (is_array($productStages) && count($productStages) >= 2) {
-                $totalStages = count($productStages);
-                foreach ($productStages as $idx => $stg) {
-                    $pct = (float) ($stg['pct'] ?? 0) / 100;
-                    $isFirst = $idx === 0;
-                    $isLast = $idx === $totalStages - 1;
-                    $type = $isFirst ? 'dp' : ($isLast ? 'pelunasan' : ('cicilan_' . $idx));
-                    $dueDays = $isFirst ? 3 : ($isLast ? 60 : (30 * $idx));
-                    if (!empty($stg['date'])) {
-                        try {
-                            $diff = now()->diffInDays(\Carbon\Carbon::parse($stg['date']), false);
-                            if ($diff > 0) $dueDays = $diff;
-                        } catch (\Throwable $e) {}
-                    }
-                    $stages[] = [
-                        'type'            => $type,
-                        'sequence_number' => $idx + 1,
-                        'percent'         => $pct,
-                        'due_days'        => $dueDays,
-                    ];
-                }
-            } else {
-                $dpPercent = (int) ($product?->min_dp_percent ?? 25);
-                $dpPercent = max(10, min(90, $dpPercent));
-                $cicilanPercent = max(0, 100 - $dpPercent - 25);
+            $plan = TerminPlan::split($subtotal, TerminPlan::forProduct($product, null, now()));
 
-                if ($cicilanPercent > 0) {
-                    $stages = [
-                        ['type' => 'dp', 'sequence_number' => 1, 'percent' => $dpPercent / 100, 'due_days' => 3],
-                        ['type' => 'cicilan', 'sequence_number' => 2, 'percent' => $cicilanPercent / 100, 'due_days' => 30],
-                        ['type' => 'pelunasan', 'sequence_number' => 3, 'percent' => (100 - $dpPercent - $cicilanPercent) / 100, 'due_days' => 60],
-                    ];
-                } else {
-                    $stages = [
-                        ['type' => 'dp', 'sequence_number' => 1, 'percent' => $dpPercent / 100, 'due_days' => 3],
-                        ['type' => 'pelunasan', 'sequence_number' => 2, 'percent' => (100 - $dpPercent) / 100, 'due_days' => 30],
-                    ];
-                }
-            }
-
-            $allocated = 0;
-            foreach ($stages as $index => $stage) {
-                $isLast = $index === count($stages) - 1;
-                $amount = $isLast
-                    ? round($totalAmount - $allocated, 2)
-                    : round($totalAmount * $stage['percent'], 2);
-                $allocated += $amount;
-
+            foreach ($plan as $stage) {
                 Installment::create([
                     'invoice_id'      => $invoice->id,
                     'type'            => $stage['type'],
-                    'sequence_number' => $stage['sequence_number'],
-                    'amount'          => $amount,
+                    'sequence_number' => $stage['sequence'],
+                    'amount'          => $stage['amount'],
                     'paid_amount'     => 0,
                     'status'          => 'belum_bayar',
-                    'due_at'          => now()->addDays($stage['due_days']),
+                    'due_at'          => $stage['due_at'],
                 ]);
             }
 

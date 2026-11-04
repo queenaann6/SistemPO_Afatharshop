@@ -17,8 +17,18 @@ class OrderItem extends Model
         'quantity',
         'unit_price',
         'fee',
+        'discount_nominal',
+        'addon_nominal',
         'subtotal',
         'created_at',
+    ];
+
+    protected $casts = [
+        'unit_price'       => 'float',
+        'fee'              => 'float',
+        'discount_nominal' => 'float',
+        'addon_nominal'    => 'float',
+        'subtotal'         => 'float',
     ];
 
     public function order()

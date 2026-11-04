@@ -104,6 +104,7 @@ Route::prefix('management')->middleware('auth:api')->group(function () {
         Route::get('bootstrap', [ManagementController::class, 'bootstrap']);
         Route::get('orders', [ManagementController::class, 'orders']);
         Route::patch('orders/{id}/status', [ManagementController::class, 'updateOrderStatus']);
+        Route::patch('orders/{id}/invoice', [ManagementController::class, 'updateOrderInvoice']);
         Route::put('orders/{id}', [ManagementController::class, 'updateOrderStatus']);
 
         Route::get('batches', [ManagementController::class, 'batches']);

@@ -18,6 +18,7 @@ import {
   DEFAULT_SIZES,
   DEFAULT_STORE
 } from '../../data/mockData';
+import { mapOrderToProjectOrder } from '../../services/adapters';
 
 const FALLBACK_IMAGE =
   'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=800&q=80';
@@ -170,7 +171,10 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
         (sum, item) => sum + (num(item.basePrice) || num(item.price)) * (num(item.qty) || 1),
         0
       ) || subtotal + feeMitraNominal;
-    const discountPct = num(order.discountPct) || (gross ? Math.round((feeMitraNominal / gross) * 100) : 0);
+    const discountNominal = items.reduce((sum, item) => sum + num(item.discountNominal), 0);
+    const discountPct =
+      num(order.discountPct) ||
+      (gross ? Math.round(((discountNominal || feeMitraNominal) / gross) * 100) : 0);
     const schemeDpPct = num(order.dpPct) || num(matchedProduct?.dpPct) || 50;
     const dpNominal = num(order.dpNominal) || Math.round((subtotal * schemeDpPct) / 100);
     const flags = statusFlags(order.status);
@@ -223,7 +227,7 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       qty,
       price,
       discountPct,
-      discountNominal: feeMitraNominal,
+      discountNominal: num(order.discountNominal) || discountNominal || feeMitraNominal,
       feeMitraNominal,
       brandDiscountNominal,
       feeCompanyNominal,
@@ -307,6 +311,48 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
   });
 
 export const projectOrderToCore = (order, options) => projectOrdersToCore([order], options)[0];
+
+const SERVER_MONEY_FIELDS = [
+  'subtotal',
+  'qty',
+  'price',
+  'variant',
+  'ongkir',
+  'discountPct',
+  'discountNominal',
+  'addonNominal',
+  'dpPct',
+  'dpNominal',
+  'pelunasanNominal',
+  'paymentStages',
+  'stageDetails',
+  'installmentIds',
+  'dpInstallmentId',
+  'pelunasanInstallmentId',
+  'invoiceId',
+  'invoiceNumber',
+  'invoiceOutstanding'
+];
+
+/**
+ * Salinan order hasil rekrum server (payload /management/orders/{id}/invoice)
+ * menjadi patch nominal untuk core order, supaya dashboard langsung memakai
+ * angka server alih-alih hasil hitungan lokal.
+ */
+export const serverMoneyPatch = (payload) => {
+  if (!payload || !Array.isArray(payload.items)) return null;
+
+  const core = projectOrderToCore(mapOrderToProjectOrder(payload), {
+    currentUser: {},
+    seedMitra: [],
+    products: []
+  });
+
+  return SERVER_MONEY_FIELDS.reduce((acc, key) => {
+    if (core[key] !== undefined && core[key] !== null) acc[key] = core[key];
+    return acc;
+  }, {});
+};
 
 // Pesanan wajib menunjuk produk aslinya. Kalau produk belum ada di katalog
 // (misalnya belum dipublikasikan), biarkan rujukan apa adanya supaya recap

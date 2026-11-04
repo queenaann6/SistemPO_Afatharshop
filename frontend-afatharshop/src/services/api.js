@@ -207,6 +207,8 @@ export const api = {
     orders: (options) => request('/management/orders', options),
     updateOrderStatus: (id, payload) =>
       request(`/management/orders/${id}/status`, { method: 'PATCH', body: payload }),
+    updateOrderInvoice: (id, payload) =>
+      request(`/management/orders/${id}/invoice`, { method: 'PATCH', body: payload }),
     updateOrder: (id, payload) =>
       request(`/management/orders/${id}`, { method: 'PUT', body: payload }),
 

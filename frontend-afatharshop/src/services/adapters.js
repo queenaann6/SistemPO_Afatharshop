@@ -306,8 +306,10 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
   const subtotal = toNumber(order.subtotal, Math.max(0, total - shipping));
   const dpRow = installments.find((row) => row.type === 'dp');
   const pelunasanRow = installments.find((row) => row.type === 'pelunasan');
+  // Termin dibagi di atas subtotal produk; ongkir ditagih terpisah.
+  const stageBase = subtotal > 0 ? subtotal : total;
   const dpPct =
-    total > 0 && dpRow ? Math.round((toNumber(dpRow.amount) / total) * 100) : 25;
+    stageBase > 0 && dpRow ? Math.round((toNumber(dpRow.amount) / stageBase) * 100) : 25;
 
   const paid = toNumber(order.invoice?.paid_amount);
   const invoiceStatus = String(order.invoice?.status || '').toLowerCase();
@@ -466,7 +468,7 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
               : row.type === 'pelunasan'
                 ? 'Pelunasan'
                 : `Cicilan ${row.sequence_number ? row.sequence_number - 1 : index + 1}`,
-          pct: total ? Math.round((toNumber(row.amount) / total) * 100) : 0,
+          pct: stageBase ? Math.round((toNumber(row.amount) / stageBase) * 100) : 0,
           amount: toNumber(row.amount),
           status: stgStatus,
           proof: mediaUrl(lastPay?.proof_url || ''),
@@ -482,24 +484,41 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
         };
       })
       .filter((stage) => stage.amount > 0 || stage.pct > 0),
-    items: items.map((item, index) => ({
-      id: item.id ?? index + 1,
-      variantId: item.variant?.id ?? null,
-      productId: item.variant?.product?.id ?? null,
-      title: item.variant?.product?.name || product.name || 'Item PO',
-      variant:
-        [item.variant?.color, item.variant?.model, item.variant?.size]
-          .filter(Boolean)
-          .join('/') || 'All Varian',
-      color: item.variant?.color || '',
-      model: item.variant?.model || '',
-      size: item.variant?.size || '',
-      price: toNumber(item.unit_price),
-      qty: toNumber(item.quantity, 1),
-      fee: toNumber(item.fee),
-      subtotal: toNumber(item.subtotal),
-      image: mediaUrl(item.variant?.product?.image || product.image) || FALLBACK_IMAGE
-    })),
+    items: items.map((item, index) => {
+      const qty = toNumber(item.quantity, 1);
+      const gross = toNumber(item.subtotal, toNumber(item.unit_price) * qty);
+      const fee = toNumber(item.fee);
+      // Baris tua tidak punya kolom diskon/addon: fee negatif = potongan,
+      // fee positif = biaya tambahan.
+      const discountNominal = toNumber(item.discount_nominal) || Math.max(0, -fee);
+      const addonNominal = toNumber(item.addon_nominal) || Math.max(0, fee);
+      return {
+        id: item.id ?? index + 1,
+        variantId: item.variant?.id ?? null,
+        productId: item.variant?.product?.id ?? null,
+        title: item.variant?.product?.name || product.name || 'Item PO',
+        variant:
+          [item.variant?.color, item.variant?.model, item.variant?.size]
+            .filter(Boolean)
+            .join('/') || 'All Varian',
+        color: item.variant?.color || '',
+        model: item.variant?.model || '',
+        size: item.variant?.size || '',
+        price: toNumber(item.unit_price),
+        qty,
+        fee,
+        discountNominal,
+        discountPct: gross > 0 ? Math.round((discountNominal / gross) * 100) : 0,
+        addon: qty > 0 ? Math.round(addonNominal / qty) : 0,
+        addonNominal,
+        // Nilai bersih yang ditagih untuk baris ini: gross - diskon + addon.
+        subtotal: Math.max(
+          0,
+          Math.round(toNumber(item.net_subtotal) || gross - discountNominal + addonNominal)
+        ),
+        image: mediaUrl(item.variant?.product?.image || product.image) || FALLBACK_IMAGE
+      };
+    }),
     mitraId: owner.id ? `m-${owner.id}` : '',
     mitraName: owner.name || owner.nama || '',
     mitraPhone: owner.phone || '',

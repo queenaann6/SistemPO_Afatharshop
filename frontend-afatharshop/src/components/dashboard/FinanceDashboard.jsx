@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import api from '../../services/api';
 import { dbId } from '../../services/adapters';
 import BankAccountModal from './BankAccountModal';
+import { serverMoneyPatch } from './projectBridge';
 import {
   ACCENTS,
   Badge,
@@ -58,6 +59,7 @@ import {
   fmtDate,
   groupBy,
   hasAddress,
+  invoicePatchToServer,
   isPaid,
   levelTone,
   nextAction,
@@ -689,16 +691,25 @@ export default function FinanceDashboard({
     if (!matched) return false;
 
     const targetId = dbId(matched) || matched.invoice;
-    const body = orderPatchToServer(patch);
+    const invoiceBody = invoicePatchToServer(patch);
+    const body = invoiceBody || orderPatchToServer(patch);
 
     try {
+      let serverMoney = null;
       if (Object.keys(body).length) {
-        await api.management.updateOrderStatus(targetId, body);
+        const response = invoiceBody
+          ? await api.management.updateOrderInvoice(targetId, body)
+          : await api.management.updateOrderStatus(targetId, body);
+        serverMoney = invoiceBody ? serverMoneyPatch(response?.data) : null;
       }
-      commitOrders((prev) => prev.map((o) => (o.invoice === invoice ? { ...o, ...patch } : o)));
+      commitOrders((prev) =>
+        prev.map((o) =>
+          o.invoice === invoice ? { ...o, ...patch, ...(serverMoney || {}) } : o
+        )
+      );
       return true;
     } catch (err) {
-      serverFail(err, `Perubahan status ${invoice}`);
+      serverFail(err, invoiceBody ? `Perubahan invoice ${invoice}` : `Perubahan status ${invoice}`);
       return false;
     }
   };
@@ -864,6 +875,14 @@ export default function FinanceDashboard({
     const weightedDiscPct = grossTotal > 0 ? Math.round((discountNominal / grossTotal) * 10000) / 100 : 0;
 
     patchOrder(target.invoice, {
+      invoiceItems: items.map((it) => ({
+        id: it.id,
+        variantId: it.variantId,
+        qty: it.qty,
+        price: it.price,
+        discountPct: it.discountPct,
+        addon: it.addon
+      })),
       produk: items[0].title,
       variant: items.length === 1 ? items[0].variant : items.map((it) => it.variant).join('  ·  '),
       qty: totalQty,

@@ -1025,6 +1025,10 @@ export default function MarketingDashboard({
       description: f.description,
       material_detail: f.material_detail || f.materialDetail || '',
       min_dp_percent: stages[0].pct,
+      payment_stages: stages,
+      paymentStages: stages,
+      termin_count: stages.length,
+      terminCount: stages.length,
       stock_quota: variants.reduce((sum, v) => sum + Math.max(0, num(v.quota ?? v.stock)), 0),
       variants: variants.map((v) => ({
         id: typeof v.id === 'number' ? v.id : undefined,
@@ -1144,6 +1148,10 @@ export default function MarketingDashboard({
       estimated_shipment: f.readyEstimate,
       description: f.description,
       min_dp_percent: stages[0].pct,
+      payment_stages: stages,
+      paymentStages: stages,
+      termin_count: stages.length,
+      terminCount: stages.length,
       stock_quota: variants.reduce((sum, v) => sum + Math.max(0, num(v.quota)), 0),
       variants: variants.map((v) => ({
         id: typeof v.id === 'number' ? v.id : undefined,
@@ -5326,7 +5334,14 @@ export default function MarketingDashboard({
           poBatches={poBatches}
           onCreateBatch={async (batchPayload) => {
             try {
-              const res = await api.management.createBatch(batchPayload);
+              let cleanPayload = { ...batchPayload };
+              if (cleanPayload.brand_id && typeof cleanPayload.brand_id === 'string') {
+                const match = cleanPayload.brand_id.match(/\d+/);
+                if (match) {
+                  cleanPayload.brand_id = Number(match[0]);
+                }
+              }
+              const res = await api.management.createBatch(cleanPayload);
               if (res?.data) {
                 setPoBatches((prev) => [...prev, res.data]);
                 return res.data;
@@ -5355,14 +5370,9 @@ export default function MarketingDashboard({
               size="lg"
               onClose={() => setVariantModal(null)}
               footer={
-                <>
-                  <Button variant="outline" icon="refresh" onClick={() => syncVariantsFromOptions(product)}>
-                    Lengkapi dari Opsi
-                  </Button>
-                  <Button variant="outline" onClick={() => setVariantModal(null)}>
-                    Selesai
-                  </Button>
-                </>
+                <Button variant="outline" onClick={() => setVariantModal(null)}>
+                  Selesai
+                </Button>
               }
             >
               <div className="space-y-4">

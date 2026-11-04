@@ -25,6 +25,7 @@ use App\Models\ProductPrice;
 use App\Models\ProductVariant;
 use App\Models\Supplier;
 use App\Models\User;
+use App\Support\TerminPlan;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -1072,13 +1073,23 @@ class ManagementController extends Controller
                 'avatar' => $order->user->avatar,
             ] : null,
             'address'          => $order->address,
-            'items'            => $order->items->map(fn ($item) => [
+            'items'            => $order->items->map(function ($item) {
+                // Baris lama hanya menyimpan satu kolom fee: nilai positif berarti
+                // addon, negatif berarti potongan harga.
+                $fee = (float) $item->fee;
+                $discount = (float) $item->discount_nominal > 0 ? (float) $item->discount_nominal : max(0, -$fee);
+                $addon = (float) $item->addon_nominal > 0 ? (float) $item->addon_nominal : max(0, $fee);
+
+                return [
                 'id'                => $item->id,
                 'product_variant_id' => $item->product_variant_id,
                 'quantity'          => $item->quantity,
                 'unit_price'        => (float) $item->unit_price,
-                'fee'               => (float) $item->fee,
+                'fee'               => $fee,
+                'discount_nominal'  => $discount,
+                'addon_nominal'     => $addon,
                 'subtotal'          => (float) $item->subtotal,
+                'net_subtotal'      => round((float) $item->subtotal - $discount + $addon, 2),
                 'variant'           => $item->variant ? [
                     'id'        => $item->variant->id,
                     'model'     => $item->variant->model,
@@ -1102,7 +1113,8 @@ class ManagementController extends Controller
                         ] : null,
                     ] : null,
                 ] : null,
-            ])->values(),
+                ];
+            })->values(),
             'invoice'          => $invoice ? [
                 'id'                 => $invoice->id,
                 'invoice_number'     => $invoice->invoice_number,
@@ -1511,6 +1523,10 @@ class ManagementController extends Controller
             }
         });
 
+        if ($request->hasAny(['payment_stages', 'paymentStages', 'stages', 'terminCount', 'termin_count'])) {
+            $this->syncInvoiceInstallmentsForProduct($product->fresh());
+        }
+
         $this->logActivity('product.update', 'Katalog', "Produk {$product->name} diperbarui");
 
         return response()->json([
@@ -1518,6 +1534,58 @@ class ManagementController extends Controller
             'message' => "Produk {$product->name} berhasil diperbarui di database.",
             'data'    => $this->productPayload($product->fresh(['brand.supplier', 'category', 'batch', 'variants', 'prices.level'])),
         ]);
+    }
+
+    /**
+     * Selarangkan termin invoice pesanan yang belum dibayar dengan
+     * payment_stages terbaru di katalog. Invoice yang sudah punya pembayaran
+     * atau bukti transfer tidak disentuh agar riwayat validasi tidak rusak.
+     */
+    protected function syncInvoiceInstallmentsForProduct(Product $product): void
+    {
+        $stages = TerminPlan::catalogOnly($product);
+        if ($stages === null) {
+            return;
+        }
+
+        $variantIds = $product->variants()->pluck('id');
+        if ($variantIds->isEmpty()) {
+            return;
+        }
+
+        $invoices = Invoice::where('paid_amount', 0)
+            ->where('status', '!=', 'lunas')
+            ->whereHas('order', function ($q) {
+                $q->where('status', 'not like', '%batal%')->where('status', 'not like', '%tolak%');
+            })
+            ->whereHas('order.items.variant', fn ($q) => $q->whereIn('id', $variantIds))
+            ->with(['payments', 'order'])
+            ->get();
+
+        foreach ($invoices as $invoice) {
+            if ($invoice->payments()->count() > 0) {
+                continue;
+            }
+            $base = round((float) ($invoice->order?->subtotal ?? $invoice->total_amount), 2);
+            if ($base <= 0) {
+                continue;
+            }
+
+            DB::transaction(function () use ($invoice, $stages, $base) {
+                $invoice->installments()->delete();
+                foreach (TerminPlan::split($base, $stages) as $stage) {
+                    Installment::create([
+                        'invoice_id'      => $invoice->id,
+                        'type'            => $stage['type'],
+                        'sequence_number' => $stage['sequence'],
+                        'amount'          => $stage['amount'],
+                        'paid_amount'     => 0,
+                        'status'          => 'belum_bayar',
+                        'due_at'          => $stage['due_at'],
+                    ]);
+                }
+            });
+        }
     }
 
     public function destroyProduct($id): JsonResponse
@@ -1669,7 +1737,261 @@ class ManagementController extends Controller
     }
 
     // =========================================================================
-    // 4. ORDER STATUS (Marketing ACC / Resi / Pengiriman)
+    // 4a. INVOICE EDIT (Finance mengubah rincian tagihan & termin)
+    // =========================================================================
+
+    /**
+     * Ubah produk, diskon, addon, dan DP sebuah invoice. Semua nominal dihitung
+     * ulang di server lalu jadwal termin disusun kembali dari payment_stages
+     * katalog, jadi dashboard tidak lagi menyimpan angkanya sendiri.
+     */
+    public function updateOrderInvoice(Request $request, $id): JsonResponse
+    {
+        Validator::make($request->all(), [
+            'items' => 'required|array|min:1',
+            'items.*.id' => 'nullable|integer|min:1',
+            'items.*.product_variant_id' => 'nullable|integer|min:1',
+            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.unit_price' => 'required|numeric|min:0',
+            'items.*.discount_pct' => 'nullable|numeric|min:0|max:100',
+            'items.*.addon' => 'nullable|numeric|min:0',
+            'dp_pct' => 'nullable|numeric|min:1|max:100',
+            'shipping_cost' => 'nullable|numeric|min:0',
+            'notes' => 'nullable|string',
+        ])->validate();
+
+        $order = Order::where('id', $id)->orWhere('order_number', $id)->first();
+        if (!$order) {
+            return response()->json(['success' => false, 'message' => 'Pesanan tidak ditemukan.'], 404);
+        }
+        if ($order->invoice && $order->invoice->status === 'lunas') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invoice sudah lunas sehingga rincian tagihan tidak dapat diubah.',
+            ], 422);
+        }
+
+        $lines = $this->normalizeInvoiceLines($request->input('items'));
+        $subtotal = round(array_sum(array_column($lines, 'subtotal')), 2);
+        if ($subtotal <= 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Subtotal tagihan harus lebih dari nol.',
+            ], 422);
+        }
+
+        $variantIds = array_values(array_unique(array_filter(array_column($lines, 'variant_id'))));
+        if ($variantIds) {
+            $known = ProductVariant::whereIn('id', $variantIds)->pluck('id')->all();
+            $unknown = array_diff($variantIds, array_map('intval', $known));
+            if ($unknown) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Varian produk tidak ditemukan di katalog: ' . implode(', ', $unknown) . '.',
+                ], 422);
+            }
+        }
+
+        $edited = DB::transaction(function () use ($request, $order, $lines, $subtotal) {
+            $locked = Order::where('id', $order->id)->lockForUpdate()->first();
+
+            if ($request->has('shipping_cost')) {
+                $locked->shipping_cost = max(0, (float) $request->input('shipping_cost'));
+            }
+            if ($request->has('notes')) {
+                $locked->notes = $request->input('notes');
+            }
+            $locked->subtotal = $subtotal;
+            $locked->total_amount = round($subtotal + (float) $locked->shipping_cost, 2);
+            $locked->save();
+
+            $this->syncOrderItems($locked, $lines);
+            $this->rescheduleInstallments($locked, $request->has('dp_pct') ? (float) $request->input('dp_pct') : null);
+
+            $invoice = $locked->invoice;
+            if ($invoice) {
+                $this->syncInvoiceTotals($invoice);
+            }
+
+            return $locked;
+        });
+
+        $this->logActivity(
+            'order.invoice',
+            'Pesanan',
+            "{$edited->order_number}: rincian tagihan diperbarui menjadi Rp " . number_format($edited->total_amount, 0, ',', '.')
+        );
+
+        if ($edited->user_id) {
+            $this->notify(
+                (int) $edited->user_id,
+                'Tagihan diperbarui',
+                "Invoice {$edited->order_number} diperbarui admin Finance. Total kini Rp "
+                    . number_format($edited->total_amount, 0, ',', '.') . '.',
+                'order'
+            );
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Rincian tagihan {$edited->order_number} berhasil diperbarui.",
+            'data'    => $this->orderPayload($edited->fresh([
+                'user', 'address', 'items.variant.product.brand', 'invoice.installments', 'invoice.payments',
+            ])),
+        ]);
+    }
+
+    /**
+     * Hitung ulang tiap baris produk: diskon persen dipotong dari gross, addon
+     * ditambahkan setelahnya.
+     */
+    protected function normalizeInvoiceLines(array $rows): array
+    {
+        $lines = [];
+        foreach ($rows as $row) {
+            $qty = max(1, (int) ($row['quantity'] ?? 1));
+            $price = round((float) ($row['unit_price'] ?? 0), 2);
+            $gross = round($price * $qty, 2);
+            $discountPct = max(0, min(100, (float) ($row['discount_pct'] ?? 0)));
+            $discount = min($gross, round($gross * $discountPct / 100, 2));
+            $addonTotal = round(max(0, (float) ($row['addon'] ?? 0)) * $qty, 2);
+
+            $lines[] = [
+                'id' => isset($row['id']) ? (int) $row['id'] : null,
+                'variant_id' => isset($row['product_variant_id']) ? (int) $row['product_variant_id'] : null,
+                'quantity' => $qty,
+                'unit_price' => $price,
+                'gross' => $gross,
+                'discount' => $discount,
+                'addon_total' => $addonTotal,
+                'subtotal' => round($gross - $discount + $addonTotal, 2),
+            ];
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Sinkronkan baris order_items dengan hasil hitungan invoice editor.
+     * Kolom fee lama tetap diisi (addon - diskon) supaya data lama yang
+     * membacanya tidak berubah makna.
+     */
+    protected function syncOrderItems(Order $order, array $lines): void
+    {
+        $existing = $order->items()->get()->keyBy('id');
+        $keep = [];
+
+        foreach ($lines as $line) {
+            $data = [
+                'product_variant_id' => $line['variant_id'],
+                'quantity' => $line['quantity'],
+                'unit_price' => $line['unit_price'],
+                'fee' => round($line['addon_total'] - $line['discount'], 2),
+                'discount_nominal' => $line['discount'],
+                'addon_nominal' => $line['addon_total'],
+                'subtotal' => $line['gross'],
+            ];
+
+            $item = $line['id'] !== null ? $existing->get($line['id']) : null;
+            if ($item) {
+                $item->fill($data)->save();
+            } else {
+                $item = $order->items()->create(array_merge($data, ['created_at' => now()]));
+            }
+            $keep[] = $item->id;
+        }
+
+        $order->items()->whereNotIn('id', $keep)->delete();
+    }
+
+    /**
+     * Susun ulang jadwal termin di atas subtotal (ongkir ditagih terpisah lewat
+     * payment tanpa installment_id). Termin yang sudah punya pembayaran
+     * dibiarkan utuh supaya riwayat bukti bayar tidak rusak.
+     */
+    protected function rescheduleInstallments(Order $order, ?float $dpPct): void
+    {
+        $invoice = $order->invoice;
+        if (!$invoice) {
+            return;
+        }
+
+        $base = round((float) $order->subtotal, 2);
+        $firstItem = $order->items()->with('variant.product')->first();
+        $stages = TerminPlan::forProduct($firstItem?->variant?->product, $dpPct, now());
+
+        $byType = $invoice->installments()->get()->keyBy('type');
+        $lockedSum = 0.0;
+        $keep = [];
+        $free = [];
+
+        foreach ($stages as $index => $stage) {
+            $row = $byType->get($stage['type']);
+            if ($row && $this->isInstallmentLocked($row)) {
+                $lockedSum += (float) $row->amount;
+                $keep[] = $row->id;
+                continue;
+            }
+            $free[$index] = ['stage' => $stage, 'row' => $row];
+        }
+
+        $remaining = max(0, round($base - $lockedSum, 2));
+        $amounts = TerminPlan::split($remaining, TerminPlan::rescale(array_values(array_column($free, 'stage'))));
+        $freeIndexes = array_keys($free);
+
+        foreach ($amounts as $offset => $stage) {
+            $row = $free[$freeIndexes[$offset]]['row'];
+            $data = [
+                'invoice_id'      => $invoice->id,
+                'type'            => $stage['type'],
+                'sequence_number' => $stage['sequence'],
+                'amount'          => $stage['amount'],
+                'due_at'          => $stage['due_at'],
+            ];
+            if ($row) {
+                $row->fill($data)->save();
+            } else {
+                $row = Installment::create(array_merge($data, ['paid_amount' => 0, 'status' => 'belum_bayar']));
+            }
+            $keep[] = $row->id;
+        }
+
+        $invoice->installments()->whereNotIn('id', $keep)->delete();
+    }
+
+    protected function isInstallmentLocked(Installment $row): bool
+    {
+        if ((float) $row->paid_amount > 0 || $row->status === 'lunas') {
+            return true;
+        }
+
+        return Payment::where('installment_id', $row->id)->exists();
+    }
+
+    /**
+     * Satu rumus untuk saldo invoice: pembayaran termin (dari baris installment)
+     * ditambah pembayaran di luar termin seperti ongkir.
+     */
+    protected function syncInvoiceTotals(Invoice $invoice): void
+    {
+        $installmentPaid = (float) $invoice->installments()->sum('paid_amount');
+        $stagelessPaid = (float) Payment::where('invoice_id', $invoice->id)
+            ->whereNull('installment_id')
+            ->where('status', 'disetujui')
+            ->sum('amount');
+
+        $paid = round($installmentPaid + $stagelessPaid, 2);
+        $total = round((float) ($invoice->order?->total_amount ?? $invoice->total_amount), 2);
+
+        $invoice->total_amount = $total;
+        $invoice->paid_amount = $paid;
+        $invoice->outstanding_amount = max(0, round($total - $paid, 2));
+        $invoice->status = ($total > 0 && $invoice->outstanding_amount <= 0) ? 'lunas' : 'belum_lunas';
+        $invoice->save();
+    }
+
+    // =========================================================================
+    // 4b. ORDER STATUS (Marketing ACC / Resi / Pengiriman)
     // =========================================================================
     public function updateOrderStatus(Request $request, $id): JsonResponse
     {
@@ -1796,19 +2118,13 @@ class ManagementController extends Controller
                     ]);
             }
 
-            // Hitung ulang total pembayaran invoice
-            $totalPaid = (float) $invoice->installments()->where('status', 'lunas')->sum('paid_amount');
-            $invoice->total_amount = (float) $order->total_amount;
-            $invoice->paid_amount = $totalPaid;
-            $invoice->outstanding_amount = max(0, (float) $invoice->total_amount - $totalPaid);
-            if ($invoice->outstanding_amount <= 0 && $totalPaid > 0) {
-                $invoice->status = 'lunas';
-                if (in_array($order->status, ['Menunggu Pelunasan + Ongkir', 'Menunggu Pelunasan', 'Menunggu Pembayaran Sisa Pelunasan + Ongkir'], true)) {
-                    $order->status = 'Siap Kirim';
-                    $order->save();
-                }
+            // Saldo invoice dihitung dengan satu rumus yang sama seperti
+            // verifikasi pembayaran, termasuk ongkir yang tidak punya termin.
+            $this->syncInvoiceTotals($invoice);
+            if ($invoice->status === 'lunas' && in_array($order->status, ['Menunggu Pelunasan + Ongkir', 'Menunggu Pelunasan', 'Menunggu Pembayaran Sisa Pelunasan + Ongkir'], true)) {
+                $order->status = 'Siap Kirim';
+                $order->save();
             }
-            $invoice->save();
         }
 
         if ($order->status !== $prevStatus) {
@@ -2027,13 +2343,7 @@ class ManagementController extends Controller
                 $installment->save();
             }
 
-            $invoice->refresh();
-            $invoice->paid_amount = (float) $invoice->paid_amount + $amount;
-            $invoice->outstanding_amount = max(0, (float) $invoice->total_amount - $invoice->paid_amount);
-            if ($invoice->outstanding_amount <= 0) {
-                $invoice->status = 'lunas';
-            }
-            $invoice->save();
+            $this->syncInvoiceTotals($invoice);
 
             DepositTransaction::create([
                 'user_id'         => $user->id,
@@ -2133,12 +2443,7 @@ class ManagementController extends Controller
                 $payment->installment->save();
             }
             if ($payment->invoice) {
-                $payment->invoice->paid_amount += $payment->amount;
-                $payment->invoice->outstanding_amount = max(0, $payment->invoice->total_amount - $payment->invoice->paid_amount);
-                if ($payment->invoice->outstanding_amount <= 0) {
-                    $payment->invoice->status = 'lunas';
-                }
-                $payment->invoice->save();
+                $this->syncInvoiceTotals($payment->invoice);
 
                 $order = $payment->invoice->order;
                 if ($order && in_array($order->status, ['Menunggu DP', 'Menunggu ACC Marketing', 'Open', 'Menunggu Pembayaran DP'], true)) {
@@ -2541,6 +2846,11 @@ class ManagementController extends Controller
             return null;
         }
 
+        // Tangani id berprefix string seperti "b-9", "cat-3", dsb.
+        if (is_string($id) && preg_match('/^[a-z]+-(\d+)$/i', trim($id), $matches)) {
+            $id = $matches[1];
+        }
+
         if (!is_numeric($id)) {
             throw new \InvalidArgumentException("Ref {$field} harus berupa id angka, bukan \"{$id}\".");
         }
@@ -2563,6 +2873,14 @@ class ManagementController extends Controller
                 return $this->resolveMasterRef($modelClass, $id, $label);
             }
         } catch (\InvalidArgumentException $e) {
+            // Jika pencarian dengan id gagal, tapi $name diisi, coba fallback cari lewat nama sebelum throw error
+            if ($name !== null && trim((string) $name) !== '') {
+                $trimmedName = trim((string) $name);
+                $foundByName = $modelClass::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($trimmedName)])->first();
+                if ($foundByName) {
+                    return (int) $foundByName->id;
+                }
+            }
             throw new \InvalidArgumentException("Ref {$label} tidak valid: " . $e->getMessage());
         }
 
