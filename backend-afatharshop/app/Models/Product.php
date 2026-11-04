@@ -20,6 +20,8 @@ class Product extends Model
         'tutup_po',
         'estimated_shipment',
         'min_dp_percent',
+        'payment_stages',
+        'termin_count',
         'stock_quota',
         'description',
         'material_detail',
@@ -37,6 +39,8 @@ class Product extends Model
         'tutup_po'           => 'datetime',
         'estimated_shipment' => 'date',
         'min_dp_percent'     => 'integer',
+        'payment_stages'     => 'array',
+        'termin_count'       => 'integer',
         'stock_quota'        => 'integer',
     ];
 

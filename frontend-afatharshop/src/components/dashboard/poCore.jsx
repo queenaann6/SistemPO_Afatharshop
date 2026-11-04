@@ -357,8 +357,19 @@ export const splitAddressGroups = (o) => {
   return [...map.values()];
 };
 
-export const effectiveProd = (o) =>
-  o?.productionStatus || (o?.readyAt || hasAddress(o) ? PROD.READY : PROD.QUEUE);
+export const effectiveProd = (o) => {
+  if (o?.productionStatus === PROD.READY || o?.readyAt) return PROD.READY;
+  if (o?.productionStatus === PROD.RUN || o?.status === 'Produksi' || o?.status === 'Dalam Produksi') return PROD.RUN;
+  if (o?.productionStatus === PROD.QUEUE) return PROD.QUEUE;
+  return o?.productionStatus || PROD.QUEUE;
+};
+
+export const hasConfirmedAddress = (o) => {
+  if (!o) return false;
+  if (o.addressConfirmed || o.addressSubmitted) return true;
+  if (num(o.ongkir) > 0 && hasAddress(o)) return true;
+  return false;
+};
 /**
  * Patch inti pesanan dashboard -> kolom yang diterima endpoint
  * PATCH /management/orders/{id}. Kolom lain hanya untuk tampilan dan tidak dikirim.
@@ -375,6 +386,12 @@ export const orderPatchToServer = (patch = {}) => {
   put('tracking_number', patch.resi ?? patch.tracking_number);
   put('shipping_cost', patch.ongkir);
   put('notes', patch.notes ?? patch.note);
+  put('dpStatus', patch.dpStatus);
+  put('pelunasanStatus', patch.pelunasanStatus);
+  put('ongkirStatus', patch.ongkirStatus);
+  put('addressConfirmed', patch.addressConfirmed);
+  put('addressSubmitted', patch.addressSubmitted);
+  put('note', patch.note || patch.rejectionNote || patch.dpNote || patch.pelunasanNote);
 
   return body;
 };
@@ -385,10 +402,9 @@ export const orderStage = (o) => {
   if (o.marketingStatus && o.marketingStatus !== MKT.ACC) return 'baru';
   if (!isPaid(o.dpStatus)) return 'dp';
   if (effectiveProd(o) !== PROD.READY) return 'produksi';
-  if (!hasAddress(o)) return 'alamat';
+  if (!hasConfirmedAddress(o)) return 'alamat';
   if (!num(o.ongkir)) return 'ongkir';
-  if (!isPaid(o.pelunasanStatus)) return 'pelunasan';
-  if (!isPaid(o.ongkirStatus)) return 'ongkir_bayar';
+  if (!isPaid(o.pelunasanStatus) || !isPaid(o.ongkirStatus)) return 'pelunasan';
   if (!o.resi) return 'kirim';
   if (o.shipStatus !== SHIP.DITERIMA) return 'dikirim';
   return 'selesai';
@@ -409,14 +425,14 @@ export const nextAction = (o) => {
   if (st === 'dp')
     return o.dpStatus === PAY.MENUNGGU
       ? { who: 'Finance', label: 'Verifikasi bukti DP', tone: 'blue' }
-      : { who: 'Mitra', label: 'Lakukan pembayaran DP', tone: 'blue' };
-  if (st === 'produksi') return { who: 'Purchasing', label: 'Update produksi → Ready', tone: 'violet' };
-  if (st === 'alamat') return { who: 'Mitra', label: 'Lengkapi alamat pengiriman', tone: 'cyan' };
+      : { who: 'Mitra', label: 'Bayar DP', tone: 'blue' };
+  if (st === 'produksi') return { who: 'Purchasing', label: 'Update produksi → Set Ready', tone: 'violet' };
+  if (st === 'alamat') return { who: 'Mitra', label: 'Lengkapi & konfirmasi alamat', tone: 'cyan' };
   if (st === 'ongkir') return { who: 'Finance', label: 'Input ongkir & ekspedisi', tone: 'orange' };
   if (st === 'pelunasan')
     return o.pelunasanStatus === PAY.MENUNGGU
-      ? { who: 'Finance', label: 'Verifikasi bukti pelunasan', tone: 'indigo' }
-      : { who: 'Mitra', label: 'Bayar pelunasan', tone: 'indigo' };
+      ? { who: 'Finance', label: 'Verifikasi bukti pelunasan + ongkir', tone: 'indigo' }
+      : { who: 'Mitra', label: 'Bayar sisa pelunasan + ongkir', tone: 'indigo' };
   if (st === 'ongkir_bayar')
     return o.ongkirStatus === PAY.MENUNGGU
       ? { who: 'Finance', label: 'Verifikasi bukti ongkir', tone: 'orange' }

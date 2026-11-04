@@ -87,7 +87,6 @@ export default function ProductCatalogModal({
 
   // Mass Apply Variasi (tanpa spinner arrow, dengan input Rp)
   const [bulkPrice, setBulkPrice] = useState('');
-  const [bulkHpp, setBulkHpp] = useState('');
   const [bulkQuota, setBulkQuota] = useState('');
   const [bulkAddon, setBulkAddon] = useState('');
 
@@ -120,7 +119,6 @@ export default function ProductCatalogModal({
   // Dialog pembantu variasi
   const [showAddColorModal, setShowAddColorModal] = useState(false);
   const [customColorName, setCustomColorName] = useState('');
-  const [customColorHex, setCustomColorHex] = useState('#059669');
 
   const [showAddSizeModal, setShowAddSizeModal] = useState(false);
   const [customSizeName, setCustomSizeName] = useState('');
@@ -228,7 +226,6 @@ export default function ProductCatalogModal({
             size: v.size || 'All',
             model: v.model || 'Standard',
             sku: v.sku || `${v.color || 'VAR'}-${v.size || 'ALL'}`,
-            hpp: Number(v.hpp) || Number(initialData.hpp) || 0,
             price: Number(v.price) || Number(initialData.price) || 0,
             addon: Number(v.addon) || 0,
             quota: Number(v.quota ?? v.stock ?? 50),
@@ -444,12 +441,20 @@ export default function ProductCatalogModal({
     }
   };
 
-  // Color handling
+  // Color handling — hex diambil otomatis dari palet preset (tanpa input kode warna)
   const handleAddColor = () => {
     if (!customColorName.trim()) return;
-    const exists = colors.some((c) => c.name.toLowerCase() === customColorName.trim().toLowerCase());
+    const name = customColorName.trim();
+    const exists = colors.some((c) => c.name.toLowerCase() === name.toLowerCase());
     if (!exists) {
-      setColors((prev) => [...prev, { name: customColorName.trim(), hex: customColorHex }]);
+      const matched = PRESET_COLORS.find((pc) => pc.name.toLowerCase() === name.toLowerCase());
+      const usedHexes = new Set(colors.map((c) => c.hex));
+      const freePreset = PRESET_COLORS.find((pc) => !usedHexes.has(pc.hex));
+      const hex =
+        matched?.hex ||
+        freePreset?.hex ||
+        PRESET_COLORS[colors.length % PRESET_COLORS.length].hex;
+      setColors((prev) => [...prev, { name, hex }]);
     }
     setCustomColorName('');
     setShowAddColorModal(false);
@@ -503,7 +508,6 @@ export default function ProductCatalogModal({
     const newItems = [];
 
     const basePrice = Number(bulkPrice) || (variants[0]?.price ? Number(variants[0].price) : 0);
-    const baseHpp = Number(bulkHpp) || (variants[0]?.hpp ? Number(variants[0].hpp) : 0);
     const baseQuota = Number(bulkQuota) || (variants[0]?.quota ? Number(variants[0].quota) : 50);
     const baseAddon = Number(bulkAddon) || 0;
 
@@ -523,7 +527,6 @@ export default function ProductCatalogModal({
               colorHex: c.hex,
               size: s,
               sku: autoSku,
-              hpp: baseHpp,
               price: basePrice,
               addon: baseAddon,
               quota: baseQuota,
@@ -557,7 +560,6 @@ export default function ProductCatalogModal({
       colorHex: defColor.hex,
       size: defSize,
       sku: autoSku,
-      hpp: Number(bulkHpp) || 0,
       price: Number(bulkPrice) || 0,
       addon: Number(bulkAddon) || 0,
       quota: Number(bulkQuota) || 50,
@@ -569,8 +571,8 @@ export default function ProductCatalogModal({
 
   // Mass Apply ("Terapkan ke Semua")
   const handleApplyBulkToAll = () => {
-    if (bulkPrice === '' && bulkHpp === '' && bulkQuota === '' && bulkAddon === '') {
-      alert('Isi minimal salah satu kolom (Harga Jual, HPP, Kuota, atau Add-on) untuk diterapkan.');
+    if (bulkPrice === '' && bulkQuota === '' && bulkAddon === '') {
+      alert('Isi minimal salah satu kolom (Harga Jual, Kuota, atau Add-on) untuk diterapkan.');
       return;
     }
 
@@ -584,7 +586,6 @@ export default function ProductCatalogModal({
         return {
           ...v,
           ...(bulkPrice !== '' ? { price: Number(bulkPrice) || 0 } : {}),
-          ...(bulkHpp !== '' ? { hpp: Number(bulkHpp) || 0 } : {}),
           ...(bulkQuota !== '' ? { quota: Number(bulkQuota) || 0 } : {}),
           ...(bulkAddon !== '' ? { addon: Number(bulkAddon) || 0 } : {})
         };
@@ -668,7 +669,6 @@ export default function ProductCatalogModal({
 
       const activePrices = variants.filter((v) => v.is_active && Number(v.price) > 0).map((v) => Number(v.price));
       const effectiveBasePrice = activePrices.length > 0 ? Math.min(...activePrices) : Number(variants[0]?.price) || 0;
-      const effectiveHpp = Number(variants[0]?.hpp) || 0;
 
       const productPayload = {
         title: title.trim(),
@@ -716,7 +716,6 @@ export default function ProductCatalogModal({
         sizesText: sizes.join(', '),
         variants: variants.map((v) => ({
           ...v,
-          hpp: Number(v.hpp) || 0,
           price: Number(v.price) || 0,
           addon: Number(v.addon) || 0,
           quota: Number(v.quota) || 0,
@@ -724,7 +723,6 @@ export default function ProductCatalogModal({
           is_active: v.is_active !== undefined ? !!v.is_active : true
         })),
         price: effectiveBasePrice,
-        hpp: effectiveHpp,
         status: actionType === 'open' ? 'pre_order' : actionType === 'scheduled' ? 'upcoming' : 'draft'
       };
 
@@ -1316,7 +1314,7 @@ export default function ProductCatalogModal({
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 items-end">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 items-end">
                   <div>
                     <label className="block text-[11px] text-gray-600 mb-1">Harga Jual</label>
                     <div className="relative flex items-center">
@@ -1327,21 +1325,6 @@ export default function ProductCatalogModal({
                         placeholder="0"
                         value={formatRupiah(bulkPrice)}
                         onChange={(e) => setBulkPrice(e.target.value.replace(/\D/g, ''))}
-                        className="w-full text-xs pl-8 pr-2.5 py-1.5 rounded border border-gray-300 bg-white focus:outline-none focus:ring-1 focus:ring-[#541221]"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] text-gray-600 mb-1">HPP Modal</label>
-                    <div className="relative flex items-center">
-                      <span className="absolute left-2.5 text-xs text-gray-500 font-medium pointer-events-none">Rp</span>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="0"
-                        value={formatRupiah(bulkHpp)}
-                        onChange={(e) => setBulkHpp(e.target.value.replace(/\D/g, ''))}
                         className="w-full text-xs pl-8 pr-2.5 py-1.5 rounded border border-gray-300 bg-white focus:outline-none focus:ring-1 focus:ring-[#541221]"
                       />
                     </div>
@@ -1428,7 +1411,6 @@ export default function ProductCatalogModal({
                           <th className="px-3 py-2 font-medium">Warna</th>
                           <th className="px-3 py-2 font-medium">Ukuran</th>
                           <th className="px-3 py-2 font-medium">SKU</th>
-                          <th className="px-3 py-2 font-medium w-28">HPP</th>
                           <th className="px-3 py-2 font-medium w-32">Harga Jual</th>
                           <th className="px-3 py-2 font-medium w-28">Add-on</th>
                           <th className="px-3 py-2 font-medium w-20 text-right">Kuota</th>
@@ -1483,20 +1465,6 @@ export default function ProductCatalogModal({
                                   onChange={(e) => handleVariantChange(v.id, 'sku', e.target.value)}
                                   className="w-28 text-xs px-2 py-1 rounded border border-gray-200 focus:border-[#541221] bg-white text-gray-600 font-mono"
                                 />
-                              </td>
-
-                              <td className="px-3 py-1.5">
-                                <div className="relative flex items-center">
-                                  <span className="absolute left-2 text-[11px] text-gray-400 font-medium pointer-events-none">Rp</span>
-                                  <input
-                                    type="text"
-                                    inputMode="numeric"
-                                    value={formatRupiah(v.hpp)}
-                                    placeholder="0"
-                                    onChange={(e) => handleVariantChange(v.id, 'hpp', Number(e.target.value.replace(/\D/g, '')) || 0)}
-                                    className="w-full text-xs pl-7 pr-2 py-1 rounded border border-gray-200 focus:border-[#541221] bg-white text-gray-700"
-                                  />
-                                </div>
                               </td>
 
                               <td className="px-3 py-1.5">
@@ -1601,16 +1569,25 @@ export default function ProductCatalogModal({
                 </div>
               </div>
 
+              <p className="text-[11px] text-gray-500 -mt-1">
+                {poBatchId
+                  ? 'Jadwal Buka/Tutup PO produk ini mengikuti Batch PO terpilih — status Open/Close batch menjadi kunci periode PO.'
+                  : 'Tanpa batch, jadwal Buka/Tutup PO berlaku mandiri untuk produk ini.'}
+              </p>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">
-                    Tanggal Buka PO
+                    Tanggal Buka PO {!batch && <span className="text-red-500">*</span>}
                   </label>
                   <input
                     type="date"
                     value={openDate}
                     onChange={(e) => setOpenDate(e.target.value)}
-                    className="w-full text-sm px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#541221]"
+                    disabled={!!poBatchId}
+                    className={`w-full text-sm px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#541221] ${
+                      poBatchId ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''
+                    }`}
                   />
                 </div>
 
@@ -1618,19 +1595,24 @@ export default function ProductCatalogModal({
                   <label className="block text-xs font-medium text-gray-700 mb-1">
                     Tanggal Tutup PO <span className="text-red-500">*</span>
                   </label>
-                  <div className="grid grid-cols-[1.5fr_1fr] gap-2">
+                  <div className={`grid ${poBatchId ? 'grid-cols-[1.5fr]' : 'grid-cols-[1.5fr_1fr]'} gap-2`}>
                     <input
                       type="date"
                       value={closeDate}
                       onChange={(e) => setCloseDate(e.target.value)}
-                      className="w-full text-sm px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#541221]"
+                      disabled={!!poBatchId}
+                      className={`w-full text-sm px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#541221] ${
+                        poBatchId ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''
+                      }`}
                     />
-                    <input
-                      type="time"
-                      value={closeTime}
-                      onChange={(e) => setCloseTime(e.target.value)}
-                      className="w-full text-sm px-2 py-2 rounded-lg border border-gray-300 text-center"
-                    />
+                    {!poBatchId && (
+                      <input
+                        type="time"
+                        value={closeTime}
+                        onChange={(e) => setCloseTime(e.target.value)}
+                        className="w-full text-sm px-2 py-2 rounded-lg border border-gray-300 text-center"
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -1856,7 +1838,6 @@ export default function ProductCatalogModal({
                     type="button"
                     onClick={() => {
                       setCustomColorName(pc.name);
-                      setCustomColorHex(pc.hex);
                     }}
                     className="flex items-center gap-1.5 px-2 py-1 rounded border border-gray-200 hover:border-gray-400 bg-gray-50 text-xs"
                   >
@@ -1871,23 +1852,11 @@ export default function ProductCatalogModal({
                 placeholder="Contoh: Dusty Rose"
                 value={customColorName}
                 onChange={(e) => setCustomColorName(e.target.value)}
-                className="w-full text-xs px-3 py-2 rounded border border-gray-300 mb-2.5"
+                className="w-full text-xs px-3 py-2 rounded border border-gray-300"
               />
-              <label className="block text-xs font-medium text-gray-700 mb-1">Kode Warna</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={customColorHex}
-                  onChange={(e) => setCustomColorHex(e.target.value)}
-                  className="w-8 h-8 p-0 rounded border border-gray-300 cursor-pointer"
-                />
-                <input
-                  type="text"
-                  value={customColorHex}
-                  onChange={(e) => setCustomColorHex(e.target.value)}
-                  className="flex-1 text-xs px-3 py-1.5 rounded border border-gray-300 font-mono"
-                />
-              </div>
+              <p className="text-[11px] text-gray-500 mt-1.5">
+                Warna swatch dipilihkan otomatis dari palet. Cukup isi nama warnanya saja.
+              </p>
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button

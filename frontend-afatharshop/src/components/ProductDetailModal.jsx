@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { XIcon, ClockIcon, ShieldCheckIcon, CheckIcon } from './Icons';
 
 export default function ProductDetailModal({ product, onClose, onAddToCart }) {
@@ -8,6 +8,17 @@ export default function ProductDetailModal({ product, onClose, onAddToCart }) {
   const [selectedColor, setSelectedColor] = useState(product.colors?.[0] || 'Default');
   const [qty, setQty] = useState(1);
   const [orderType, setOrderType] = useState('dp'); // 'dp' or 'full'
+
+  const activeVariant = useMemo(() => {
+    if (!product?.variants?.length) return null;
+    return (
+      product.variants.find(
+        (v) =>
+          (!selectedColor || String(v.color || '').toLowerCase() === String(selectedColor).toLowerCase()) &&
+          (!selectedSize || String(v.size || '').toLowerCase() === String(selectedSize).toLowerCase())
+      ) || product.variants[0]
+    );
+  }, [product, selectedColor, selectedSize]);
 
   const formatRupiah = (val) => {
     return new Intl.NumberFormat('id-ID', {
@@ -24,8 +35,10 @@ export default function ProductDetailModal({ product, onClose, onAddToCart }) {
   const handleBooking = () => {
     onAddToCart({
       ...product,
+      variantId: activeVariant?.id ?? product.variants?.[0]?.id ?? null,
       selectedSize,
       selectedColor,
+      selectedModel: activeVariant?.model || product.models?.[0]?.name || 'Reguler',
       qty,
       orderType,
       bookingAmount: orderType === 'dp' ? minDp : totalPrice,

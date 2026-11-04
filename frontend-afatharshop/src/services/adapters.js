@@ -271,20 +271,22 @@ const MARKETING_REJECTED = 'Ditolak';
  * tabel pesanan dashboard. Urutan cek penting: 'Menunggu ACC Marketing'
  * memuat kata 'acc' tapi berarti menunggu ACC, bukan sudah di-ACC.
  */
-const resolveProjectStatus = (rawStatus, { paid, invoiceLunas, dpStage }) => {
+const resolveProjectStatus = (rawStatus, { paid, invoiceLunas, dpStage, isReady, hasOngkir }) => {
   const text = String(rawStatus || '').toLowerCase();
 
   if (/batal|tolak/.test(text)) return 'Batal';
   if (/menunggu\s*acc/.test(text)) return 'Menunggu ACC Admin';
-  if (invoiceLunas || (/lunas/.test(text) && !text.includes('belum'))) return 'Lunas (Siap Kirim)';
+  if (invoiceLunas || (/lunas/.test(text) && !text.includes('belum') && !text.includes('pelunasan'))) return 'Lunas (Siap Kirim)';
   if (/selesai/.test(text)) return 'Selesai';
   if (/dikirim|terkirim/.test(text)) return 'Dikirim';
-  if (/alamat/.test(text)) return 'Menunggu Alamat Mitra';
+  if (/pelunasan/.test(text)) return 'Menunggu Pelunasan + Ongkir';
+  if (/ongkir/.test(text)) return 'Menunggu Input Ongkir';
+  if (/alamat/.test(text) || text.includes('ready') || isReady) return 'Menunggu Alamat Mitra';
   if (/pengiriman|resi/.test(text)) return 'Lunas (Siap Kirim)';
-  if (/produksi/.test(text)) return 'DP Terbayar (Validasi Selesai)';
+  if (/produksi/.test(text)) return 'Dalam Produksi';
   if (/dp/.test(text)) {
     if (dpStage === 'Menunggu Verifikasi') return 'Menunggu Verifikasi DP';
-    return paid > 0 ? 'DP Terbayar (Validasi Selesai)' : 'Menunggu Pembayaran DP';
+    return paid > 0 ? 'Dalam Produksi' : 'Menunggu Pembayaran DP';
   }
 
   return 'Menunggu ACC Admin';
@@ -351,10 +353,22 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
   const dpPayment = lastPaymentFor(dpRow);
   const pelunasanPayment = lastPaymentFor(pelunasanRow);
 
+  const isReady = String(order.production_status || '').toLowerCase() === 'ready';
+  const hasOngkir = shipping > 0;
+  const isAddressSubmitted = Boolean(
+    order.address_id &&
+      (hasOngkir ||
+        String(order.status || '').toLowerCase().includes('ongkir') ||
+        String(order.status || '').toLowerCase().includes('pelunasan') ||
+        String(order.status || '').toLowerCase().includes('siap'))
+  );
+
   const status = resolveProjectStatus(order.status, {
     paid,
     invoiceLunas,
-    dpStage: stageStatus(dpRow)
+    dpStage: stageStatus(dpRow),
+    isReady,
+    hasOngkir
   });
 
   const address = order.address
@@ -368,6 +382,26 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
         .join(', ')
     : '';
 
+  const batchesFromItems = items
+    .map((item) => item.variant?.product?.batch)
+    .filter(Boolean);
+  const batchCloseIso = batchesFromItems
+    .map((b) => b.close_date || '')
+    .filter(Boolean)
+    .sort()[0] || '';
+  const batchClosed = batchesFromItems.some(
+    (b) =>
+      String(b.status || '').toLowerCase() === 'closed' ||
+      (b.close_date && new Date(b.close_date).getTime() < Date.now())
+  );
+  const closeDateFormatted = batchCloseIso
+    ? new Date(batchCloseIso).toLocaleDateString('id-ID', {
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric'
+      })
+    : '';
+
   return {
     orderNo: order.order_number || `PO-${order.id}`,
     id: order.id,
@@ -375,9 +409,13 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     invoiceId: order.invoice?.id ?? null,
     invoiceNumber: order.invoice?.invoice_number || '',
     dbStatus: order.status || '',
-    productionStatus: order.production_status || '',
+    productionStatus: order.production_status || (isReady ? 'Ready' : (paid > 0 || stageStatus(dpRow) === 'ACC') ? 'Produksi' : 'Antrian'),
+    readyAt: isReady ? (order.updated_at || order.ordered_at) : '',
+    addressConfirmed: isAddressSubmitted,
+    addressSubmitted: isAddressSubmitted,
     trackingNumber: order.tracking_number || '',
     addressId: order.address?.id ?? null,
+    addressObject: order.address ? mapAddressToBook(order.address) : null,
     dpInstallmentId: dpRow?.id ?? null,
     pelunasanInstallmentId: pelunasanRow?.id ?? null,
     installmentIds: installments.reduce(
@@ -414,21 +452,36 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     dpPct,
     dpNominal: toNumber(dpRow?.amount),
     paymentStages: installments
-      .map((row, index) => ({
-        id: row.id,
-        type: row.type,
-        label:
-          row.type === 'dp'
-            ? 'DP'
-            : row.type === 'pelunasan'
-              ? 'Pelunasan'
-              : `Cicilan ${row.sequence_number ?? index + 1}`,
-        pct: total ? Math.round((toNumber(row.amount) / total) * 100) : 0,
-        amount: toNumber(row.amount),
-        status: normalizePaymentStatus(row.status),
-        date: row.due_at || ''
-      }))
-      .filter((stage) => stage.pct > 0),
+      .map((row, index) => {
+        const related = payments.filter((p) => Number(p.installment_id) === Number(row.id));
+        const lastPay = related[related.length - 1] || null;
+        const stgStatus = stageStatus(row);
+        return {
+          id: row.id,
+          type: row.type,
+          sequence: row.sequence_number ?? index + 1,
+          label:
+            row.type === 'dp'
+              ? 'DP'
+              : row.type === 'pelunasan'
+                ? 'Pelunasan'
+                : `Cicilan ${row.sequence_number ? row.sequence_number - 1 : index + 1}`,
+          pct: total ? Math.round((toNumber(row.amount) / total) * 100) : 0,
+          amount: toNumber(row.amount),
+          status: stgStatus,
+          proof: mediaUrl(lastPay?.proof_url || ''),
+          payment: lastPay ? {
+            id: lastPay.id,
+            status: normalizePaymentStatus(lastPay.status),
+            image: mediaUrl(lastPay.proof_url || ''),
+            bank: lastPay.bank_account?.bank_name || 'BCA (PT Afathar Niaga Indonesia)',
+            date: lastPay.created_at,
+            nominal: toNumber(lastPay.amount)
+          } : null,
+          date: row.due_at || ''
+        };
+      })
+      .filter((stage) => stage.amount > 0 || stage.pct > 0),
     items: items.map((item, index) => ({
       id: item.id ?? index + 1,
       variantId: item.variant?.id ?? null,
@@ -456,17 +509,25 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     mitraEmail: owner.email || '',
     note: order.notes || '',
     image: mediaUrl(product.image) || FALLBACK_IMAGE,
-    closeDate: '',
-    isClosedPO: product.status === 'closed_po'
+    closeDate: closeDateFormatted || (product.closeDate || ''),
+    closeDateRaw: batchCloseIso,
+    isClosedPO: batchClosed || product.status === 'closed_po',
+    invoiceOutstanding:
+      order.invoice?.outstanding_amount !== undefined
+        ? toNumber(order.invoice.outstanding_amount)
+        : null
   };
 };
 
 export const buildOrderPayload = (order, items = []) => {
   const itemPayload = (Array.isArray(items) ? items : []).map((item) => {
     const variantId = Number(item.variantId);
+    const productId = Number(item.productId ?? item.product_id ?? item.id);
     return {
       product_variant_id:
         Number.isInteger(variantId) && variantId > 0 ? variantId : null,
+      product_id:
+        Number.isInteger(productId) && productId > 0 ? productId : null,
       quantity: Math.max(1, toNumber(item.qty, 1)),
       unit_price: toNumber(item.price),
       fee: toNumber(item.feeNominal)

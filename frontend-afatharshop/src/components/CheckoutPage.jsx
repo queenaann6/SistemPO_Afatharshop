@@ -220,7 +220,16 @@ export default function CheckoutPage({
         const brandDiscItem = Number(it.brandDiscountNominal) || 0;
         return {
           id: it.id || idx + 1,
-          variantId: it.variantId ?? null,
+          productId: it.backendId || it.id || null,
+          variantId:
+            it.variantId ??
+            it.variants?.find(
+              (v) =>
+                (!it.selectedColor || String(v.color || '').toLowerCase() === String(it.selectedColor || '').toLowerCase()) &&
+                (!it.selectedSize || String(v.size || '').toLowerCase() === String(it.selectedSize || '').toLowerCase())
+            )?.id ??
+            it.variants?.[0]?.id ??
+            (Number.isInteger(Number(it.id)) ? Number(it.id) : null),
           title: it.title || 'PRE-ORDER ITEM',
           brand: it.brand || '',
           variant: it.variant || [it.selectedColor, it.selectedModel, it.selectedSize].filter(Boolean).join('/') || 'All Varian',

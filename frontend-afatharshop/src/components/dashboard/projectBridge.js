@@ -206,6 +206,9 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       dbStatus: order.dbStatus || '',
       dpInstallmentId: order.dpInstallmentId ?? null,
       pelunasanInstallmentId: order.pelunasanInstallmentId ?? null,
+      installmentIds: order.installmentIds || {},
+      addressId: order.addressId ?? null,
+      addressObject: order.addressObject ?? null,
       variantId: items.find((item) => item.variantId)?.variantId ?? null,
       date,
       mitraId: order.mitraId || seed?.id || `m-${slug(name)}`,
@@ -232,6 +235,11 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       dpNominal,
       pelunasanNominal: Math.max(0, subtotal - dpNominal),
       paymentStages: paymentPlan,
+      // Rincian termin dari invoice backend (id installment, status, bukti) —
+      // dipertahankan utuh supaya dashboard mitra terhubung ke invoice.
+      stageDetails: Array.isArray(order.paymentStages) ? order.paymentStages : null,
+      installmentIds: order.installmentIds || {},
+      invoiceOutstanding: order.invoiceOutstanding ?? null,
       dpStatus: order.dpStatus || (flags.rejected ? PAY.TOLAK : flags.dpPaid ? PAY.ACC : PAY.BELUM),
       dpProof: order.dpProof || '',
       dpPaymentId: order.dpPaymentId ?? null,
@@ -253,6 +261,9 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       ongkirVerifiedBy: flags.paid ? 'Admin Finance' : '',
       ongkirVerifiedAt: flags.paid ? date : '',
       resi: order.trackingNumber || order.resi || '',
+      senderName: order.senderName || '',
+      senderPhone: order.senderPhone || '',
+      senderNotes: order.senderNotes || '',
       shippedAt: flags.shipped ? date : '',
       receivedAt: flags.done ? date : '',
       shipStatus: flags.done ? SHIP.DITERIMA : flags.shipped ? SHIP.DIKIRIM : flags.paid ? SHIP.SIAP : SHIP.BELUM,
@@ -268,7 +279,9 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       marketingBy: flags.dpPaid ? 'Admin Marketing' : '',
       marketingAt: flags.dpPaid ? date : '',
       productionStatus: order.productionStatus || (flags.paid ? PROD.READY : flags.dpPaid ? PROD.RUN : PROD.QUEUE),
-      readyAt: flags.paid ? date : '',
+      readyAt: order.readyAt || (flags.paid ? date : ''),
+      addressConfirmed: Boolean(order.addressConfirmed || (num(order.ongkir) > 0)),
+      addressSubmitted: Boolean(order.addressSubmitted || (num(order.ongkir) > 0)),
       address,
       createdBy: 'Checkout Mitra',
       notes: order.note || '',
@@ -278,10 +291,16 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
         items,
         image: order.image,
         closeDate: order.closeDate,
+        closeDateRaw: order.closeDateRaw || '',
         isClosedPO: order.isClosedPO,
         city: orderCity,
         mitraPhone: order.mitraPhone,
-        pelunasanDueDate: order.pelunasanDueDate || matchedProduct?.pelunasanDueDate || ''
+        pelunasanDueDate: order.pelunasanDueDate || matchedProduct?.pelunasanDueDate || '',
+        // Rincian termin lengkap (id installment, status, bukti) dari invoice
+        // backend — dipakai dashboard mitra untuk tagihan & upload bukti.
+        paymentStagesDetailed: Array.isArray(order.paymentStages) ? order.paymentStages : null,
+        installmentIds: order.installmentIds || {},
+        invoiceOutstanding: order.invoiceOutstanding ?? null
       }
     };
     return core;
@@ -371,7 +390,11 @@ export const coreOrdersToProject = (coreOrders) =>
       pelunasanNominal: Math.max(0, num(order.subtotal) - num(order.dpNominal)),
       addonNominal: num(order.addonNominal),
       pelunasanDueDate: meta.pelunasanDueDate || '',
-      sisaTagihan: orderOutstanding(order),
+      sisaTagihan:
+        meta.invoiceOutstanding !== null && meta.invoiceOutstanding !== undefined
+          ? num(meta.invoiceOutstanding)
+          : orderOutstanding(order),
+      ongkir: num(order.ongkir),
       courier: order.ekspedisi || '-',
       address: order.address || '',
       phone: order.phone || '',
@@ -395,7 +418,26 @@ export const coreOrdersToProject = (coreOrders) =>
       ongkirNote: order.ongkirNote,
       ongkirSubmittedAt: order.ongkirSubmittedAt,
       marketingStatus: order.marketingStatus,
-      stage
+      stage,
+      // === Keterhubungan invoice ↔ dashboard mitra ===
+      paymentStages: meta.paymentStagesDetailed || order.stageDetails || null,
+      installmentIds: meta.installmentIds || order.installmentIds || {},
+      dpInstallmentId: order.dpInstallmentId ?? null,
+      pelunasanInstallmentId: order.pelunasanInstallmentId ?? null,
+      invoiceId: order.invoiceId ?? null,
+      invoiceNumber: order.invoiceNumber || '',
+      backendId: order.backendId ?? null,
+      addressId: order.addressId ?? null,
+      addressObject: order.addressObject ?? null,
+      productionStatus: order.productionStatus || '',
+      readyAt: order.readyAt || '',
+      trackingNumber: order.resi || '',
+      senderName: order.senderName || '',
+      senderPhone: order.senderPhone || '',
+      senderNotes: order.senderNotes || '',
+      note: order.notes || '',
+      closeDateRaw: meta.closeDateRaw || '',
+      invoiceOutstanding: meta.invoiceOutstanding ?? order.invoiceOutstanding ?? null
     };
   });
 

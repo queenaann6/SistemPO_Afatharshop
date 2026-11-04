@@ -29,6 +29,14 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
     const derived = [];
     const handledOrderNos = new Set();
 
+    const formatDue = (value) => {
+      if (!value) return '';
+      const d = new Date(String(value));
+      return Number.isNaN(d.getTime())
+        ? String(value)
+        : d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+    };
+
     ordersList.forEach((order) => {
       const orderNo = order.orderNo || order.id || order.invoice;
       if (!orderNo) return;
@@ -43,17 +51,65 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
         String(order.status || '').toLowerCase().includes('lunas') &&
         Number(order.sisaTagihan || 0) <= 0;
 
-      // 1. Tagihan Termin 1: DP
+      const isPendingAcc =
+        order.marketingStatus === 'PENDING' ||
+        order.stage === 'baru' ||
+        String(order.status || '').toLowerCase().includes('menunggu acc');
+
+      // === Tagihan dari cicilan invoice backend (mengikuti termin katalog:
+      // 2x DP+Pelunasan atau 3x DP+Cicilan+Pelunasan). ===
+      const stages = Array.isArray(order.paymentStages) ? order.paymentStages : [];
+      if (stages.length >= 2) {
+        const ongkirNominal = Number(order.ongkir || 0);
+        const ongkirSettled =
+          order.ongkirStatus === 'ACC' || order.ongkirStatus === 'Terbukti' || isFullySettled;
+        stages.forEach((stg, sIdx) => {
+          const amount = Number(stg.amount || 0);
+          if (!amount) return;
+          const st = String(stg.status || '');
+          if (st === 'ACC' || st === 'Lunas' || isFullySettled) return;
+
+          const isFirst = sIdx === 0;
+          const isLast = sIdx === stages.length - 1;
+          const billAmount = isLast ? amount + (ongkirSettled ? 0 : ongkirNominal) : amount;
+
+          let status = 'Belum Bayar';
+          if (isFirst && isPendingAcc) status = 'Menunggu ACC Admin';
+          else if (st === 'Menunggu Verifikasi' || stg.proof) status = 'Menunggu Verifikasi Finance';
+          else if (st === 'Ditolak') status = 'Ditolak Finance (Upload Ulang)';
+
+          const label = stg.label || (isFirst ? 'DP' : isLast ? 'Pelunasan' : `Cicilan ${sIdx}`);
+          derived.push({
+            id: `bill-stage-${orderNo}-${stg.id ?? sIdx}`,
+            orderNo,
+            title: `${label} — ${order.title || orderNo}`,
+            amount: billAmount,
+            status,
+            dueDate: formatDue(stg.date) || order.closeDate || '-',
+            dueDateRaw: stg.date || '',
+            notes:
+              isLast && !ongkirSettled && ongkirNominal === 0
+                ? 'Nominal belum termasuk ongkir (menunggu input Admin).'
+                : stg.payment?.note || '-',
+            proof: stg.proof || stg.payment?.image || null,
+            bank: stg.payment?.bank || '',
+            paidDate: stg.payment?.date || '',
+            billType: stg.type || (isFirst ? 'dp' : isLast ? 'pelunasan' : `cicilan_${sIdx}`),
+            installmentId: stg.id ?? null,
+            isPendingAcc: isFirst && isPendingAcc,
+            order
+          });
+        });
+        return;
+      }
+
+      // === Fallback lama tanpa rincian termin dari invoice ===
       const dpNominal = Number(order.dpNominal || 0);
       const dpIsAcc =
         order.dpStatus === 'ACC' ||
         order.dpStatus === 'acc' ||
         order.dpStatus === 'Terbukti' ||
         isFullySettled;
-      const isPendingAcc =
-        order.marketingStatus === 'PENDING' ||
-        order.stage === 'baru' ||
-        String(order.status || '').toLowerCase().includes('menunggu acc');
       if (dpNominal > 0 && !dpIsAcc) {
         let status = 'Belum Bayar';
         if (isPendingAcc) {
@@ -75,6 +131,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
           amount: dpNominal,
           status,
           dueDate: order.closeDate || order.date || '3 Hari Setelah Order',
+          dueDateRaw: order.closeDateRaw || '',
           notes: isPendingAcc
             ? 'Menunggu persetujuan Admin Marketing sebelum pembayaran DP dibuka.'
             : order.dpNote || '-',
@@ -82,6 +139,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
           bank: order.dpBank || '',
           paidDate: order.dpDate || '',
           billType: 'dp',
+          installmentId: order.dpInstallmentId ?? null,
           isPendingAcc,
           order
         });
@@ -115,11 +173,13 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
           amount: pelunasanNominal,
           status,
           dueDate: order.pelunasanDueDate || '30 Hari Setelah DP',
+          dueDateRaw: order.pelunasanDueDate || '',
           notes: order.pelunasanNote || '-',
           proof: order.pelunasanProof || null,
           bank: order.pelunasanBank || '',
           paidDate: order.pelunasanDate || '',
           billType: 'pelunasan',
+          installmentId: order.pelunasanInstallmentId ?? null,
           order
         });
       }
@@ -167,6 +227,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
   }, [orders]);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [appliedRange, setAppliedRange] = useState({ from: '', to: '' });
   const [selectedPayBill, setSelectedPayBill] = useState(null);
   const [payMethod, setPayMethod] = useState('deposit');
   const [paySuccess, setPaySuccess] = useState(false);
@@ -195,10 +256,15 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
     bankOptions.find((b) => b.label === payBank)?.label || bankOptions[0]?.label || '';
 
   const installmentIdForBill = (bill) => {
+    if (bill?.installmentId !== undefined && bill?.installmentId !== null) {
+      return bill.installmentId;
+    }
     const order = bill?.order || {};
     if (bill?.billType === 'dp') return order.dpInstallmentId ?? null;
     if (bill?.billType === 'pelunasan') return order.pelunasanInstallmentId ?? null;
-    return null;
+    // Termin menengah (cicilan) — cocokkan lewat installmentIds map.
+    if (bill?.installmentId) return bill.installmentId;
+    return order.installmentIds?.[`stage-${bill?.stageIndex}`] ?? null;
   };
 
   const handlePayProofFile = (e) => {
@@ -215,10 +281,34 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
     setPayProofPreview(URL.createObjectURL(file));
   };
 
-  const totalBelumBayar = bills.reduce(
+  const dueIso = (b) => String(b?.dueDateRaw || '').slice(0, 10);
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const filteredBills = useMemo(() => {
+    const { from, to } = appliedRange;
+    if (!from && !to) return bills;
+    return bills.filter((b) => {
+      const iso = dueIso(b);
+      if (!iso) return false;
+      if (from && iso < from) return false;
+      if (to && iso > to) return false;
+      return true;
+    });
+  }, [bills, appliedRange]);
+
+  const totalBelumBayar = filteredBills.reduce(
     (sum, b) => (b.status === 'Belum Bayar' ? sum + b.amount : sum),
     0
   );
+
+  const overdueBills = useMemo(
+    () =>
+      filteredBills.filter(
+        (b) => b.status === 'Belum Bayar' && dueIso(b) && dueIso(b) < todayIso
+      ),
+    [filteredBills, todayIso]
+  );
+  const totalJatuhTempo = overdueBills.reduce((sum, b) => sum + b.amount, 0);
 
   const handlePayWithDepositSubmit = async () => {
     if (!selectedPayBill || paySubmitting) return;
@@ -434,7 +524,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
           Tagihan
         </h2>
         <span className="text-xs text-stone-500 font-semibold">
-          {bills.filter((b) => b.status === 'Belum Bayar').length} tagihan aktif
+          {filteredBills.filter((b) => b.status === 'Belum Bayar').length} tagihan aktif
         </span>
       </div>
 
@@ -448,7 +538,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
               {formatRp(totalBelumBayar)}
             </h3>
             <p className="text-xs text-rose-100/90 mt-1">
-              {bills.filter((b) => b.status === 'Belum Bayar').length} tagihan
+              {filteredBills.filter((b) => b.status === 'Belum Bayar').length} tagihan
             </p>
           </div>
           <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
@@ -461,10 +551,10 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
           <div>
             <p className="text-xs text-amber-100 font-medium">Total Tagihan Jatuh Tempo</p>
             <h3 className="text-2xl sm:text-3xl font-extrabold mt-1 tracking-tight tabular-nums">
-              {formatRp(0)}
+              {formatRp(totalJatuhTempo)}
             </h3>
             <p className="text-xs text-amber-100/90 mt-1">
-              0 tagihan melewati jatuh tempo
+              {overdueBills.length} tagihan melewati jatuh tempo
             </p>
           </div>
           <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
@@ -496,7 +586,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
         </div>
 
         <button
-          onClick={() => {}}
+          onClick={() => setAppliedRange({ from: fromDate, to: toDate })}
           className="bg-stone-900 hover:bg-black text-white px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 font-semibold transition cursor-pointer"
         >
           <SearchIcon className="w-3.5 h-3.5" />
@@ -507,6 +597,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
           onClick={() => {
             setFromDate('');
             setToDate('');
+            setAppliedRange({ from: '', to: '' });
           }}
           className="bg-white hover:bg-stone-100 border border-stone-300 text-stone-700 px-3 py-1.5 rounded-lg flex items-center gap-1 transition cursor-pointer"
         >
@@ -531,7 +622,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
             </tr>
           </thead>
           <tbody className="divide-y divide-stone-100 text-stone-700">
-            {bills.map((bill, index) => (
+            {filteredBills.map((bill, index) => (
               <tr key={bill.id} className="hover:bg-stone-50/60 transition">
                 <td className="py-3.5 px-3 font-semibold text-stone-400">{index + 1}</td>
                 <td className="py-3.5 px-3 font-mono font-medium text-stone-600">{bill.orderNo}</td>

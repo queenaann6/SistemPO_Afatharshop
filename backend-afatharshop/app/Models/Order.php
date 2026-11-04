@@ -13,6 +13,7 @@ class Order extends Model
         'address_id',
         'order_number',
         'status',
+        'production_status',
         'courier_name',
         'tracking_number',
         'notes',

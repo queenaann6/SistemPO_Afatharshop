@@ -706,7 +706,10 @@ export default function MarketingDashboard({
 
   const setProduction = async (o, status) => {
     const patch = { productionStatus: status };
-    if (status === PROD.READY) patch.readyAt = todayISO();
+    if (status === PROD.READY) {
+      patch.readyAt = todayISO();
+      patch.status = 'Menunggu Alamat Mitra';
+    }
     const ok = await patchOrder(o.invoice, patch);
     if (!ok) return;
     if (status === PROD.READY) {

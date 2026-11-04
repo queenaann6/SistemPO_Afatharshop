@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { api, tokenStore, mediaUrl } from '../../../services/api';
 import AddProductModal from './AddProductModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import SplitAddressModal from './SplitAddressModal';
+import AddressFormModal from '../../AddressFormModal';
 import InvoiceModal from '../../InvoiceModal';
 import { openInvoicePrintTab } from '../../../utils/printInvoice';
-import { getStoredAddresses, syncAddressBookFromApi } from './mitraAddressBook';
+import { getStoredAddresses, syncAddressBookFromApi, formatFullAddress, pushAddressBookItem } from './mitraAddressBook';
 import {
   PrinterIcon,
   CheckIcon,
@@ -21,7 +23,8 @@ import {
   ClockIcon,
   InfoIcon,
   WalletIcon,
-  CreditCardIcon
+  CreditCardIcon,
+  PlusIcon
 } from '../../Icons';
 
 export default function OrderDetailView({
@@ -47,10 +50,15 @@ export default function OrderDetailView({
     statusStr.includes('closed') ||
     statusStr.includes('ditutup');
 
+  const batchDatePassed =
+    Boolean(order?.closeDateRaw) && new Date(order.closeDateRaw).getTime() < Date.now();
+
   const isClosedPO =
-    typeof isClosedPOProp === 'boolean'
-      ? isClosedPOProp || isStatusClosed
-      : (order?.isClosedPO ?? isStatusClosed);
+    (typeof isClosedPOProp === 'boolean'
+      ? isClosedPOProp || (order?.isClosedPO ?? false)
+      : (order?.isClosedPO ?? false)) ||
+    isStatusClosed ||
+    batchDatePassed;
 
   const userBalance = Number(String(currentUser?.balance || '').replace(/[^0-9]/g, '')) || 0;
   const userBalanceFormatted = currentUser?.balance || 'Rp 0';
@@ -60,8 +68,69 @@ export default function OrderDetailView({
     order?.stage === 'baru' ||
     String(order?.status || '').toLowerCase().includes('menunggu acc');
 
+  const primaryAddress = useMemo(() => {
+    if (order?.addressObject) return order.addressObject;
+    const list = getStoredAddresses();
+    if (order?.addressId) {
+      const found = list.find((a) => String(a.id) === String(order.addressId));
+      if (found) return found;
+    }
+    const def = list.find((a) => a.isDefault || a.isPrimary);
+    if (def) return def;
+    if (list.length > 0) return list[0];
+    if (order?.address) {
+      return {
+        id: order?.addressId || 'main',
+        recipient: order.mitraName || currentUser?.name || 'Penerima',
+        phone: order.mitraPhone || order.phone || '',
+        address: order.address,
+        city: order.mitraCity || ''
+      };
+    }
+    return null;
+  }, [order?.addressObject, order?.addressId, order?.address, order?.mitraName, order?.mitraPhone, order?.phone, order?.mitraCity, currentUser?.name]);
+
+  // Identitas pengirim pada label dropship (nama toko, telepon, catatan).
+  // Hanya bisa disunting selama alamat belum terkunci oleh konfirmasi.
+  const [senderIdentity, setSenderIdentity] = useState({
+    name: order?.senderName || currentUser?.name || 'Afathar Shop',
+    phone: order?.senderPhone || currentUser?.phone || '',
+    notes: order?.senderNotes || ''
+  });
+  const [isEditingSender, setIsEditingSender] = useState(false);
+
   // Dynamic products list inside this order
-  const [items, setItems] = useState(order?.items || []);
+  const [items, setItems] = useState(() => {
+    const rawItems = order?.items || [];
+    const hasSplits = rawItems.some((item) => item.splits && item.splits.length > 0);
+    if (hasSplits) return rawItems;
+
+    if (primaryAddress) {
+      const courierObj = order?.courier
+        ? { id: order.courier.toLowerCase().replace(/[^a-z0-9]+/g, '_'), name: order.courier }
+        : null;
+
+      return rawItems.map((item) => {
+        const qty = Number(item.qty) || 1;
+        return {
+          ...item,
+          splits: [
+            {
+              id: Date.now() + Math.floor(Math.random() * 1000),
+              address: primaryAddress,
+              qty,
+              weight: qty * (Number(item.unitWeight) || 300),
+              senderName: senderIdentity.name,
+              senderPhone: senderIdentity.phone,
+              senderNotes: senderIdentity.notes,
+              courier: courierObj
+            }
+          ]
+        };
+      });
+    }
+    return rawItems;
+  });
 
   // Ekspedisi selection (without hardcoded price)
   const [selectedCourier, setSelectedCourier] = useState(order?.courier || '');
@@ -102,6 +171,8 @@ export default function OrderDetailView({
   const [deleteTargetItem, setDeleteTargetItem] = useState(null);
   const [allocationAddress, setAllocationAddress] = useState(null);
   const [isAddressPickerOpen, setIsAddressPickerOpen] = useState(false);
+  const [isNewAddressModalOpen, setIsNewAddressModalOpen] = useState(false);
+  const [pickingAddressFor, setPickingAddressFor] = useState('split');
   const [addressBook, setAddressBook] = useState(() => getStoredAddresses());
 
   useEffect(() => {
@@ -114,12 +185,29 @@ export default function OrderDetailView({
       active = false;
     };
   }, [isAddressPickerOpen]);
+
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
-  const [extraAddresses, setExtraAddresses] = useState([]);
+  const [extraAddresses, setExtraAddresses] = useState(() => {
+    const rawItems = order?.items || [];
+    const hasSplits = rawItems.some((item) => item.splits && item.splits.length > 0);
+    if (hasSplits) return [];
+    if (primaryAddress) {
+      const courierObj = order?.courier
+        ? { id: order.courier.toLowerCase().replace(/[^a-z0-9]+/g, '_'), name: order.courier }
+        : null;
+      return [{ ...primaryAddress, courier: courierObj }];
+    }
+    return [];
+  });
   const [courierTargetAddress, setCourierTargetAddress] = useState(null);
   const [courierChoice, setCourierChoice] = useState('');
 
   const persistItems = (nextItems) => {
+    if (isClosedPO) {
+      setNotification('Batch PO sudah ditutup — item pesanan tidak dapat diubah lagi.');
+      setTimeout(() => setNotification(''), 3500);
+      return;
+    }
     setItems(nextItems);
     onUpdateOrder?.({ items: nextItems, invoice: orderInvoice || order?.orderNo || order?.id });
   };
@@ -127,6 +215,30 @@ export default function OrderDetailView({
   const openAllocationFor = (address) => {
     setAllocationAddress(address);
     setIsSplitModalOpen(true);
+  };
+
+  const handleSaveSenderIdentity = () => {
+    if (!senderIdentity.name.trim()) return;
+    onUpdateOrder?.({
+      senderName: senderIdentity.name.trim(),
+      senderPhone: senderIdentity.phone.trim(),
+      senderNotes: senderIdentity.notes.trim(),
+      invoice: orderInvoice || order?.orderNo || order?.id
+    });
+    setItems((prev) =>
+      prev.map((item) => ({
+        ...item,
+        splits: (item.splits || []).map((s) => ({
+          ...s,
+          senderName: senderIdentity.name.trim(),
+          senderPhone: senderIdentity.phone.trim() || s.senderPhone,
+          senderNotes: senderIdentity.notes.trim()
+        }))
+      }))
+    );
+    setIsEditingSender(false);
+    setNotification('Identitas pengirim pada label dropship diperbarui.');
+    setTimeout(() => setNotification(''), 3500);
   };
 
   const handleSaveAllocations = (allocations) => {
@@ -153,9 +265,9 @@ export default function OrderDetailView({
         address: allocationAddress,
         qty,
         weight: qty * (Number(item.unitWeight) || 300),
-        senderName: base.senderName || currentUser?.name || 'Afathar Shop',
-        senderPhone: base.senderPhone || '(+62)',
-        senderNotes: base.senderNotes || '',
+        senderName: base.senderName || senderIdentity.name,
+        senderPhone: base.senderPhone || senderIdentity.phone,
+        senderNotes: base.senderNotes || senderIdentity.notes,
         courier: addressCourier
       };
       return { ...item, splits: [...others, split] };
@@ -198,9 +310,17 @@ export default function OrderDetailView({
   };
 
   const handleRemoveAddress = (address) => {
+    const targetId = String(address?.id);
     setExtraAddresses((prev) =>
-      prev.filter((a) => String(a.id) !== String(address?.id))
+      prev.filter((a) => String(a.id) !== targetId)
     );
+    const nextItems = items.map((item) => ({
+      ...item,
+      splits: (item.splits || []).filter((sp) => String(sp.address?.id) !== targetId)
+    }));
+    persistItems(nextItems);
+    setNotification('Alamat berhasil dihapus.');
+    setTimeout(() => setNotification(''), 3000);
   };
 
   const openCourierFor = (address, currentCourier) => {
@@ -255,6 +375,8 @@ export default function OrderDetailView({
   const [proofBank, setProofBank] = useState('');
   const [proofNote, setProofNote] = useState('');
   const [proofImage, setProofImage] = useState(null);
+  const [proofFileObj, setProofFileObj] = useState(null);
+  const [isUploadingProof, setIsUploadingProof] = useState(false);
   const [proofFileName, setProofFileName] = useState('');
   const [copyFeedback, setCopyFeedback] = useState('');
   const [uploadSuccess, setUploadSuccess] = useState(false);
@@ -262,6 +384,8 @@ export default function OrderDetailView({
   const [previewProof, setPreviewProof] = useState(null);
   const proofFileRef = useRef(null);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
+  // Termin aktif yang sedang diunggah buktinya (id installment + type dari invoice).
+  const [proofStage, setProofStage] = useState(null);
 
   // Helper untuk membaca bukti dan status pembayaran dari objek order
   const buildPaymentsFromOrder = (ord) => {
@@ -271,14 +395,18 @@ export default function OrderDetailView({
     // Check DP
     const isDpAcc =
       ord.dpStatus === 'ACC' ||
+      ord.dpStatus === 'acc' ||
       ord.dpStatus === 'Lunas' ||
+      ord.dpStatus === 'lunas' ||
+      ord.status === 'Produksi' ||
+      ord.status === 'Siap Kirim' ||
       ord.status === 'Selesai' ||
       (typeof ord.paymentStatus === 'string' && ord.paymentStatus.includes('Lunas'));
     const isDpMenunggu =
       ord.dpStatus === 'Menunggu Verifikasi' ||
       ord.dpStatus === 'Menunggu Validasi' ||
       ord.dpStatus === 'menunggu';
-    const hasDpProof = !!ord.dpProof;
+    const hasDpProof = Boolean(ord.dpProof);
 
     if (hasDpProof || isDpAcc || isDpMenunggu) {
       map.dp = {
@@ -286,8 +414,8 @@ export default function OrderDetailView({
         nominal: Number(ord.dpNominal) || 0,
         bank: ord.dpBank || 'BCA (PT Afathar Niaga Indonesia)',
         status: isDpAcc ? 'Lunas' : 'Menunggu Validasi',
-        image: ord.dpProof || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
-        date: ord.dpSubmittedAt || ord.date || '27 Okt 2026',
+        image: ord.dpProof || '',
+        date: ord.dpSubmittedAt || ord.date || '',
         note: ord.dpNote || ''
       };
     }
@@ -295,13 +423,15 @@ export default function OrderDetailView({
     // Check Pelunasan
     const isPelunasanAcc =
       ord.pelunasanStatus === 'ACC' ||
+      ord.pelunasanStatus === 'acc' ||
       ord.pelunasanStatus === 'Lunas' ||
+      ord.pelunasanStatus === 'lunas' ||
       ord.status === 'Selesai';
     const isPelunasanMenunggu =
       ord.pelunasanStatus === 'Menunggu Verifikasi' ||
       ord.pelunasanStatus === 'Menunggu Validasi' ||
       ord.pelunasanStatus === 'menunggu';
-    const hasPelunasanProof = !!ord.pelunasanProof;
+    const hasPelunasanProof = Boolean(ord.pelunasanProof);
 
     if (hasPelunasanProof || isPelunasanAcc || isPelunasanMenunggu) {
       map.pelunasan = {
@@ -309,10 +439,30 @@ export default function OrderDetailView({
         nominal: Number(ord.pelunasanNominal) || 0,
         bank: ord.pelunasanBank || 'BCA (PT Afathar Niaga Indonesia)',
         status: isPelunasanAcc ? 'Lunas' : 'Menunggu Validasi',
-        image: ord.pelunasanProof || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=600&q=80',
-        date: ord.pelunasanSubmittedAt || ord.date || '27 Okt 2026',
+        image: ord.pelunasanProof || '',
+        date: ord.pelunasanSubmittedAt || ord.date || '',
         note: ord.pelunasanNote || ''
       };
+    }
+
+    if (Array.isArray(ord.paymentStages)) {
+      ord.paymentStages.forEach((stg, i) => {
+        const key = stg.type || `stage_${i + 1}`;
+        const isLunas = stg.status === 'Lunas' || stg.status === 'ACC' || stg.status === 'disetujui';
+        const isMenunggu = stg.status === 'Menunggu Verifikasi' || stg.status === 'Menunggu Validasi';
+        const proof = stg.proof || stg.payment?.image || '';
+        if (proof || isLunas || isMenunggu) {
+          map[key] = {
+            title: stg.label || `Tahap ${i + 1}`,
+            nominal: Number(stg.amount) || 0,
+            bank: stg.payment?.bank || ord.dpBank || 'BCA (PT Afathar Niaga Indonesia)',
+            status: isLunas ? 'Lunas' : 'Menunggu Validasi',
+            image: proof,
+            date: stg.payment?.date || ord.date || '',
+            note: stg.payment?.note || ''
+          };
+        }
+      });
     }
 
     return map;
@@ -325,7 +475,12 @@ export default function OrderDetailView({
   useEffect(() => {
     setLocalPayments((prev) => {
       const fromOrder = buildPaymentsFromOrder(order);
-      return { ...fromOrder, ...prev };
+      return {
+        ...prev,
+        ...fromOrder,
+        dp: fromOrder.dp ? { ...(prev.dp || {}), ...fromOrder.dp } : prev.dp,
+        pelunasan: fromOrder.pelunasan ? { ...(prev.pelunasan || {}), ...fromOrder.pelunasan } : prev.pelunasan
+      };
     });
   }, [
     order?.dpStatus,
@@ -362,23 +517,177 @@ export default function OrderDetailView({
   const pelunasanDue =
     order?.pelunasanDueDate || items[0]?.dueDate || '10 Januari 2027';
 
-  // Sinkronisasi status ACC DP dan Pelunasan untuk perhitungan rincian tagihan
+  // Sinkronisasi status ACC DP dan Pelunasan untuk alur PO 6 Tahap
   const isDpAcc =
     order?.dpStatus === 'ACC' ||
+    order?.dpStatus === 'acc' ||
     order?.dpStatus === 'Lunas' ||
+    order?.dpStatus === 'lunas' ||
+    order?.status === 'Produksi' ||
+    order?.status === 'Dalam Produksi' ||
+    order?.status === 'Siap Kirim' ||
+    order?.status === 'Selesai' ||
     localPayments?.dp?.status === 'Lunas';
+
+  const isReady =
+    order?.productionStatus === 'Ready' ||
+    Boolean(order?.readyAt) ||
+    String(order?.status || '').toLowerCase().includes('ready') ||
+    String(order?.status || '').toLowerCase().includes('alamat') ||
+    String(order?.status || '').toLowerCase().includes('ongkir') ||
+    String(order?.status || '').toLowerCase().includes('pelunasan') ||
+    String(order?.status || '').toLowerCase().includes('siap') ||
+    String(order?.status || '').toLowerCase().includes('kirim') ||
+    String(order?.status || '').toLowerCase().includes('selesai');
+
+  const ongkirAmount = Number(order?.ongkir) || 0;
+  const hasOngkir = ongkirAmount > 0;
+
+  const [localConfirmed, setLocalConfirmed] = useState(false);
+  const isAddressConfirmed =
+    localConfirmed ||
+    Boolean(order?.addressConfirmed || order?.addressSubmitted) ||
+    hasOngkir ||
+    String(order?.status || '').toLowerCase().includes('ongkir') ||
+    String(order?.status || '').toLowerCase().includes('pelunasan') ||
+    String(order?.status || '').toLowerCase().includes('siap') ||
+    String(order?.status || '').toLowerCase().includes('kirim') ||
+    String(order?.status || '').toLowerCase().includes('selesai');
+
+  const totalPelunasanWithOngkir = pelunasanNominal + ongkirAmount;
+
+  // Alamat & alokasi barang dropship terkunci permanen setelah mitra
+  // konfirmasi/kirim, sampai Admin menginput ongkir (guard 423 di backend).
+  const canManageAddress = !isAddressConfirmed && !hasOngkir;
+
   const isPelunasanAcc =
     order?.pelunasanStatus === 'ACC' ||
+    order?.pelunasanStatus === 'acc' ||
     order?.pelunasanStatus === 'Lunas' ||
+    order?.pelunasanStatus === 'lunas' ||
+    order?.status === 'Selesai' ||
     localPayments?.pelunasan?.status === 'Lunas';
 
+  const [isSubmittingAddress, setIsSubmittingAddress] = useState(false);
+
+  const handleUsePrimaryAddress = () => {
+    if (!primaryAddress) return;
+    const courierObj = selectedCourier
+      ? { id: selectedCourier.toLowerCase().replace(/[^a-z0-9]+/g, '_'), name: selectedCourier }
+      : (order?.courier ? { id: order.courier.toLowerCase().replace(/[^a-z0-9]+/g, '_'), name: order.courier } : null);
+
+    setExtraAddresses((prev) =>
+      prev.some((a) => String(a.id) === String(primaryAddress.id))
+        ? prev
+        : [...prev, { ...primaryAddress, courier: courierObj }]
+    );
+
+    const nextItems = items.map((item) => {
+      const qty = Number(item.qty) || 1;
+      const split = {
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        address: primaryAddress,
+        qty,
+        weight: qty * (Number(item.unitWeight) || 300),
+        senderName: senderIdentity.name,
+        senderPhone: senderIdentity.phone,
+        senderNotes: senderIdentity.notes,
+        courier: courierObj
+      };
+      return { ...item, splits: [split] };
+    });
+    persistItems(nextItems);
+    setNotification(`Semua produk dialokasikan ke alamat ${primaryAddress.recipient || primaryAddress.name}.`);
+    setTimeout(() => setNotification(''), 3500);
+  };
+
+  const handleConfirmAddressSubmit = async () => {
+    setIsSubmittingAddress(true);
+    setLocalConfirmed(true);
+    const primaryAddr = primaryAddress || addressGroups[0]?.address || order?.address || buyerAddress;
+    const addressId = primaryAddr?.id ?? order?.addressId ?? null;
+    const courier = selectedCourier || addressGroups[0]?.courier?.name || order?.courier || 'JNE Trucking (JTR)';
+
+    const patch = {
+      addressConfirmed: true,
+      addressSubmitted: true,
+      addressSubmittedAt: new Date().toISOString().slice(0, 10),
+      status: 'Menunggu Input Ongkir',
+      ekspedisi: courier,
+      courier_name: courier,
+      address: typeof primaryAddr === 'object' ? (primaryAddr.address || formatFullAddress(primaryAddr)) : primaryAddr,
+      addressId: addressId
+    };
+
+    if (onUpdateOrder) {
+      onUpdateOrder(order?.invoice || order?.orderNo || order?.id, patch);
+    }
+
+    try {
+      const orderId = order?.backendId || order?.id || order?.orderNo || order?.invoice;
+      if (tokenStore.get() && orderId) {
+        await api.updateOrderAddress(orderId, {
+          address_id: Number.isInteger(Number(addressId)) ? Number(addressId) : null,
+          courier_name: courier,
+          notes: order?.note || '',
+          is_split_address: addressGroups.length > 0
+        });
+      }
+      setNotification('Alamat pengiriman berhasil dikonfirmasi. Diteruskan ke Admin untuk penimbangan ongkir.');
+    } catch (err) {
+      if (err?.status === 423) {
+        setLocalConfirmed(false);
+        setNotification(
+          err?.message ||
+            'Alamat pengiriman sudah terkunci. Menunggu Admin menginput ongkos kirim.'
+        );
+      } else {
+        console.warn('Konfirmasi alamat ke backend tertunda:', err);
+        setNotification('Alamat berhasil disimpan. Menunggu Admin Finance menginput ongkos kirim.');
+      }
+    } finally {
+      setIsSubmittingAddress(false);
+      setTimeout(() => setNotification(''), 4000);
+    }
+  };
+
+  const handleSaveNewAddress = async (savedAddr) => {
+    try {
+      const isFirst = addressBook.length === 0;
+      const newAddress = {
+        ...savedAddr,
+        id: savedAddr.id || Date.now(),
+        isDefault: isFirst,
+        isPrimary: isFirst
+      };
+      const updatedBook = await pushAddressBookItem(savedAddr);
+      if (Array.isArray(updatedBook)) {
+        setAddressBook(updatedBook);
+      } else {
+        setAddressBook((prev) => [newAddress, ...prev]);
+      }
+      setIsNewAddressModalOpen(false);
+      
+      if (pickingAddressFor === 'primary') {
+        setPrimaryAddress(newAddress);
+        setIsAddressPickerOpen(false);
+      } else if (pickingAddressFor === 'split') {
+        handlePickAddress(newAddress);
+      }
+      setNotification('Alamat baru berhasil ditambahkan.');
+      setTimeout(() => setNotification(''), 3000);
+    } catch (e) {
+      console.error('Failed to save new address', e);
+    }
+  };
+
   const dpPaid = isDpAcc ? (Number(localPayments?.dp?.nominal) || dpNominal) : 0;
-  const pelunasanPaid = isPelunasanAcc ? (Number(localPayments?.pelunasan?.nominal) || pelunasanNominal) : 0;
+  const pelunasanPaid = isPelunasanAcc ? (Number(localPayments?.pelunasan?.nominal) || totalPelunasanWithOngkir) : 0;
   const nominalTerbayar = dpPaid + pelunasanPaid;
-  const sisaPembayaran = Math.max(0, totalItemsPrice - nominalTerbayar);
+  const sisaPembayaran = Math.max(0, (totalItemsPrice + ongkirAmount) - nominalTerbayar);
   const totalTagihanTahap =
     parseInt(proofAmount, 10) ||
-    ((proofTitle || '').toLowerCase().includes('pelunasan') ? pelunasanNominal : dpNominal) ||
+    ((proofTitle || '').toLowerCase().includes('pelunasan') ? totalPelunasanWithOngkir : dpNominal) ||
     sisaPembayaran;
 
   // Copy Rekening to clipboard handler
@@ -413,7 +722,7 @@ export default function OrderDetailView({
   };
 
   // Open Proof Upload Modal with auto-filled suggested amount
-  const handleOpenProof = (title, defaultAmount) => {
+  const handleOpenProof = (title, defaultAmount, stage = null) => {
     setProofTitle(title);
     setProofAmount(defaultAmount.toString());
     setProofImage(null);
@@ -422,12 +731,14 @@ export default function OrderDetailView({
     setProofBank(bankAccountsList[0]?.name || '');
     setPayMethod('deposit');
     setUploadSuccess(false);
+    setProofStage(stage || null);
     setIsUploadProofOpen(true);
   };
 
   const handleProofImageChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
+      setProofFileObj(file);
       setProofFileName(file.name);
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -437,29 +748,62 @@ export default function OrderDetailView({
     }
   };
 
-  const handlePayWithDepositSubmit = () => {
+  const handlePayWithDepositSubmit = async () => {
     const amountToPay = parseInt(proofAmount || '0', 10) || totalTagihanTahap;
     if (userBalance < amountToPay) {
       alert(`Saldo deposit Anda (${userBalanceFormatted}) tidak mencukupi untuk tagihan ini (Rp ${amountToPay.toLocaleString('id-ID')}).`);
       return;
     }
     const orderNum = order?.orderNo || order?.invoice || orderInvoice || order?.id || 'PO-ORDER';
-    const isDp = (proofTitle || '').toLowerCase().includes('dp');
+    const stageFromTitle = (t) => {
+      const s = String(t || '').toLowerCase();
+      if (s.includes('dp')) return 'dp';
+      if (s.includes('cicilan')) return 'cicilan';
+      return 'pelunasan';
+    };
+    const stageKey = proofStage?.type || stageFromTitle(proofTitle);
+    const isDp = stageKey === 'dp';
+    const isPelunasan = stageKey === 'pelunasan';
+    const instId =
+      proofStage?.id ??
+      order?.installmentIds?.[stageKey] ??
+      (isDp
+        ? order?.dpInstallmentId
+        : isPelunasan
+        ? order?.pelunasanInstallmentId
+        : undefined);
     const todayDate = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+
+    // Potong saldo deposit di server terlebih dahulu agar saldo tidak double-spend
+    if (tokenStore.get()) {
+      try {
+        await api.my.payWithDeposit({
+          order_number: order?.orderNo || order?.invoice || (order?.id ? String(order.id) : ''),
+          invoice_number: order?.invoiceNumber || '',
+          installment_id: instId || undefined,
+          stage: stageKey,
+          amount: amountToPay
+        });
+      } catch (err) {
+        alert(`Pembayaran via deposit gagal disimpan di server: ${err?.message || 'tidak diketahui'}.`);
+        return;
+      }
+    }
 
     if (onPayWithDeposit) {
       onPayWithDeposit({
         orderNo: orderNum,
-        billTitle: proofTitle || (isDp ? 'DP PO' : 'Pelunasan PO'),
+        billTitle: proofStage?.label || proofTitle || (isDp ? 'DP PO' : isPelunasan ? 'Pelunasan PO' : 'Cicilan PO'),
         amount: amountToPay,
-        billType: isDp ? 'dp' : 'pelunasan'
+        billType: stageKey,
+        installmentId: instId
       });
     }
 
     setLocalPayments((prev) => ({
       ...prev,
-      [isDp ? 'dp' : 'pelunasan']: {
-        title: isDp ? 'DP' : 'Pelunasan',
+      [stageKey]: {
+        title: proofStage?.label || (isDp ? 'DP' : isPelunasan ? 'Pelunasan' : 'Cicilan'),
         nominal: amountToPay,
         bank: 'Saldo Deposit Mitra',
         status: 'Lunas',
@@ -469,25 +813,74 @@ export default function OrderDetailView({
     }));
 
     if (onUpdateOrder) {
-      onUpdateOrder({
-        ...(isDp
-          ? { dpStatus: 'ACC', dpBank: 'Saldo Deposit Mitra', dpNote: 'Lunas via Saldo Deposit' }
-          : { pelunasanStatus: 'ACC', pelunasanBank: 'Saldo Deposit Mitra', pelunasanNote: 'Lunas via Saldo Deposit' })
-      });
+      if (isDp) {
+        onUpdateOrder({ dpStatus: 'ACC', dpBank: 'Saldo Deposit Mitra', dpNote: 'Lunas via Saldo Deposit' });
+      } else if (isPelunasan) {
+        onUpdateOrder({ pelunasanStatus: 'ACC', pelunasanBank: 'Saldo Deposit Mitra', pelunasanNote: 'Lunas via Saldo Deposit' });
+      } else {
+        onUpdateOrder({ stageProofPatch: { stageKey, status: 'Lunas', bank: 'Saldo Deposit Mitra' } });
+      }
     }
 
     setUploadSuccess(true);
   };
 
-  const handleUploadProofSubmit = (e) => {
+  const handleUploadProofSubmit = async (e) => {
     e.preventDefault();
-    if (!proofImage) {
+    if (!proofImage && !proofFileObj) {
       alert('Harap pilih foto bukti transfer terlebih dahulu.');
       return;
     }
     if (!proofBank) {
       alert('Harap pilih rekening bank tujuan transfer.');
       return;
+    }
+
+    setIsUploadingProof(true);
+    let finalProofUrl = proofImage;
+
+    // Tentukan termin aktif: utamakan stage yang dibuka (punya id installment
+    // dari invoice) agar bukti transfer tersambung ke cicilan yang benar,
+    // termasuk termin menengah (cicilan) pada katalog 3x.
+    const stageFromTitle = (t) => {
+      const s = String(t || '').toLowerCase();
+      if (s.includes('dp')) return 'dp';
+      if (s.includes('cicilan')) return 'cicilan';
+      return 'pelunasan';
+    };
+    const stageKey = proofStage?.type || stageFromTitle(proofTitle);
+    const isDp = stageKey === 'dp';
+    const isPelunasan = stageKey === 'pelunasan';
+    const instId =
+      proofStage?.id ??
+      order?.installmentIds?.[stageKey] ??
+      order?.installmentIds?.[`stage-${proofStage?.sequence}`] ??
+      (isDp
+        ? order?.dpInstallmentId
+        : isPelunasan
+        ? order?.pelunasanInstallmentId
+        : undefined);
+
+    // Unggah bukti transfer ke API backend jika token aktif
+    if (proofFileObj && tokenStore.get()) {
+      try {
+        const uploadRes = await api.management.uploadFile(proofFileObj, 'proof');
+        const serverPath = uploadRes?.data?.path || '';
+        if (serverPath) {
+          finalProofUrl = mediaUrl(serverPath);
+
+          await api.my.uploadPayment({
+            order_number: order?.orderNo || order?.invoice || (order?.id ? String(order.id) : ''),
+            invoice_number: order?.invoiceNumber || '',
+            installment_id: instId || undefined,
+            stage: stageKey,
+            amount: parseInt(proofAmount || '0', 10),
+            proof_url: serverPath
+          });
+        }
+      } catch (err) {
+        console.warn('Gagal sinkronisasi bukti pembayaran ke API backend:', err);
+      }
     }
 
     if (onUploadPayment) {
@@ -499,19 +892,21 @@ export default function OrderDetailView({
         nominal: parseInt(proofAmount || '0', 10),
         bank: proofBank,
         note: proofNote,
-        image: proofImage,
+        image: finalProofUrl,
         date: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
-        status: 'Menunggu Validasi'
+        status: 'Menunggu Validasi',
+        installmentId: instId ?? null,
+        stage: stageKey
       });
     }
 
-    const key = (proofTitle || '').toLowerCase().includes('dp') ? 'dp' : 'pelunasan';
+    const key = isDp ? 'dp' : isPelunasan ? 'pelunasan' : stageKey;
     const paymentEntry = {
-      title: proofTitle || (key === 'dp' ? 'DP' : 'Pelunasan'),
+      title: proofStage?.label || proofTitle || (isDp ? 'DP' : isPelunasan ? 'Pelunasan' : 'Cicilan'),
       nominal: parseInt(proofAmount || '0', 10),
       bank: proofBank,
       note: proofNote,
-      image: proofImage,
+      image: finalProofUrl,
       date: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
       status: 'Menunggu Validasi'
     };
@@ -522,25 +917,32 @@ export default function OrderDetailView({
     }));
 
     if (onUpdateOrder) {
-      if (key === 'dp') {
+      if (isDp) {
         onUpdateOrder({
-          dpProof: proofImage,
+          dpProof: finalProofUrl,
           dpStatus: 'Menunggu Verifikasi',
           dpBank: proofBank,
           dpNote: proofNote,
           dpNominal: parseInt(proofAmount || '0', 10)
         });
-      } else {
+      } else if (isPelunasan) {
         onUpdateOrder({
-          pelunasanProof: proofImage,
+          pelunasanProof: finalProofUrl,
           pelunasanStatus: 'Menunggu Verifikasi',
           pelunasanBank: proofBank,
           pelunasanNote: proofNote,
           pelunasanNominal: parseInt(proofAmount || '0', 10)
         });
+      } else {
+        // Termin cicilan menengah: patch rincian stage agar UI langsung
+        // menandai "Menunggu Verifikasi" tanpa menunggu sinkronisasi server.
+        onUpdateOrder({
+          stageProofPatch: { stageKey, image: finalProofUrl, status: 'Menunggu Verifikasi' }
+        });
       }
     }
 
+    setIsUploadingProof(false);
     setUploadSuccess(true);
     setTimeout(() => {
       setIsUploadProofOpen(false);
@@ -564,6 +966,11 @@ export default function OrderDetailView({
 
         {/* Status Batch Pre-Order Badge (Regulated strictly by Admin) */}
         <div className="flex items-center gap-2 bg-stone-50 px-3.5 py-1.5 rounded-2xl border border-stone-200 text-xs">
+          {order?.closeDate && order.closeDate !== '-' && (
+            <span className="text-stone-600 font-semibold">
+              Batas PO: {order.closeDate}
+            </span>
+          )}
           <span className="text-stone-500 font-medium">Status Batch Pre-Order:</span>
           <span
             className={`px-3 py-1 rounded-xl font-bold text-[11px] inline-flex items-center gap-1.5 ${
@@ -647,11 +1054,85 @@ export default function OrderDetailView({
             <CheckIcon className="w-4 h-4 text-emerald-600" />
           </div>
 
-          {isPendingAcc && (
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs text-amber-800 flex items-start gap-2">
-              <span className="text-amber-600 font-bold">⏳</span>
-              <div className="leading-snug">
-                <span className="font-bold">Menunggu ACC Admin:</span> Pesanan sedang diverifikasi oleh Admin Marketing. Pembayaran DP akan dibuka setelah pesanan disetujui.
+          {/* Status Alert Banner per Tahap Alur PO */}
+          {isPendingAcc ? (
+            <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-3.5 text-xs text-amber-900 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                <ClockIcon className="w-4 h-4" />
+              </div>
+              <div className="leading-snug space-y-0.5">
+                <span className="font-bold text-amber-950">Menunggu ACC Pesanan</span>
+                <p className="text-[11px] text-amber-800">Pesanan sedang diverifikasi oleh Admin. Pembayaran DP akan dibuka setelah pesanan disetujui.</p>
+              </div>
+            </div>
+          ) : !isDpAcc ? (
+            <div className="bg-sky-50/80 border border-sky-200/90 rounded-2xl p-3.5 text-xs text-sky-900 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center shrink-0 mt-0.5">
+                <CreditCardIcon className="w-4 h-4" />
+              </div>
+              <div className="leading-snug space-y-0.5">
+                <span className="font-bold text-sky-950">Menunggu Pembayaran DP</span>
+                <p className="text-[11px] text-sky-800">Pesanan disetujui. Silakan selesaikan pembayaran DP agar masuk antrian produksi pabrik.</p>
+              </div>
+            </div>
+          ) : !isReady ? (
+            <div className="bg-stone-100/90 border border-stone-200 rounded-2xl p-3.5 text-xs text-stone-800 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-stone-200/80 text-stone-700 flex items-center justify-center shrink-0 mt-0.5">
+                <ClockIcon className="w-4 h-4" />
+              </div>
+              <div className="leading-snug space-y-0.5">
+                <span className="font-bold text-stone-900">Dalam Proses Produksi</span>
+                <p className="text-[11px] text-stone-600">DP terverifikasi. Pengisian alamat pengiriman akan dibuka setelah pesanan siap kirim.</p>
+              </div>
+            </div>
+          ) : !isAddressConfirmed ? (
+            <div className="bg-[#6B1416]/5 border border-[#6B1416]/20 rounded-2xl p-3.5 text-xs text-stone-900 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-[#6B1416]/10 text-[#6B1416] flex items-center justify-center shrink-0 mt-0.5">
+                <TruckIcon className="w-4 h-4" />
+              </div>
+              <div className="leading-snug space-y-0.5">
+                <span className="font-bold text-[#6B1416]">Barang Ready — Konfirmasi Alamat</span>
+                <p className="text-[11px] text-stone-600">Produksi selesai. Lengkapi alamat pengiriman di bawah, lalu klik <strong>Konfirmasi Alamat</strong>.</p>
+              </div>
+            </div>
+          ) : !hasOngkir ? (
+            <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-3.5 text-xs text-amber-900 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                <ClockIcon className="w-4 h-4" />
+              </div>
+              <div className="leading-snug space-y-0.5">
+                <span className="font-bold text-amber-950">Menunggu Penimbangan Ongkir</span>
+                <p className="text-[11px] text-amber-800">Alamat telah dikonfirmasi. Admin Finance sedang menimbang paket dan menentukan nominal ongkos kirim.</p>
+              </div>
+            </div>
+          ) : !isPelunasanAcc ? (
+            <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl p-3.5 text-xs text-emerald-950 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5">
+                <CreditCardIcon className="w-4 h-4" />
+              </div>
+              <div className="leading-snug space-y-0.5">
+                <span className="font-bold text-emerald-950">Pembayaran Pelunasan & Ongkir</span>
+                <p className="text-[11px] text-emerald-800">Ongkir Rp {ongkirAmount.toLocaleString('id-ID')} telah diinput. Total tagihan: <strong>Rp {totalPelunasanWithOngkir.toLocaleString('id-ID')}</strong>.</p>
+              </div>
+            </div>
+          ) : order?.resi ? (
+            <div className="bg-stone-50 border border-stone-200 rounded-2xl p-3.5 text-xs text-stone-900 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-stone-200/80 text-stone-700 flex items-center justify-center shrink-0 mt-0.5">
+                <TruckIcon className="w-4 h-4" />
+              </div>
+              <div className="leading-snug space-y-0.5">
+                <span className="font-bold text-stone-900">Pesanan Dalam Pengiriman</span>
+                <p className="text-[11px] text-stone-600">Nomor Resi: <strong className="font-mono">{order.resi}</strong> ({order.courier || selectedCourier}).</p>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl p-3.5 text-xs text-emerald-950 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5">
+                <CheckIcon className="w-4 h-4" />
+              </div>
+              <div className="leading-snug space-y-0.5">
+                <span className="font-bold text-emerald-950">Pesanan Selesai (Lunas)</span>
+                <p className="text-[11px] text-emerald-800">Seluruh tagihan telah lunas dan paket siap diserahkan ke ekspedisi.</p>
               </div>
             </div>
           )}
@@ -670,114 +1151,281 @@ export default function OrderDetailView({
             </p>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-stone-800 font-semibold">{selectedCourier}</p>
+                <p className="text-stone-800 font-semibold">{selectedCourier || order?.courier || 'Pilih Ekspedisi'}</p>
                 <p className="text-[11px] text-amber-700 font-semibold italic">
-                  (Ongkos kirim di-update Admin setelah penimbangan)
+                  {hasOngkir
+                    ? `Ongkos Kirim: Rp ${ongkirAmount.toLocaleString('id-ID')}`
+                    : '(Ongkos kirim di-update Admin setelah barang Ready & ditimbang)'}
                 </p>
               </div>
-              <button
-                onClick={() => setIsCourierModalOpen(true)}
-                className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[11px] px-3.5 py-1.5 rounded-lg transition cursor-pointer"
-              >
-                Pilih Jasa Pengiriman
-              </button>
+              {isReady && !hasOngkir && (
+                <button
+                  onClick={() => setIsCourierModalOpen(true)}
+                  className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[11px] px-3.5 py-1.5 rounded-lg transition cursor-pointer"
+                >
+                  Pilih Jasa Pengiriman
+                </button>
+              )}
             </div>
           </div>
 
-          {/* DP Termin Card */}
-          <div className="pt-2 border-t border-stone-100 flex items-start justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <p className="font-bold text-stone-800">Dp {summaryTitle}</p>
-                {localPayments.dp?.status === 'Lunas' ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                    <CheckIcon className="w-3 h-3" /> Lunas / Terverifikasi
-                  </span>
-                ) : localPayments.dp ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                    Menunggu ACC Admin
-                  </span>
-                ) : null}
-              </div>
-              <p className="text-[#2563EB] font-bold text-xs mt-0.5">
-                Rp {dpNominal.toLocaleString('id-ID')} ({dpPct}%)
-              </p>
-              <p className="text-[10px] text-stone-500 mt-0.5">Bayar sebelum {dpDue}</p>
-            </div>
-            {localPayments.dp ? (
-              <button
-                onClick={() => setPreviewProof(localPayments.dp)}
-                className="bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                title="Lihat Bukti Transfer"
-              >
-                <EyeIcon className="w-3.5 h-3.5 text-[#6B1416]" />
-                <span>Lihat Bukti</span>
-              </button>
-            ) : isPendingAcc ? (
-              <span
-                className="bg-stone-100 border border-stone-200 text-stone-500 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 flex items-center gap-1 cursor-not-allowed shadow-2xs"
-                title="Menunggu persetujuan Admin Marketing sebelum pembayaran DP"
-              >
-                <span>⏳ Menunggu ACC Admin</span>
-              </span>
-            ) : (
-              <button
-                onClick={() =>
-                  handleOpenProof(
-                    `DP ${summaryTitle} (${dpPct}%)`,
-                    dpNominal
-                  )
-                }
-                className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer"
-              >
-                Upload Bukti Pembayaran
-              </button>
-            )}
-          </div>
+          {/* Dynamic Multi-Stage Installments (Cicilan > 2x / 3x Sesuai Publikasi Katalog Admin) */}
+          {order?.paymentStages && order.paymentStages.length >= 2 ? (
+            order.paymentStages.map((stg, sIdx) => {
+              const isFirst = sIdx === 0 || stg.type === 'dp';
+              const isLast = sIdx === order.paymentStages.length - 1 || stg.type === 'pelunasan';
+              const stageKey = stg.type || `stage_${sIdx + 1}`;
+              const localPay = localPayments[stageKey] || localPayments[stg.type];
+              const isLunas = stg.status === 'Lunas' || stg.status === 'ACC' || localPay?.status === 'Lunas';
+              const hasProof = Boolean(stg.proof || stg.payment?.image || localPay?.image);
+              const isWaiting = stg.status === 'Menunggu Verifikasi' || stg.status === 'Menunggu Validasi' || (hasProof && !isLunas);
 
-          {/* Pelunasan Termin Card */}
-          <div className="pt-2 border-t border-stone-100 flex items-start justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <p className="font-bold text-stone-800">Pelunasan {summaryTitle}</p>
-                {localPayments.pelunasan?.status === 'Lunas' ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                    <CheckIcon className="w-3 h-3" /> Lunas / Terverifikasi
+              const stageTitle = isFirst
+                ? `DP ${summaryTitle}`
+                : isLast
+                ? `Pelunasan + Ongkir ${summaryTitle}`
+                : `${stg.label || `Cicilan ${sIdx}`} ${summaryTitle}`;
+              const nominal = isLast
+                ? (Number(stg.amount || pelunasanNominal) + ongkirAmount)
+                : Number(stg.amount || Math.round(totalItemsPrice * (stg.pct || 30) / 100));
+
+              const prevStage = sIdx > 0 ? order.paymentStages[sIdx - 1] : null;
+              const prevLunas = !prevStage || prevStage.status === 'Lunas' || prevStage.status === 'ACC' || localPayments[prevStage.type]?.status === 'Lunas' || isDpAcc;
+
+              return (
+                <div key={stg.id || sIdx} className="pt-2 border-t border-stone-100 flex items-start justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-stone-800">{stageTitle}</p>
+                      {isLunas ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                          <CheckIcon className="w-3 h-3" /> Lunas / Terverifikasi
+                        </span>
+                      ) : isWaiting ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                          Menunggu ACC Admin
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-[#2563EB] font-bold text-xs mt-0.5">
+                      Rp {nominal.toLocaleString('id-ID')} ({stg.pct}%)
+                      {isLast && (
+                        hasOngkir ? (
+                          <span className="text-[10px] font-normal text-stone-500 ml-1">
+                            (Produk: Rp {Number(stg.amount || pelunasanNominal).toLocaleString('id-ID')} + Ongkir: Rp {ongkirAmount.toLocaleString('id-ID')})
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-normal text-amber-700 ml-1">
+                            (Belum termasuk ongkir)
+                          </span>
+                        )
+                      )}
+                    </p>
+                    <p className="text-[10px] text-stone-500 mt-0.5">
+                      {stg.date ? `Bayar sebelum ${stg.date}` : (isFirst ? `Bayar sebelum ${dpDue}` : `Bayar sebelum ${pelunasanDue}`)}
+                    </p>
+                  </div>
+
+                  {localPay || hasProof || isLunas ? (
+                    <button
+                      onClick={() => setPreviewProof(localPay || {
+                        title: stageTitle,
+                        nominal: nominal,
+                        bank: stg.payment?.bank || order?.dpBank || 'BCA (PT Afathar Niaga Indonesia)',
+                        status: isLunas ? 'Lunas' : 'Menunggu Validasi',
+                        image: stg.proof || stg.payment?.image || '',
+                        date: stg.payment?.date || order?.date || '',
+                        note: stg.payment?.note || ''
+                      })}
+                      className="bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                      title="Lihat Bukti Transfer"
+                    >
+                      <EyeIcon className="w-3.5 h-3.5 text-[#6B1416]" />
+                      <span>Lihat Bukti</span>
+                    </button>
+                  ) : isFirst && isPendingAcc ? (
+                    <span
+                      className="bg-stone-100 border border-stone-200 text-stone-500 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 flex items-center gap-1 cursor-not-allowed shadow-2xs"
+                      title="Menunggu persetujuan Admin Marketing sebelum pembayaran DP"
+                    >
+                      <span>⏳ Menunggu ACC Admin</span>
+                    </span>
+                  ) : !prevLunas ? (
+                    <span
+                      className="bg-stone-100 border border-stone-200 text-stone-400 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
+                      title="Selesaikan pembayaran tahap sebelumnya terlebih dahulu"
+                    >
+                      <span>Menunggu Tahap {sIdx}</span>
+                    </span>
+                  ) : isLast && (!isReady || !hasOngkir) ? (
+                    <span
+                      className="bg-stone-100 border border-stone-200 text-stone-400 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
+                      title="Pelunasan dibuka setelah barang Ready dan ongkir diinput Admin"
+                    >
+                      <span>Menunggu Ready &amp; Ongkir</span>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleOpenProof(stageTitle, nominal, stg)}
+                      className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer"
+                    >
+                      Upload Bukti Pembayaran
+                    </button>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <>
+              {/* DP Termin Card */}
+              <div className="pt-2 border-t border-stone-100 flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-stone-800">Dp {summaryTitle}</p>
+                    {localPayments.dp?.status === 'Lunas' || isDpAcc ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                        <CheckIcon className="w-3 h-3" /> Lunas / Terverifikasi
+                      </span>
+                    ) : localPayments.dp ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                        Menunggu ACC Admin
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-[#2563EB] font-bold text-xs mt-0.5">
+                    Rp {dpNominal.toLocaleString('id-ID')} ({dpPct}%)
+                  </p>
+                  <p className="text-[10px] text-stone-500 mt-0.5">Bayar sebelum {dpDue}</p>
+                </div>
+                {localPayments.dp || isDpAcc || order?.dpProof ? (
+                  <button
+                    onClick={() => setPreviewProof(localPayments.dp || {
+                      title: 'DP',
+                      nominal: dpNominal,
+                      bank: order?.dpBank || 'BCA (PT Afathar Niaga Indonesia)',
+                      status: isDpAcc ? 'Lunas' : 'Menunggu Validasi',
+                      image: order?.dpProof || '',
+                      date: order?.dpSubmittedAt || order?.date || '',
+                      note: order?.dpNote || ''
+                    })}
+                    className="bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                    title="Lihat Bukti Transfer"
+                  >
+                    <EyeIcon className="w-3.5 h-3.5 text-[#6B1416]" />
+                    <span>Lihat Bukti</span>
+                  </button>
+                ) : isPendingAcc ? (
+                  <span
+                    className="bg-stone-100 border border-stone-200 text-stone-500 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 flex items-center gap-1 cursor-not-allowed shadow-2xs"
+                    title="Menunggu persetujuan Admin Marketing sebelum pembayaran DP"
+                  >
+                    <span>⏳ Menunggu ACC Admin</span>
                   </span>
-                ) : localPayments.pelunasan ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                    Menunggu ACC Admin
-                  </span>
-                ) : null}
+                ) : (
+                  <button
+                    onClick={() =>
+                      handleOpenProof(
+                        `DP ${summaryTitle} (${dpPct}%)`,
+                        dpNominal
+                      )
+                    }
+                    className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer"
+                  >
+                    Upload Bukti Pembayaran
+                  </button>
+                )}
               </div>
-              <p className="text-[#2563EB] font-bold text-xs mt-0.5">
-                Rp {pelunasanNominal.toLocaleString('id-ID')} ({pelunasanPct}%)
-              </p>
-              <p className="text-[10px] text-stone-500 mt-0.5">Bayar sebelum {pelunasanDue}</p>
-            </div>
-            {localPayments.pelunasan ? (
-              <button
-                onClick={() => setPreviewProof(localPayments.pelunasan)}
-                className="bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer flex items-center gap-1.5 shadow-2xs"
-                title="Lihat Bukti Transfer"
-              >
-                <EyeIcon className="w-3.5 h-3.5 text-[#6B1416]" />
-                <span>Lihat Bukti</span>
-              </button>
-            ) : (
-              <button
-                onClick={() =>
-                  handleOpenProof(
-                    `Pelunasan ${summaryTitle} (${pelunasanPct}%)`,
-                    pelunasanNominal
-                  )
-                }
-                className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer"
-              >
-                Upload Bukti Pembayaran
-              </button>
-            )}
-          </div>
+
+              {/* Pelunasan Termin Card */}
+              <div className="pt-2 border-t border-stone-100 flex items-start justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-stone-800">Pelunasan + Ongkir {summaryTitle}</p>
+                    {localPayments.pelunasan?.status === 'Lunas' || isPelunasanAcc ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                        <CheckIcon className="w-3 h-3" /> Lunas / Terverifikasi
+                      </span>
+                    ) : localPayments.pelunasan ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                        Menunggu ACC Admin
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-[#2563EB] font-bold text-xs mt-0.5">
+                    Rp {totalPelunasanWithOngkir.toLocaleString('id-ID')}
+                    {hasOngkir ? (
+                      <span className="text-[10px] font-normal text-stone-500 ml-1">
+                        (Produk: Rp {pelunasanNominal.toLocaleString('id-ID')} + Ongkir: Rp {ongkirAmount.toLocaleString('id-ID')})
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-normal text-amber-700 ml-1">
+                        (Belum termasuk ongkir)
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-[10px] text-stone-500 mt-0.5">Bayar sebelum {pelunasanDue}</p>
+                </div>
+                {localPayments.pelunasan || isPelunasanAcc || order?.pelunasanProof ? (
+                  <button
+                    onClick={() => setPreviewProof(localPayments.pelunasan || {
+                      title: 'Pelunasan + Ongkir',
+                      nominal: totalPelunasanWithOngkir,
+                      bank: order?.pelunasanBank || 'BCA (PT Afathar Niaga Indonesia)',
+                      status: isPelunasanAcc ? 'Lunas' : 'Menunggu Validasi',
+                      image: order?.pelunasanProof || '',
+                      date: order?.pelunasanSubmittedAt || order?.date || '',
+                      note: order?.pelunasanNote || ''
+                    })}
+                    className="bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                    title="Lihat Bukti Transfer"
+                  >
+                    <EyeIcon className="w-3.5 h-3.5 text-[#6B1416]" />
+                    <span>Lihat Bukti</span>
+                  </button>
+                ) : !isDpAcc ? (
+                  <span
+                    className="bg-stone-100 border border-stone-200 text-stone-400 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
+                    title="Selesaikan pembayaran DP terlebih dahulu"
+                  >
+                    <span>⏳ Menunggu DP</span>
+                  </span>
+                ) : !isReady ? (
+                  <span
+                    className="bg-purple-50 border border-purple-200 text-purple-700 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
+                    title="Menunggu barang selesai diproduksi dan ditandai Ready oleh Admin"
+                  >
+                    <span>⏳ Dalam Produksi</span>
+                  </span>
+                ) : !isAddressConfirmed ? (
+                  <span
+                    className="bg-cyan-50 border border-cyan-200 text-cyan-800 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
+                    title="Konfirmasi alamat pengiriman terlebih dahulu"
+                  >
+                    <span>⏳ Isi Alamat Dulu</span>
+                  </span>
+                ) : !hasOngkir ? (
+                  <span
+                    className="bg-amber-50 border border-amber-200 text-amber-800 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
+                    title="Menunggu Admin Finance menimbang paket dan menginput ongkos kirim"
+                  >
+                    <span>⏳ Menunggu Ongkir</span>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() =>
+                      handleOpenProof(
+                        `Pelunasan + Ongkir (${order?.courier || selectedCourier || 'Ekspedisi'})`,
+                        totalPelunasanWithOngkir
+                      )
+                    }
+                    className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer"
+                  >
+                    Upload Bukti Pembayaran
+                  </button>
+                )}
+              </div>
+            </>
+          )}
 
           {/* Final steps */}
           <div className="pt-2 text-stone-400 space-y-1">
@@ -962,13 +1610,18 @@ export default function OrderDetailView({
               </button>
 
               {/* Tambah Alamat Penerima Button (Blue border button) */}
-              <button
-                onClick={() => setIsAddressPickerOpen(true)}
-                className="px-4 py-2 border border-sky-400 hover:bg-sky-50 text-sky-700 text-xs font-bold rounded-xl transition cursor-pointer shadow-2xs flex items-center gap-1.5"
-              >
-                <MapPinIcon className="w-3.5 h-3.5 text-sky-600" />
-                <span>+ Tambah Alamat Penerima</span>
-              </button>
+              {isReady && !hasOngkir && (
+                <button
+                  onClick={() => {
+                    setPickingAddressFor('split');
+                    setIsAddressPickerOpen(true);
+                  }}
+                  className="px-4 py-2 border border-sky-400 hover:bg-sky-50 text-sky-700 text-xs font-bold rounded-xl transition cursor-pointer shadow-2xs flex items-center gap-1.5"
+                >
+                  <MapPinIcon className="w-3.5 h-3.5 text-sky-600" />
+                  <span>+ Tambah Alamat Penerima</span>
+                </button>
+              )}
             </div>
           ) : (
             <div className="p-3.5 bg-amber-50/70 rounded-xl border border-amber-200/80 text-xs text-amber-900 flex items-start gap-2.5">
@@ -988,24 +1641,120 @@ export default function OrderDetailView({
       {/* Alamat Lain Section */}
       <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-xs border border-stone-200/80 space-y-4">
         
-        {/* Header Address */}
+        {/* Banner Status Alamat Berdasarkan Alur PO */}
+        {!isReady && (
+          <div className="bg-stone-50/80 border border-stone-200/90 rounded-2xl p-4 flex items-start gap-3.5 text-stone-700">
+            <div className="w-9 h-9 rounded-xl bg-stone-200/70 text-stone-600 flex items-center justify-center shrink-0 mt-0.5">
+              <ClockIcon className="w-4 h-4" />
+            </div>
+            <div className="space-y-0.5 min-w-0">
+              <div className="flex items-center gap-2">
+                <h4 className="font-bold text-stone-900 text-xs sm:text-sm">Dalam Tahap Produksi</h4>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-stone-200/70 text-stone-700">
+                  Menunggu Ready
+                </span>
+              </div>
+              <p className="text-xs text-stone-500 leading-relaxed">
+                Pengisian dan konfirmasi alamat pengiriman akan dibuka setelah barang selesai diproduksi pabrik.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {isReady && !isAddressConfirmed && (
+          <div className="bg-stone-50/90 rounded-2xl p-4 sm:p-5 border border-stone-200/90 shadow-xs flex items-start gap-3.5">
+            <div className="w-10 h-10 rounded-xl bg-[#6B1416]/10 text-[#6B1416] flex items-center justify-center shrink-0 mt-0.5 border border-[#6B1416]/20">
+              <TruckIcon className="w-5 h-5" />
+            </div>
+            <div className="space-y-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="font-bold text-stone-900 text-sm tracking-tight">Konfirmasi Alamat Pengiriman (Dropship)</h4>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Siap Dikirim
+                </span>
+              </div>
+              <p className="text-xs text-stone-600 leading-relaxed">
+                Pesanan telah selesai diproduksi. Tentukan atau periksa detail alamat tujuan di bawah, lalu klik tombol <strong>Konfirmasi Alamat &amp; Ajukan Cek Ongkir</strong> di bagian bawah untuk proses perhitungan ongkir oleh Admin.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {isAddressConfirmed && (
+          <div className={`p-4 rounded-2xl border flex flex-wrap items-center justify-between gap-3 text-xs transition ${
+            hasOngkir
+              ? 'bg-emerald-50/50 border-emerald-200 text-emerald-950'
+              : 'bg-amber-50/40 border-amber-200/80 text-amber-950'
+          }`}>
+            <div className="flex items-center gap-3 min-w-0">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                hasOngkir
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-amber-100/80 text-amber-700'
+              }`}>
+                {hasOngkir ? <CheckIcon className="w-4 h-4" /> : <ClockIcon className="w-4 h-4" />}
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="font-bold text-stone-900 text-xs sm:text-sm">
+                    {hasOngkir ? 'Ongkos Kirim Telah Diinput' : 'Alamat Dikonfirmasi'}
+                  </h4>
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${
+                    hasOngkir
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-amber-100 text-amber-800'
+                  }`}>
+                    {hasOngkir ? 'Siap Pelunasan' : 'Menunggu Penimbangan Admin'}
+                  </span>
+                </div>
+                <p className="text-stone-600 text-xs mt-0.5 leading-relaxed">
+                  {hasOngkir
+                    ? `Biaya pengiriman Rp ${ongkirAmount.toLocaleString('id-ID')} (${order?.courier || selectedCourier || 'Ekspedisi'}) telah ditambahkan ke rincian tagihan.`
+                    : 'Data alamat telah diterima Admin Finance untuk proses penimbangan paket dan kalkulasi ongkir.'}
+                </p>
+              </div>
+            </div>
+
+            {!hasOngkir && (
+              <span
+                className="text-[10px] font-bold text-stone-600 bg-stone-100 border border-stone-200 px-3 py-1.5 rounded-lg flex items-center gap-1.5 shrink-0"
+                title="Alamat & alokasi barang terkunci sampai Admin menginput ongkos kirim"
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5 text-amber-600">
+                  <path fillRule="evenodd" d="M10 2a4 4 0 0 0-4 4v2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-1V6a4 4 0 0 0-4-4Zm2 6V6a2 2 0 1 0-4 0v2h4Z" clipRule="evenodd" />
+                </svg>
+                <span>Terkunci — menunggu input ongkir Admin</span>
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Header Address (Dropship) */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-stone-100 text-xs">
           <div>
             <div className="flex items-center gap-2">
               <span className="text-[#2563EB] font-bold flex items-center gap-1.5">
                 <MapPinIcon className="w-4 h-4 text-[#2563EB]" />
-                <span className="text-sm">Alamat Pengiriman Tambahan (Split Alamat)</span>
+                <span className="text-sm">Alamat Pengiriman (Dropship)</span>
               </span>
               <span className="px-2.5 py-0.5 rounded-full bg-stone-100 text-stone-600 font-bold text-[10px]">
                 {addressGroups.length} Alamat
               </span>
             </div>
+            <p className="text-[11px] text-stone-500 mt-0.5">
+              Gunakan fitur ini jika pesanan ingin dikirim langsung ke pelanggan (Dropship) atau dipecah ke beberapa alamat penerima yang berbeda.
+            </p>
           </div>
 
-          {!isClosedPO && (
+          {canManageAddress && (
             <button
-              onClick={() => setIsAddressPickerOpen(true)}
-              className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs px-3.5 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
+              type="button"
+              onClick={() => {
+                setPickingAddressFor('split');
+                setIsAddressPickerOpen(true);
+              }}
+              className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-2xs"
             >
               <MapPinIcon className="w-3.5 h-3.5 text-white" />
               <span>+ Tambah Alamat Penerima</span>
@@ -1015,11 +1764,38 @@ export default function OrderDetailView({
 
         {/* Daftar alamat tambahan */}
         {addressGroups.length === 0 ? (
-          <div className="p-6 bg-stone-50 rounded-2xl border border-stone-200 text-center space-y-1">
-            <p className="font-bold text-stone-700 text-xs">Belum ada alamat tambahan</p>
-            <p className="text-[11px] text-stone-400">
-              Klik &ldquo;Tambah Alamat Penerima&rdquo; lalu pilih produk yang dikirim ke alamat tersebut.
-            </p>
+          <div className="p-6 bg-stone-50 rounded-2xl border border-stone-200 text-center space-y-3">
+            <div className="space-y-1">
+              <p className="font-bold text-stone-700 text-xs">Belum ada alamat tambahan</p>
+              <p className="text-[11px] text-stone-400 max-w-md mx-auto leading-relaxed">
+                Klik &ldquo;Tambah Alamat Penerima&rdquo; lalu pilih produk yang dikirim ke alamat tersebut.
+              </p>
+            </div>
+            {canManageAddress && (
+              <div className="pt-1 flex flex-wrap items-center justify-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPickingAddressFor('split');
+                    setIsAddressPickerOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
+                >
+                  <MapPinIcon className="w-3.5 h-3.5 text-white" />
+                  <span>+ Tambah Alamat Penerima</span>
+                </button>
+                {primaryAddress && (
+                  <button
+                    type="button"
+                    onClick={handleUsePrimaryAddress}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-stone-100 text-stone-800 font-bold text-xs rounded-xl border border-stone-300 shadow-2xs transition cursor-pointer"
+                  >
+                    <CheckIcon className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Gunakan Alamat Saya ({primaryAddress.recipient || primaryAddress.name})</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-3">
@@ -1056,10 +1832,11 @@ export default function OrderDetailView({
                         Belum ada jasa kirim
                       </span>
                     )}
-                    {!isClosedPO && (
+                    {canManageAddress && (
                       <>
-                        {group.rows.length === 0 && (
+                        {(addressGroups.length > 1 || group.rows.length === 0) && (
                           <button
+                            type="button"
                             onClick={() => handleRemoveAddress(group.address)}
                             className="text-[11px] font-semibold text-rose-600 hover:bg-rose-50 px-2 py-1.5 rounded-lg cursor-pointer"
                           >
@@ -1067,6 +1844,7 @@ export default function OrderDetailView({
                           </button>
                         )}
                         <button
+                          type="button"
                           onClick={() => openCourierFor(group.address, group.courier)}
                           className="border border-emerald-500 text-emerald-700 hover:bg-emerald-50 font-bold text-[11px] px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1"
                         >
@@ -1074,10 +1852,11 @@ export default function OrderDetailView({
                           {group.courier?.name ? 'Ubah Jasa Kirim' : 'Pilih Jasa Kirim'}
                         </button>
                         <button
+                          type="button"
                           onClick={() => openAllocationFor(group.address)}
-                          className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[11px] px-3 py-1.5 rounded-lg transition cursor-pointer"
+                          className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[11px] px-3.5 py-1.5 rounded-lg transition cursor-pointer shadow-2xs flex items-center gap-1"
                         >
-                          Pilih Produk
+                          <span>Pilih Produk</span>
                         </button>
                       </>
                     )}
@@ -1097,7 +1876,18 @@ export default function OrderDetailView({
                     {group.rows.length === 0 ? (
                       <tr>
                         <td colSpan={3} className="px-3 py-4 text-center text-stone-400 italic">
-                          Belum ada produk. Klik &ldquo;Pilih Produk&rdquo; untuk mengatur produk ke alamat ini.
+                          <div className="space-y-1.5">
+                            <p>Belum ada produk. Klik tombol di bawah untuk mengatur produk ke alamat ini.</p>
+                            {canManageAddress && (
+                              <button
+                                type="button"
+                                onClick={() => openAllocationFor(group.address)}
+                                className="inline-flex items-center gap-1 bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[11px] px-3 py-1.5 rounded-lg transition cursor-pointer shadow-2xs"
+                              >
+                                <span>+ Pilih Produk</span>
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ) : (
@@ -1111,8 +1901,9 @@ export default function OrderDetailView({
                             {split.qty}x
                           </td>
                           <td className="px-3 py-2 text-right">
-                            {!isClosedPO && (
+                            {canManageAddress && (
                               <button
+                                type="button"
                                 onClick={() => handleRemoveSingleSplit(item.id, split.id)}
                                 className="px-2 py-0.5 text-[10px] font-semibold text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
                               >
@@ -1130,12 +1921,42 @@ export default function OrderDetailView({
           </div>
         )}
 
-        {/* Total pesanan (jasa kirim diatur per alamat di atas) */}
-        <div className="pt-3 border-t border-stone-100 flex items-center justify-end gap-2 text-xs">
-          <span className="text-stone-500">Total Pesanan:</span>
-          <span className="font-bold text-base text-stone-900">
-            Rp {totalItemsPrice.toLocaleString('id-ID')}
-          </span>
+        {/* Footer Section: Konfirmasi Alamat di Bawah Sesuai Permintaan Mitra */}
+        <div className="pt-4 border-t border-stone-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="text-stone-500 text-[11px] leading-relaxed">
+            {isReady && !isAddressConfirmed ? (
+              <span className="text-stone-600">
+                Pastikan pilihan jasa ekspedisi dan alokasi produk di atas telah sesuai sebelum mengajukan cek ongkir.
+              </span>
+            ) : isAddressConfirmed ? (
+              <span className="inline-flex items-center gap-1.5 text-emerald-700 font-semibold">
+                <CheckIcon className="w-4 h-4" /> Alamat pengiriman telah dikonfirmasi ke Admin Finance.
+              </span>
+            ) : (
+              <span>Alamat penerima dapat disesuaikan selama periode PO berlangsung.</span>
+            )}
+          </div>
+
+          {isReady && !isAddressConfirmed && (
+            <button
+              type="button"
+              onClick={handleConfirmAddressSubmit}
+              disabled={isSubmittingAddress}
+              className="inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-[#6B1416] hover:bg-[#520C0E] active:scale-[0.99] text-white font-bold text-xs shadow-xs hover:shadow transition disabled:opacity-60 cursor-pointer shrink-0 ml-auto"
+            >
+              {isSubmittingAddress ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  <span>Menyimpan...</span>
+                </>
+              ) : (
+                <>
+                  <CheckIcon className="w-4 h-4" />
+                  <span>Konfirmasi Alamat &amp; Ajukan Cek Ongkir</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
 
       </div>
@@ -1143,34 +1964,98 @@ export default function OrderDetailView({
       {/* Bottom Section: Informasi Pre-Order & Rincian Pembayaran */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
         
-        {/* Left: Informasi Pengiriman & Ketentuan Pre-Order */}
+        {/* Left: Detail Pengiriman & Label Dropship */}
         <div className="md:col-span-7 bg-white rounded-3xl p-6 sm:p-7 shadow-xs border border-stone-200/80 space-y-4 text-xs text-stone-700">
           <div className="flex items-center gap-2 pb-3 border-b border-stone-100">
             <TruckIcon className="w-4 h-4 text-[#6B1416]" />
             <h4 className="font-bold text-stone-900 text-xs sm:text-sm">
-              Informasi Pengiriman & Ketentuan Pre-Order
+              Detail Pengiriman &amp; Label Dropship
             </h4>
           </div>
 
           <div className="grid sm:grid-cols-2 gap-3">
-            <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200/70 space-y-1">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Jasa Ekspedisi Logistik</p>
-              <p className="font-bold text-stone-800 text-xs flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                {selectedCourier || order?.courier || 'Ekspedisi Reguler / Cargo'}
-              </p>
-              <p className="text-[10px] text-stone-500">
-                Estimasi total berat: <strong>{(totalQty * 0.3).toFixed(1)} Kg</strong>
-              </p>
+            <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200/70 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Label Pengirim (Dropship)</p>
+                {canManageAddress && !isEditingSender && (
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingSender(true)}
+                    className="text-[10px] font-bold text-[#6B1416] hover:text-[#520C0E] px-2 py-0.5 rounded-md border border-stone-200 bg-white hover:bg-stone-50 transition cursor-pointer"
+                  >
+                    Ubah
+                  </button>
+                )}
+              </div>
+
+              {isEditingSender ? (
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={senderIdentity.name}
+                    onChange={(e) => setSenderIdentity((p) => ({ ...p, name: e.target.value }))}
+                    placeholder="Nama toko pengirim"
+                    className="w-full bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-1 focus:ring-[#6B1416]/40"
+                  />
+                  <input
+                    type="text"
+                    value={senderIdentity.phone}
+                    onChange={(e) => setSenderIdentity((p) => ({ ...p, phone: e.target.value }))}
+                    placeholder="Telepon pengirim (mis. 0812xxxx)"
+                    className="w-full bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-1 focus:ring-[#6B1416]/40"
+                  />
+                  <textarea
+                    value={senderIdentity.notes}
+                    onChange={(e) => setSenderIdentity((p) => ({ ...p, notes: e.target.value }))}
+                    placeholder="Catatan label (opsional, mis. 'Jangan cantumkan harga')"
+                    rows={2}
+                    className="w-full bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-1 focus:ring-[#6B1416]/40 resize-none"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveSenderIdentity}
+                      className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition cursor-pointer"
+                    >
+                      Simpan Identitas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingSender(false)}
+                      className="bg-white border border-stone-300 hover:bg-stone-50 text-stone-700 font-semibold text-[10px] px-3 py-1.5 rounded-lg transition cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className="font-bold text-stone-800 text-xs flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    {senderIdentity.name || 'Toko Mitra'}
+                  </p>
+                  {senderIdentity.phone && (
+                    <p className="text-[11px] text-stone-600 font-medium">Telp: {senderIdentity.phone}</p>
+                  )}
+                  {senderIdentity.notes && (
+                    <p className="text-[11px] text-stone-600 italic">"{senderIdentity.notes}"</p>
+                  )}
+                  <p className="text-[10px] text-stone-500">
+                    {canManageAddress
+                      ? 'Identitas ini dicantumkan sebagai pengirim paket di label ekspedisi. Ubah sebelum alamat dikonfirmasi.'
+                      : 'Identitas pengirim terkunci bersama alamat — menunggu input ongkir Admin.'}
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200/70 space-y-1">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Skema Termin PO</p>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Ringkasan Logistik</p>
               <p className="font-bold text-stone-800 text-xs">
-                DP {dpPct}% &bull; Pelunasan {pelunasanPct}%
+                {selectedCourier || order?.courier || 'Ekspedisi Reguler / Cargo'}
               </p>
               <p className="text-[10px] text-stone-500">
-                {order?.paymentMethod || 'Transfer Bank / Saldo Deposit'}
+                Total muatan: <strong>{totalQty} pcs</strong> &bull; Estimasi berat: <strong>{(totalQty * 0.3).toFixed(1)} Kg</strong>
               </p>
             </div>
           </div>
@@ -1206,14 +2091,28 @@ export default function OrderDetailView({
             </div>
 
             <div className="pt-2.5 border-t border-dashed border-stone-200 space-y-1.5 text-[11px]">
-              <div className="flex justify-between text-stone-600">
-                <span>Termin DP ({dpPct}%)</span>
-                <span className="font-semibold text-stone-800">Rp {dpNominal.toLocaleString('id-ID')}</span>
-              </div>
-              <div className="flex justify-between text-stone-600">
-                <span>Termin Pelunasan ({pelunasanPct}%)</span>
-                <span className="font-semibold text-stone-800">Rp {pelunasanNominal.toLocaleString('id-ID')}</span>
-              </div>
+              {order?.paymentStages && order.paymentStages.length >= 2 ? (
+                order.paymentStages.map((stg, sIdx) => {
+                  const sNominal = Number(stg.amount || Math.round(totalItemsPrice * (stg.pct || 0) / 100));
+                  return (
+                    <div key={sIdx} className="flex justify-between text-stone-600">
+                      <span>Termin {stg.label || `Tahap ${sIdx + 1}`} ({stg.pct}%)</span>
+                      <span className="font-semibold text-stone-800">Rp {sNominal.toLocaleString('id-ID')}</span>
+                    </div>
+                  );
+                })
+              ) : (
+                <>
+                  <div className="flex justify-between text-stone-600">
+                    <span>Termin DP ({dpPct}%)</span>
+                    <span className="font-semibold text-stone-800">Rp {dpNominal.toLocaleString('id-ID')}</span>
+                  </div>
+                  <div className="flex justify-between text-stone-600">
+                    <span>Termin Pelunasan ({pelunasanPct}%)</span>
+                    <span className="font-semibold text-stone-800">Rp {pelunasanNominal.toLocaleString('id-ID')}</span>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="pt-3 border-t border-stone-200 flex justify-between items-center">
@@ -1269,7 +2168,11 @@ export default function OrderDetailView({
             <div className="sticky top-0 bg-white px-5 py-4 border-b border-stone-100 flex items-center justify-between z-10">
               <div className="flex items-center gap-2">
                 <MapPinIcon className="w-4 h-4 text-[#6B1416]" />
-                <h4 className="font-bold text-sm text-stone-900">Tambah Alamat Penerima</h4>
+                <h4 className="font-bold text-sm text-stone-900">
+                  {pickingAddressFor === 'primary'
+                    ? 'Pilih Alamat Pengiriman Utama'
+                    : 'Tambah Alamat Penerima (Split Alamat)'}
+                </h4>
               </div>
               <button
                 onClick={() => setIsAddressPickerOpen(false)}
@@ -1279,44 +2182,110 @@ export default function OrderDetailView({
               </button>
             </div>
 
-            <div className="p-5 space-y-2">
-              <p className="text-[11px] text-stone-500 mb-3">
-                Pilih alamat dari buku alamat, lalu atur produk yang dikirim ke alamat tersebut.
-              </p>
-              {addressBook.filter(
-                (addr) =>
-                  !addressGroups.some((g) => String(g.address?.id) === String(addr.id))
-              ).map((addr) => (
-                <button
-                  key={addr.id}
-                  onClick={() => handlePickAddress(addr)}
-                  className="w-full text-left p-3 rounded-2xl border border-stone-200 hover:border-sky-400 hover:bg-sky-50/50 transition cursor-pointer space-y-1"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold text-stone-900">{addr.recipient}</span>
-                    <span className="text-[10px] text-stone-500 font-mono">{addr.phone}</span>
-                  </div>
-                  <p className="text-[11px] text-stone-600 leading-snug line-clamp-2">
-                    {addr.address}
-                  </p>
-                  <p className="text-[10px] text-sky-700 font-semibold">
-                    {addr.city}{addr.subdistrict ? ` — ${addr.subdistrict}` : ''}
-                  </p>
-                </button>
-              ))}
-              {addressBook.filter(
-                (addr) =>
-                  !addressGroups.some((g) => String(g.address?.id) === String(addr.id))
-              ).length === 0 && (
-                <p className="text-[11px] text-stone-400 italic text-center py-6">
-                  Belum ada alamat tersimpan di buku alamat. Tambahkan lewat menu Alamat, lalu
-                  muat ulang halaman ini.
+            <div className="p-5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] text-stone-500">
+                  {pickingAddressFor === 'primary'
+                    ? 'Pilih alamat dari buku alamat untuk tujuan utama pesanan ini.'
+                    : 'Pilih alamat dari buku alamat, lalu atur produk yang dikirim ke alamat tersebut.'}
                 </p>
+                <button
+                  type="button"
+                  onClick={() => setIsNewAddressModalOpen(true)}
+                  className="px-3 py-1.5 bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs rounded-xl transition cursor-pointer flex items-center gap-1 shrink-0 shadow-2xs"
+                >
+                  <PlusIcon className="w-3.5 h-3.5" />
+                  <span>+ Buat Alamat Baru</span>
+                </button>
+              </div>
+
+              {addressBook
+                .filter((addr) =>
+                  pickingAddressFor === 'split'
+                    ? !addressGroups.some((g) => String(g.address?.id) === String(addr.id))
+                    : true
+                )
+                .map((addr) => {
+                  const isCurrentPrimary =
+                    pickingAddressFor === 'primary' &&
+                    String(primaryAddress?.id) === String(addr.id);
+
+                  return (
+                    <button
+                      key={addr.id}
+                      onClick={() => {
+                        if (pickingAddressFor === 'primary') {
+                          setPrimaryAddress(addr);
+                          setIsAddressPickerOpen(false);
+                          setNotification(`Alamat utama diubah ke: ${addr.recipient || addr.name}`);
+                          setTimeout(() => setNotification(''), 3000);
+                        } else {
+                          handlePickAddress(addr);
+                        }
+                      }}
+                      className={`w-full text-left p-3.5 rounded-2xl border transition cursor-pointer space-y-1 ${
+                        isCurrentPrimary
+                          ? 'border-emerald-500 bg-emerald-50/50 ring-1 ring-emerald-500'
+                          : 'border-stone-200 hover:border-sky-400 hover:bg-sky-50/50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-stone-900">{addr.recipient || addr.name}</span>
+                          {addr.label && (
+                            <span className="px-2 py-0.5 rounded bg-stone-100 text-stone-600 text-[10px] font-semibold">
+                              {addr.label}
+                            </span>
+                          )}
+                          {isCurrentPrimary && (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[9px] font-bold">
+                              Aktif Sekarang
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-stone-500 font-mono">{addr.phone}</span>
+                      </div>
+                      <p className="text-[11px] text-stone-600 leading-snug line-clamp-2">
+                        {addr.address || formatFullAddress(addr)}
+                      </p>
+                      <p className="text-[10px] text-sky-700 font-semibold">
+                        {addr.city}{addr.subdistrict ? ` — ${addr.subdistrict}` : ''}
+                      </p>
+                    </button>
+                  );
+                })}
+
+              {addressBook.filter((addr) =>
+                pickingAddressFor === 'split'
+                  ? !addressGroups.some((g) => String(g.address?.id) === String(addr.id))
+                  : true
+              ).length === 0 && (
+                <div className="text-center py-6 space-y-2">
+                  <p className="text-[11px] text-stone-400 italic">
+                    Belum ada alamat lain tersimpan di buku alamat.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setIsNewAddressModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#6B1416] text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer"
+                  >
+                    <PlusIcon className="w-3.5 h-3.5" />
+                    <span>+ Buat Alamat Sekarang</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>
         </div>
       )}
+
+      {/* MODAL 3b-2: Tambah Alamat Baru Langsung */}
+      <AddressFormModal
+        isOpen={isNewAddressModalOpen}
+        onClose={() => setIsNewAddressModalOpen(false)}
+        onSave={handleSaveNewAddress}
+        currentUser={currentUser}
+      />
 
       {/* MODAL 3c: Pilih Jasa Kirim per Alamat */}
       {courierTargetAddress && (
@@ -1572,7 +2541,17 @@ export default function OrderDetailView({
                       <div className="flex justify-between">
                         <span>Tahap:</span>
                         <span className="font-semibold text-stone-800">
-                          {(proofTitle || '').toLowerCase().includes('pelunasan') ? 'Pelunasan PO' : 'Uang Muka (DP)'}
+                          {(() => {
+                            const s = proofStage?.type
+                              || (String(proofTitle || '').toLowerCase().includes('dp')
+                                ? 'dp'
+                                : String(proofTitle || '').toLowerCase().includes('cicilan')
+                                ? 'cicilan'
+                                : 'pelunasan');
+                            if (s === 'dp') return proofStage?.label || 'Uang Muka (DP)';
+                            if (s === 'pelunasan') return proofStage?.label || 'Pelunasan PO';
+                            return proofStage?.label || `Cicilan PO${proofStage?.sequence ? ` ${proofStage.sequence}` : ''}`;
+                          })()}
                         </span>
                       </div>
                     </div>
@@ -1948,9 +2927,9 @@ export default function OrderDetailView({
               <div className="w-full h-56 bg-stone-100 rounded-xl overflow-hidden border border-stone-200 flex items-center justify-center">
                 {previewProof.image ? (
                   <img
-                    src={previewProof.image}
+                    src={mediaUrl(previewProof.image)}
                     alt="Bukti Transfer"
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-contain bg-black/5"
                   />
                 ) : (
                   <span className="text-stone-400">Tidak ada gambar</span>

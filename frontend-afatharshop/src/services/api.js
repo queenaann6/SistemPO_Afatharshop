@@ -182,6 +182,8 @@ export const api = {
   orders: () => request('/orders'),
   order: (id) => request(`/orders/${id}`),
   createOrder: (payload) => request('/orders', { method: 'POST', body: payload }),
+  updateOrderAddress: (id, payload) =>
+    request(`/orders/${id}/address`, { method: 'PATCH', body: payload }),
 
   // --- Data mitra yang sedang login ---
   my: {

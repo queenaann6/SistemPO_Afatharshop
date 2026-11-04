@@ -74,7 +74,8 @@ Route::middleware('auth:api')->group(function () {
 
     Route::get('orders', [OrderController::class, 'index']);
     Route::post('orders', [OrderController::class, 'store'])->middleware('throttle:20,1');
-    Route::get('orders/{id}', [OrderController::class, 'show'])->whereNumber('id');
+    Route::get('orders/{id}', [OrderController::class, 'show']);
+    Route::patch('orders/{id}/address', [OrderController::class, 'updateAddress']);
 
     Route::prefix('my')->group(function () {
         Route::get('deposits', [MitraDataController::class, 'deposits']);

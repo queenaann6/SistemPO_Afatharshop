@@ -1415,7 +1415,9 @@ class ManagementController extends Controller
                 'status'             => $request->status ?? 'pre_order',
                 'tutup_po'           => $request->tutup_po ? date('Y-m-d H:i:s', strtotime($request->tutup_po)) : null,
                 'estimated_shipment' => $request->estimated_shipment ? date('Y-m-d', strtotime($request->estimated_shipment)) : null,
-                'min_dp_percent'     => (int) ($request->min_dp_percent ?? 25),
+                'min_dp_percent'     => (int) ($request->min_dp_percent ?? ($request->dpPct ?? 25)),
+                'payment_stages'     => $request->input('paymentStages') ?? $request->input('stages') ?? null,
+                'termin_count'       => (int) ($request->input('terminCount') ?? $request->input('termin_count') ?? 2),
                 'stock_quota'        => (int) ($request->stock_quota ?? 50),
                 'description'        => $request->description ?? null,
                 'material_detail'    => $request->material_detail ?? null,
@@ -1477,12 +1479,21 @@ class ManagementController extends Controller
         $fields = [
             'name', 'series', 'status', 'description', 'material_detail',
             'image', 'is_active', 'is_sale', 'discount_percent', 'original_price',
-            'min_dp_percent', 'stock_quota'
+            'min_dp_percent', 'payment_stages', 'termin_count', 'stock_quota'
         ];
         foreach ($fields as $f) {
             if ($request->has($f)) {
                 $product->{$f} = $request->{$f};
             }
+        }
+        if ($request->has('paymentStages') || $request->has('stages')) {
+            $product->payment_stages = $request->input('paymentStages') ?? $request->input('stages');
+        }
+        if ($request->has('terminCount')) {
+            $product->termin_count = (int) $request->input('terminCount');
+        }
+        if ($request->has('dpPct') && !$request->has('min_dp_percent')) {
+            $product->min_dp_percent = (int) $request->input('dpPct');
         }
         if ($request->filled('title')) $product->name = trim((string) $request->title);
         if ($request->filled('tutup_po')) $product->tutup_po = date('Y-m-d H:i:s', strtotime($request->tutup_po));
@@ -1700,10 +1711,103 @@ class ManagementController extends Controller
         }
         $order->save();
 
-        if ($request->has('shipping_cost') && $order->invoice) {
-            $invoice = $order->invoice;
+        // Sinkronisasi status termin DP / Pelunasan / Ongkir bila dikirim dari Finance
+        $invoice = $order->invoice;
+        if ($invoice) {
+            $dpStatusReq = strtoupper(trim((string) ($request->input('dpStatus') ?? $request->input('dp_status') ?? '')));
+            if ($dpStatusReq === 'ACC' || $dpStatusReq === 'LUNAS') {
+                $dpInstallment = $invoice->installments()->where('type', 'dp')->first();
+                if ($dpInstallment) {
+                    $dpInstallment->status = 'lunas';
+                    $dpInstallment->paid_amount = $dpInstallment->amount;
+                    $dpInstallment->save();
+
+                    Payment::where('installment_id', $dpInstallment->id)
+                        ->where('status', 'menunggu_verifikasi')
+                        ->update([
+                            'status'      => 'disetujui',
+                            'verified_by' => auth('api')->id(),
+                            'verified_at' => now(),
+                        ]);
+                }
+            } elseif (in_array($dpStatusReq, ['TOLAK', 'DITOLAK'], true)) {
+                $dpInstallment = $invoice->installments()->where('type', 'dp')->first();
+                if ($dpInstallment) {
+                    Payment::where('installment_id', $dpInstallment->id)
+                        ->where('status', 'menunggu_verifikasi')
+                        ->update([
+                            'status'           => 'ditolak',
+                            'rejection_reason' => $request->input('note') ?? 'Ditolak Finance',
+                            'verified_by'      => auth('api')->id(),
+                            'verified_at'      => now(),
+                        ]);
+                }
+            }
+
+            $pelunasanStatusReq = strtoupper(trim((string) ($request->input('pelunasanStatus') ?? $request->input('pelunasan_status') ?? '')));
+            if ($pelunasanStatusReq === 'ACC' || $pelunasanStatusReq === 'LUNAS') {
+                $pelInstallment = $invoice->installments()->where('type', 'pelunasan')->first();
+                if ($pelInstallment) {
+                    $pelInstallment->status = 'lunas';
+                    $pelInstallment->paid_amount = $pelInstallment->amount;
+                    $pelInstallment->save();
+
+                    Payment::where('installment_id', $pelInstallment->id)
+                        ->where('status', 'menunggu_verifikasi')
+                        ->update([
+                            'status'      => 'disetujui',
+                            'verified_by' => auth('api')->id(),
+                            'verified_at' => now(),
+                        ]);
+                }
+
+                // Ongkir juga disetujui bersama pelunasan
+                Payment::where('invoice_id', $invoice->id)
+                    ->whereNull('installment_id')
+                    ->where('status', 'menunggu_verifikasi')
+                    ->update([
+                        'status'      => 'disetujui',
+                        'verified_by' => auth('api')->id(),
+                        'verified_at' => now(),
+                    ]);
+            } elseif (in_array($pelunasanStatusReq, ['TOLAK', 'DITOLAK'], true)) {
+                $pelInstallment = $invoice->installments()->where('type', 'pelunasan')->first();
+                if ($pelInstallment) {
+                    Payment::where('installment_id', $pelInstallment->id)
+                        ->where('status', 'menunggu_verifikasi')
+                        ->update([
+                            'status'           => 'ditolak',
+                            'rejection_reason' => $request->input('note') ?? 'Ditolak Finance',
+                            'verified_by'      => auth('api')->id(),
+                            'verified_at'      => now(),
+                        ]);
+                }
+            }
+
+            $ongkirStatusReq = strtoupper(trim((string) ($request->input('ongkirStatus') ?? $request->input('ongkir_status') ?? '')));
+            if ($ongkirStatusReq === 'ACC' || $ongkirStatusReq === 'LUNAS') {
+                Payment::where('invoice_id', $invoice->id)
+                    ->whereNull('installment_id')
+                    ->where('status', 'menunggu_verifikasi')
+                    ->update([
+                        'status'      => 'disetujui',
+                        'verified_by' => auth('api')->id(),
+                        'verified_at' => now(),
+                    ]);
+            }
+
+            // Hitung ulang total pembayaran invoice
+            $totalPaid = (float) $invoice->installments()->where('status', 'lunas')->sum('paid_amount');
             $invoice->total_amount = (float) $order->total_amount;
-            $invoice->outstanding_amount = max(0, (float) $invoice->total_amount - (float) $invoice->paid_amount);
+            $invoice->paid_amount = $totalPaid;
+            $invoice->outstanding_amount = max(0, (float) $invoice->total_amount - $totalPaid);
+            if ($invoice->outstanding_amount <= 0 && $totalPaid > 0) {
+                $invoice->status = 'lunas';
+                if (in_array($order->status, ['Menunggu Pelunasan + Ongkir', 'Menunggu Pelunasan', 'Menunggu Pembayaran Sisa Pelunasan + Ongkir'], true)) {
+                    $order->status = 'Siap Kirim';
+                    $order->save();
+                }
+            }
             $invoice->save();
         }
 
@@ -1791,7 +1895,14 @@ class ManagementController extends Controller
             $type = $this->installmentType((string) $request->input('stage', ''));
             if ($type) {
                 $installment = Installment::where('invoice_id', $invoice->id)
-                    ->where('type', $type)
+                    ->where(function ($q) use ($type) {
+                        if ($type === 'cicilan') {
+                            $q->where('type', 'like', 'cicilan%');
+                        } else {
+                            $q->where('type', $type);
+                        }
+                    })
+                    ->orderByRaw("case when status = 'lunas' then 1 else 0 end")
                     ->orderBy('sequence_number')
                     ->first();
                 if (!$installment) {
@@ -1876,7 +1987,14 @@ class ManagementController extends Controller
             $type = $this->installmentType((string) $request->input('stage', ''));
             if ($type) {
                 $installment = Installment::where('invoice_id', $invoice->id)
-                    ->where('type', $type)
+                    ->where(function ($q) use ($type) {
+                        if ($type === 'cicilan') {
+                            $q->where('type', 'like', 'cicilan%');
+                        } else {
+                            $q->where('type', $type);
+                        }
+                    })
+                    ->orderByRaw("case when status = 'lunas' then 1 else 0 end")
                     ->orderBy('sequence_number')
                     ->first();
             }
@@ -1944,6 +2062,17 @@ class ManagementController extends Controller
                     'order_id'   => $order->id,
                     'status'     => 'Produksi',
                     'note'       => 'DP dibayar memakai saldo deposit',
+                    'changed_by' => $user->id,
+                    'created_at' => now(),
+                ]);
+            }
+            if ($order && $invoice->outstanding_amount <= 0 && in_array($order->status, ['Menunggu Pelunasan + Ongkir', 'Menunggu Pelunasan', 'Menunggu Pembayaran Sisa Pelunasan + Ongkir'], true)) {
+                $order->status = 'Siap Kirim';
+                $order->save();
+                OrderStatusHistory::create([
+                    'order_id'   => $order->id,
+                    'status'     => 'Siap Kirim',
+                    'note'       => 'Pelunasan selesai via saldo deposit. Siap dikirim.',
                     'changed_by' => $user->id,
                     'created_at' => now(),
                 ]);
@@ -2019,6 +2148,17 @@ class ManagementController extends Controller
                         'order_id'   => $order->id,
                         'status'     => 'Produksi',
                         'note'       => 'DP terverifikasi Finance',
+                        'changed_by' => $payment->verified_by,
+                        'created_at' => now(),
+                    ]);
+                }
+                if ($order && $payment->invoice->outstanding_amount <= 0 && in_array($order->status, ['Menunggu Pelunasan + Ongkir', 'Menunggu Pelunasan', 'Menunggu Pembayaran Sisa Pelunasan + Ongkir'], true)) {
+                    $order->status = 'Siap Kirim';
+                    $order->save();
+                    OrderStatusHistory::create([
+                        'order_id'   => $order->id,
+                        'status'     => 'Siap Kirim',
+                        'note'       => 'Pelunasan dan ongkir terverifikasi Finance. Siap dikirim.',
                         'changed_by' => $payment->verified_by,
                         'created_at' => now(),
                     ]);
@@ -2595,6 +2735,10 @@ class ManagementController extends Controller
             'tutup_po'           => optional($product->tutup_po)->toIso8601String(),
             'estimated_shipment' => optional($product->estimated_shipment)->toDateString(),
             'min_dp_percent'     => (int) ($product->min_dp_percent ?? 25),
+            'dp_percent'         => (int) ($product->min_dp_percent ?? 25),
+            'payment_stages'     => $product->payment_stages,
+            'stages'             => $product->payment_stages,
+            'termin_count'       => (int) ($product->termin_count ?? 2),
             'stock_quota'        => (int) ($product->stock_quota ?? 50),
             'description'        => $product->description,
             'material_detail'    => $product->material_detail,

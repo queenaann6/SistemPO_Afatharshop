@@ -29,6 +29,7 @@ export default function MitraOrdersTab({
   const isOrderClosed = (ord) => {
     if (!ord) return false;
     if (ord.isClosedPO) return true;
+    if (ord.closeDateRaw && new Date(ord.closeDateRaw).getTime() < Date.now()) return true;
     const s = String(ord.status || '').toLowerCase();
     if (
       s.includes('siap kirim') ||
@@ -81,9 +82,18 @@ export default function MitraOrdersTab({
         adminBankAccounts={adminBankAccounts}
         adminCouriers={adminCouriers}
         orderInvoice={liveOrder.orderNo || liveOrder.id}
-        onUpdateOrder={(patch) => {
+        onUpdateOrder={(...args) => {
+          let orderKey = liveOrder.orderNo || liveOrder.id || liveOrder.invoice;
+          let patch = {};
+          if (args.length === 1) {
+            patch = args[0] || {};
+            if (patch.invoice) orderKey = patch.invoice;
+          } else if (args.length >= 2) {
+            orderKey = args[0] || orderKey;
+            patch = args[1] || {};
+          }
           setSelectedOrder((prev) => (prev ? { ...prev, ...patch } : prev));
-          onUpdateOrder?.(liveOrder.orderNo || liveOrder.id, patch);
+          onUpdateOrder?.(orderKey, patch);
         }}
       />
     );

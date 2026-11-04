@@ -124,16 +124,18 @@ export default function App() {
   // Auth States with LocalStorage Persistence to make Refresh fully stable & consistent
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
     if (typeof window !== 'undefined') {
+      const token = tokenStore.get();
       const savedAuth = localStorage.getItem('afathar_is_logged_in');
-      if (savedAuth !== null) return savedAuth === 'true';
+      if (token) return savedAuth !== 'false';
     }
-    return true;
+    return false;
   });
 
   const [currentUser, setCurrentUser] = useState(() => {
     if (typeof window !== 'undefined') {
+      const token = tokenStore.get();
       const savedUser = localStorage.getItem('afathar_current_user');
-      if (savedUser) {
+      if (token && savedUser) {
         try {
           return JSON.parse(savedUser);
         } catch (e) {
@@ -141,13 +143,14 @@ export default function App() {
         }
       }
     }
-    return DEFAULT_USER;
+    return null;
   });
 
   const [activeRole, setActiveRole] = useState(() => {
     if (typeof window !== 'undefined') {
+      const token = tokenStore.get();
       const savedRole = localStorage.getItem('afathar_active_role');
-      if (savedRole) {
+      if (token && savedRole) {
         try {
           return JSON.parse(savedRole);
         } catch (e) {
@@ -220,7 +223,7 @@ export default function App() {
 
   // Live synchronous balance & total bill computation for the active user
   const computedUserBalance = useMemo(() => {
-    if (activeRole?.id && activeRole.id !== 'mitra') return 'Rp 0';
+    if (!currentUser || (activeRole?.id && activeRole.id !== 'mitra')) return 'Rp 0';
     const m = poMitra.find(
       (x) => x.name.toLowerCase() === (currentUser?.name || 'Mitra').toLowerCase()
     );
@@ -237,10 +240,10 @@ export default function App() {
       })
       .reduce((sum, d) => sum + (Number(d.nominal) || 0), 0);
     return `Rp ${Math.round(userAccDeposits).toLocaleString('id-ID')}`;
-  }, [poMitra, poDeposits, currentUser?.name, activeRole?.id]);
+  }, [poMitra, poDeposits, currentUser, activeRole?.id]);
 
   const computedUserTotalBill = useMemo(() => {
-    if (activeRole?.id && activeRole.id !== 'mitra') return 'Rp 0';
+    if (!currentUser || (activeRole?.id && activeRole.id !== 'mitra')) return 'Rp 0';
     const userOrders = mitraOrders.filter(
       (o) =>
         !o.mitraName ||
@@ -248,13 +251,16 @@ export default function App() {
     );
     const sumOutstanding = userOrders.reduce((sum, o) => sum + (Number(o.sisaTagihan) || 0), 0);
     return `Rp ${Math.round(sumOutstanding).toLocaleString('id-ID')}`;
-  }, [mitraOrders, currentUser?.name, activeRole?.id]);
+  }, [mitraOrders, currentUser, activeRole?.id]);
 
-  const synchronizedUser = useMemo(() => ({
-    ...currentUser,
-    balance: computedUserBalance,
-    totalBill: computedUserTotalBill
-  }), [currentUser, computedUserBalance, computedUserTotalBill]);
+  const synchronizedUser = useMemo(() => {
+    if (!currentUser) return null;
+    return {
+      ...currentUser,
+      balance: computedUserBalance,
+      totalBill: computedUserTotalBill
+    };
+  }, [currentUser, computedUserBalance, computedUserTotalBill]);
 
   // Global PO Batches State (Controlled strictly by Admin Marketing - NOT Mitra)
   const [poBatches, setPoBatches] = useState([]);
@@ -470,6 +476,12 @@ export default function App() {
         if (error?.status === 401) {
           tokenStore.clear();
           setSessionToken(null);
+          setIsLoggedIn(false);
+          setCurrentUser(null);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('afathar_is_logged_in', 'false');
+            localStorage.removeItem('afathar_current_user');
+          }
         }
       });
 
@@ -844,7 +856,7 @@ export default function App() {
 
   // Cart & Auth Guard Handlers
   const handleOpenCart = () => {
-    if (!isLoggedIn) {
+    if (!isLoggedIn || !tokenStore.get()) {
       setIsLoginPromptOpen(true);
       return;
     }
@@ -852,7 +864,7 @@ export default function App() {
   };
 
   const handleAddToCart = (item) => {
-    if (!isLoggedIn) {
+    if (!isLoggedIn || !tokenStore.get()) {
       setIsLoginPromptOpen(true);
       return;
     }
@@ -861,7 +873,7 @@ export default function App() {
   };
 
   const handleBuyNow = (item) => {
-    if (!isLoggedIn) {
+    if (!isLoggedIn || !tokenStore.get()) {
       setIsLoginPromptOpen(true);
       return;
     }
@@ -874,7 +886,7 @@ export default function App() {
   };
 
   const handleCheckout = (items) => {
-    if (!isLoggedIn) {
+    if (!isLoggedIn || !tokenStore.get()) {
       setIsLoginPromptOpen(true);
       return;
     }
@@ -955,11 +967,17 @@ export default function App() {
     setCurrentPage('mitra_dashboard');
   };
 
-  const handleUpdateMitraOrder = (invoice, patch) => {
-    if (!invoice) return;
+  const handleUpdateMitraOrder = (orderKey, patch) => {
+    if (!orderKey) return;
     setCoreOrders((prev) =>
       prev.map((o) => {
-        if (o.invoice !== invoice && !String(invoice).includes(o.invoice)) return o;
+        const matches =
+          o.invoice === orderKey ||
+          o.orderNo === orderKey ||
+          String(o.id) === String(orderKey) ||
+          (o.invoice && String(orderKey).includes(o.invoice)) ||
+          (o.orderNo && String(orderKey).includes(o.orderNo));
+        if (!matches) return o;
         let updated = { ...o, ...patch };
         if (patch.items) {
           const items = patch.items;
@@ -1150,13 +1168,18 @@ export default function App() {
     );
   }
 
-  // Auth Guard: If trying to access any private dashboard without an active session, prompt to login
+  // Auth Guard: If trying to access any private dashboard or checkout without an active session, prompt to login
   const isPrivateDashboard = ['mitra_dashboard', 'marketing_dashboard', 'finance_dashboard', 'owner_dashboard'].includes(currentPage);
   const isPortalDashboard = ['marketing_dashboard', 'finance_dashboard', 'owner_dashboard'].includes(currentPage);
-  if (isPrivateDashboard && !isLoggedIn) {
+  if ((isPrivateDashboard || currentPage === 'checkout') && (!isLoggedIn || !tokenStore.get())) {
     return (
       <LoginPage
-        onLoginSuccess={handleLoginSuccess}
+        onLoginSuccess={(role, userData) => {
+          handleLoginSuccess(role, userData);
+          if (currentPage === 'checkout') {
+            setCurrentPage('checkout');
+          }
+        }}
         onNavigateRegister={() => setCurrentPage('register')}
         onNavigateHome={handleNavigateHome}
       />

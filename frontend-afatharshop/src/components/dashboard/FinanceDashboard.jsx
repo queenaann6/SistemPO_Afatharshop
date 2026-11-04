@@ -927,9 +927,11 @@ export default function FinanceDashboard({
       const o = row.order;
       patchOrder(o.invoice, {
         [verifMeta.statusKey]: PAY.ACC,
+        ...(verifMeta.kind === 'Pelunasan' ? { ongkirStatus: PAY.ACC, shipStatus: SHIP.SIAP } : {}),
         [verifMeta.verifiedByKey]: me.name,
         [verifMeta.verifiedAtKey]: todayISO(),
-        [verifMeta.noteKey]: ''
+        [verifMeta.noteKey]: '',
+        status: verifMeta.kind === 'DP' ? 'Produksi' : 'Siap Kirim'
       });
       commitLedger((prev) => [
         {
@@ -952,9 +954,12 @@ export default function FinanceDashboard({
         verifMeta.kind === 'DP'
           ? { status: 'Produksi', dpStatus: 'ACC' }
           : verifMeta.kind === 'Pelunasan'
-            ? { status: 'Siap Kirim', pelunasanStatus: 'ACC' }
+            ? { status: 'Siap Kirim', pelunasanStatus: 'ACC', ongkirStatus: 'ACC' }
             : { ongkirStatus: 'ACC' };
       api.management.updateOrderStatus(targetId, statusPayload).catch(() => {});
+      if (row.paymentId || row.backendPaymentId) {
+        api.management.verifyPayment(row.paymentId || row.backendPaymentId, { status: 'disetujui' }).catch(() => {});
+      }
     }
     setConfirmModal(null);
   };
@@ -968,6 +973,8 @@ export default function FinanceDashboard({
             : d
         )
       );
+      const targetId = row.deposit.backendId || row.deposit.id;
+      api.management.verifyDeposit(targetId, { status: 'Ditolak', note }).catch(() => {});
     } else {
       patchOrder(row.order.invoice, {
         [verifMeta.statusKey]: PAY.TOLAK,
@@ -975,13 +982,27 @@ export default function FinanceDashboard({
         [verifMeta.verifiedAtKey]: todayISO(),
         [verifMeta.noteKey]: note
       });
+      const targetId = dbId(row.order) || row.order.backendId || row.order.invoice;
+      const statusPayload =
+        verifMeta.kind === 'DP'
+          ? { dpStatus: 'Tolak', note }
+          : verifMeta.kind === 'Pelunasan'
+            ? { pelunasanStatus: 'Tolak', note }
+            : { ongkirStatus: 'Tolak', note };
+      api.management.updateOrderStatus(targetId, statusPayload).catch(() => {});
+      if (row.paymentId || row.backendPaymentId) {
+        api.management.verifyPayment(row.paymentId || row.backendPaymentId, { status: 'ditolak', notes: note }).catch(() => {});
+      }
     }
     toast(`${verifMeta.kind} ${row.ref} ditolak.`, 'warning');
   };
 
   const setProduction = (o, status) => {
     const patch = { productionStatus: status };
-    if (status === PROD.READY) patch.readyAt = todayISO();
+    if (status === PROD.READY) {
+      patch.readyAt = todayISO();
+      patch.status = 'Menunggu Alamat Mitra';
+    }
     patchOrder(o.invoice, patch);
     toast(
       status === PROD.READY
@@ -1006,7 +1027,8 @@ export default function FinanceDashboard({
       weight: num(form.weight),
       shippingNote: form.note || '',
       ongkirAt: todayISO(),
-      ongkirStatus: PAY.BELUM
+      ongkirStatus: PAY.BELUM,
+      status: 'Menunggu Pelunasan'
     });
     setOngkirModal(null);
     toast(`Ongkir ${order.invoice} tersimpan. Mitra dapat melakukan pembayaran.`);
