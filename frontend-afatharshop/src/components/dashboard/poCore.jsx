@@ -9,6 +9,7 @@ import React, {
   useState
 } from 'react';
 import Footer from '../Footer';
+import { DEFAULT_DP_PCT, stageRowsOf, defaultStagePcts, stageLabelFor } from '../../utils/terminScheme';
 
 /* ============================================================================
    PO CORE — model status, helper, komponen UI, shell & data demo
@@ -127,13 +128,14 @@ export const terminDueList = (products, today = todayISO(), windowDays = 21) => 
   const rows = [];
   (products || []).forEach((product) => {
     if (!product || product.status === 'closed') return;
+    const fallbackPct = num(product.dpPct) || DEFAULT_DP_PCT;
     const plan =
-      Array.isArray(product.paymentStages) && product.paymentStages.length >= 2
-        ? product.paymentStages
-        : [
-            { label: 'Termin 1 · DP', pct: num(product.dpPct) || 50, date: product.openDate || product.closeDate },
-            { label: 'Termin 2 · Pelunasan', pct: 100 - (num(product.dpPct) || 50), date: product.pelunasanDueDate }
-          ];
+      stageRowsOf(product) ||
+      defaultStagePcts(product.terminCount, fallbackPct).map((pct, index, arr) => ({
+        label: stageLabelFor(index, arr.length),
+        pct,
+        date: index === arr.length - 1 ? product.pelunasanDueDate : product.openDate || product.closeDate
+      }));
     plan.forEach((stage) => {
       if (!stage?.date) return;
       const days = diffDays(stage.date, today);
@@ -654,7 +656,7 @@ export const calcOrderAmount = ({
   discountPct = 0,
   feeNominal = null,
   brandDiscountNominal = 0,
-  dpPct = 50
+  dpPct = DEFAULT_DP_PCT
 }) => {
   const gross = num(price) * num(qty);
   const feePerUnit =
@@ -853,7 +855,7 @@ export const createSeedData = () => {
   const settings = {
     shopName: 'Afathar Shop',
     senderName: 'Owner Afathar Shop',
-    dpPct: 50,
+    dpPct: DEFAULT_DP_PCT,
     pelunasanDueDays: 7,
     ongkirDueDays: 3,
     waFooter: 'Transfer hanya ke rekening resmi Afathar Shop.',
@@ -1904,7 +1906,7 @@ export function OrderTimeline({ order }) {
 const orderPaymentPlan = (order) => {
   const plan = Array.isArray(order?.paymentStages) ? order.paymentStages.filter(Boolean) : [];
   if (plan.length >= 2) return plan.slice(0, 3);
-  const dp = Math.min(100, Math.max(0, num(order?.dpPct) || 50));
+  const dp = Math.min(100, Math.max(0, num(order?.dpPct) || DEFAULT_DP_PCT));
   return [
     { label: 'Termin 1 · DP', pct: dp, date: order?.date || '' },
     { label: 'Termin 2 · Pelunasan', pct: 100 - dp, date: order?._projectMeta?.pelunasanDueDate || '' }

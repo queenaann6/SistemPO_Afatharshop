@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api, { mediaUrl } from '../../services/api';
 import { dbId, mapBrandToCore, mapSupplier } from '../../services/adapters';
+import { DEFAULT_DP_PCT, defaultStagePcts, dpPercentFor } from '../../utils/terminScheme';
 import ProductCatalogModal from './ProductCatalogModal';
 import BankAccountModal from './BankAccountModal';
 import {
@@ -109,7 +110,6 @@ const withVariantPrice = (product) => {
   return prices.length ? { ...product, price: Math.min(...prices) } : product;
 };
 
-const TERMIN_PCTS = { 2: [50, 50], 3: [25, 50, 25] };
 const stagePctOf = (stage) => num(stage?.pct ?? stage?.percent);
 const isoDateOf = (value) => (/^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : '');
 const stageLabelOf = (index, total) =>
@@ -118,12 +118,16 @@ const stageLabelOf = (index, total) =>
     : index === total - 1
       ? `Termin ${index + 1} · Pelunasan`
       : `Termin ${index + 1} · Cicilan`;
-const makeStages = (count, baseDate, existing = []) =>
-  (TERMIN_PCTS[count] || TERMIN_PCTS[3]).map((pct, index) => ({
-    label: stageLabelOf(index, count),
+const makeStages = (count, baseDate, existing = []) => {
+  // Persen bawaan ikut aturan termin sistem (DP default + termin terakhir 25%),
+  // tidak lagi angka lokal 50/50.
+  const pcts = defaultStagePcts(count, DEFAULT_DP_PCT);
+  return pcts.map((pct, index) => ({
+    label: stageLabelOf(index, pcts.length),
     pct,
     date: isoDateOf(existing[index]?.date) || addDays(baseDate || todayISO(), index * 30)
   }));
+};
 const stagesFromProduct = (product) => {
   const plan = Array.isArray(product?.paymentStages) ? product.paymentStages.filter(Boolean) : [];
   if (plan.length >= 2) {
@@ -138,6 +142,22 @@ const stagesFromProduct = (product) => {
 };
 
 const DEFAULT_USER = { name: 'Rina Marketing', role: 'marketing', email: 'marketing@afatharshop.com' };
+const normalizeBatch = (b) => {
+  if (!b) return null;
+  return {
+    id: b.id,
+    name: b.name || b.title || '',
+    title: b.name || b.title || '',
+    brand_id: b.brand_id || b.brand?.id || null,
+    brand: typeof b.brand === 'object' ? (b.brand?.name || '') : (b.brand || ''),
+    start_date: b.start_date ? String(b.start_date).slice(0, 10) : '',
+    close_date: b.close_date ? String(b.close_date) : '',
+    estimated_shipment: b.estimated_shipment ? String(b.estimated_shipment).slice(0, 10) : '',
+    status: b.status === 'closed' ? 'closed' : 'open',
+    products_count: num(b.products_count),
+  };
+};
+
 const PAGE_DESC =
   'Kelola katalog PO, ACC pesanan dari tim, harga & diskon brand, kuota varian, serta rekap checkout per produk.';
 
@@ -151,6 +171,8 @@ export default function MarketingDashboard({
   suppliers: suppliersProp,
   mitra: mitraProp,
   team: teamProp,
+  poBatches: poBatchesProp,
+  onChangeBatches,
   paymentRequests: paymentRequestsProp,
   bankAccounts: bankAccountsProp,
   couriers: couriersProp,
@@ -202,7 +224,26 @@ export default function MarketingDashboard({
   );
   const [deposits, commitDeposits] = useDataState(depositsProp, seed.deposits, onChangeDeposits);
   const [settings, commitSettings] = useDataState(settingsProp, seed.settings, onChangeSettings);
-  const [deletedOrders, setDeletedOrders] = useState(seed.deletedOrders);
+  const [deletedOrders, setDeletedOrders] = useState(() => {
+    try {
+      const saved = localStorage.getItem('afathar_deleted_orders');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.warn('Gagal memuat arsip penjualan terhapus dari storage:', e);
+    }
+    return seed.deletedOrders || [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('afathar_deleted_orders', JSON.stringify(deletedOrders));
+    } catch (e) {
+      console.warn('Gagal menyimpan arsip penjualan terhapus ke storage:', e);
+    }
+  }, [deletedOrders]);
 
   const [detailInvoice, setDetailInvoice] = useState(null);
   const [productOrderId, setProductOrderId] = useState(null);
@@ -226,7 +267,7 @@ export default function MarketingDashboard({
     produkId: '',
     variantId: '',
     qty: 1,
-    dpPct: seed.settings.dpPct || 50,
+    dpPct: num(seed.settings.dpPct) || DEFAULT_DP_PCT,
     notes: ''
   });
   const [draftList, setDraftList] = useState([]);
@@ -268,6 +309,7 @@ export default function MarketingDashboard({
   // Rekap & penjualan terhapus
   const [rekapBrand, setRekapBrand] = useState('all');
   const [trashSearch, setTrashSearch] = useState('');
+  const [trashSelected, setTrashSelected] = useState([]);
 
   // Katalog produk: pencarian & filter status PO, brand, kategori, dan sortir
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -283,7 +325,35 @@ export default function MarketingDashboard({
 
   // Pengaturan
   const [settingsForm, setSettingsForm] = useState({ ...seed.settings });
-  const [poBatches, setPoBatches] = useState([]);
+
+  // Batch PO Master
+  const [poBatches, setPoBatches] = useState(() => {
+    if (Array.isArray(poBatchesProp) && poBatchesProp.length > 0) {
+      return poBatchesProp.map(normalizeBatch).filter(Boolean);
+    }
+    return [];
+  });
+
+  const commitBatches = (updater) => {
+    setPoBatches((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      if (typeof onChangeBatches === 'function') {
+        onChangeBatches(next);
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (Array.isArray(poBatchesProp) && poBatchesProp.length > 0) {
+      setPoBatches(poBatchesProp.map(normalizeBatch).filter(Boolean));
+    }
+  }, [poBatchesProp]);
+
+  const [batchSearch, setBatchSearch] = useState('');
+  const [batchStatusFilter, setBatchStatusFilter] = useState('all');
+  const [batchBrandFilter, setBatchBrandFilter] = useState('all');
+  const [batchModal, setBatchModal] = useState(null);
 
   useEffect(() => {
     setSettingsForm({ ...settings });
@@ -307,7 +377,7 @@ export default function MarketingDashboard({
           commitSuppliers(suppliersRes.value.data.map(mapSupplier));
         }
         if (batchesRes.status === 'fulfilled' && Array.isArray(batchesRes.value?.data)) {
-          setPoBatches(batchesRes.value.data);
+          commitBatches(batchesRes.value.data.map(normalizeBatch).filter(Boolean));
         }
       } catch (e) {
         console.warn('Gagal sinkronisasi data master brand/supplier/batches:', e);
@@ -443,8 +513,11 @@ export default function MarketingDashboard({
   }, [pendingAcc, accSearch]);
 
   const detailOrder = useMemo(
-    () => orders.find((o) => o.invoice === detailInvoice) || null,
-    [orders, detailInvoice]
+    () =>
+      orders.find((o) => o.invoice === detailInvoice) ||
+      deletedOrders.find((o) => o.invoice === detailInvoice) ||
+      null,
+    [orders, deletedOrders, detailInvoice]
   );
 
   const productOrderProduct = useMemo(
@@ -556,6 +629,7 @@ export default function MarketingDashboard({
         label: 'Katalog & Vendor',
         children: [
           { id: 'produk', label: 'Katalog Produk PO', title: 'Katalog Produk Pre-Order', icon: 'box' },
+          { id: 'batch', label: 'Batch PO', title: 'Manajemen Batch Pre-Order', icon: 'clock' },
           { id: 'kategori', label: 'Kategori Produk', title: 'Master Kategori Produk', icon: 'filter' },
           { id: 'brand', label: 'Brand Vendor', title: 'Master Brand & Diskon Mitra', icon: 'shield' },
           { id: 'supplier', label: 'Supplier Pabrik', title: 'Master Supplier Pabrik', icon: 'truck' }
@@ -747,9 +821,99 @@ export default function MarketingDashboard({
 
   const restoreOrder = (o) => {
     setDeletedOrders((prev) => prev.filter((x) => x.invoice !== o.invoice));
+    setTrashSelected((prev) => prev.filter((inv) => inv !== o.invoice));
     commitOrders((prev) => [{ ...o, deletedAt: '', deletedBy: '', deleteReason: '' }, ...prev]);
     if (o.marketingStatus !== MKT.TOLAK) adjustQuota(o, num(o.qty));
     toast(`${o.invoice} berhasil dipulihkan.`);
+  };
+
+  const handlePermanentDelete = async (o) => {
+    const targetId = dbId(o) || (num(o.id) > 0 ? num(o.id) : null) || o.invoice;
+    if (targetId) {
+      try {
+        await api.management.deleteOrder(targetId);
+      } catch (err) {
+        console.warn(`Hapus order dari server gagal (${o.invoice}):`, err);
+      }
+    }
+    setDeletedOrders((prev) => prev.filter((x) => x.invoice !== o.invoice));
+    setTrashSelected((prev) => prev.filter((inv) => inv !== o.invoice));
+    if (detailInvoice === o.invoice) setDetailInvoice(null);
+    toast(`Pesanan ${o.invoice} berhasil dihapus permanen.`, 'warning');
+  };
+
+  const askPermanentDelete = (o) =>
+    setConfirmModal({
+      title: 'Hapus Permanen Pesanan',
+      message: `Hapus pesanan "${o.invoice}" (${o.mitraName || 'Mitra'}) secara permanen? Data pesanan ini akan dihapus selamanya dari arsip dan tidak dapat dipulihkan kembali.`,
+      confirmLabel: 'Hapus Permanen',
+      danger: true,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        await handlePermanentDelete(o);
+      }
+    });
+
+  const askEmptyTrash = () => {
+    if (deletedOrders.length === 0) return;
+    setConfirmModal({
+      title: 'Kosongkan Seluruh Arsip Terhapus',
+      message: `Hapus seluruh (${deletedOrders.length}) pesanan di arsip penjualan terhapus secara permanen? Tindakan ini tidak dapat dibatalkan.`,
+      confirmLabel: 'Kosongkan Arsip',
+      danger: true,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        await Promise.allSettled(
+          deletedOrders.map((o) => {
+            const targetId = dbId(o) || (num(o.id) > 0 ? num(o.id) : null) || o.invoice;
+            return targetId ? api.management.deleteOrder(targetId) : Promise.resolve();
+          })
+        );
+        setDeletedOrders([]);
+        setTrashSelected([]);
+        setDetailInvoice(null);
+        toast('Seluruh pesanan di arsip terhapus berhasil dihapus permanen.', 'warning');
+      }
+    });
+  };
+
+  const askDeleteSelectedTrash = () => {
+    if (trashSelected.length === 0) return;
+    const targets = deletedOrders.filter((o) => trashSelected.includes(o.invoice));
+    setConfirmModal({
+      title: 'Hapus Permanen Pesanan Terpilih',
+      message: `Hapus permanen ${targets.length} pesanan yang dipilih dari arsip? Tindakan ini tidak dapat dibatalkan.`,
+      confirmLabel: `Hapus Permanen (${targets.length})`,
+      danger: true,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        await Promise.allSettled(
+          targets.map((o) => {
+            const targetId = dbId(o) || (num(o.id) > 0 ? num(o.id) : null) || o.invoice;
+            return targetId ? api.management.deleteOrder(targetId) : Promise.resolve();
+          })
+        );
+        setDeletedOrders((prev) => prev.filter((o) => !trashSelected.includes(o.invoice)));
+        setTrashSelected([]);
+        if (trashSelected.includes(detailInvoice)) setDetailInvoice(null);
+        toast(`${targets.length} pesanan berhasil dihapus permanen.`, 'warning');
+      }
+    });
+  };
+
+  const restoreSelectedTrash = () => {
+    if (trashSelected.length === 0) return;
+    const targets = deletedOrders.filter((o) => trashSelected.includes(o.invoice));
+    setDeletedOrders((prev) => prev.filter((o) => !trashSelected.includes(o.invoice)));
+    commitOrders((prev) => [
+      ...targets.map((o) => ({ ...o, deletedAt: '', deletedBy: '', deleteReason: '' })),
+      ...prev
+    ]);
+    targets.forEach((o) => {
+      if (o.marketingStatus !== MKT.TOLAK) adjustQuota(o, num(o.qty));
+    });
+    setTrashSelected([]);
+    toast(`${targets.length} pesanan berhasil dipulihkan.`);
   };
 
   const addDraft = () => {
@@ -1016,6 +1180,11 @@ export default function MarketingDashboard({
       series: f.series || undefined,
       price: basePrice,
       image: f.image || current?.image || '',
+      image2: f.image2 || undefined,
+      image3: f.image3 || undefined,
+      image4: f.image4 || undefined,
+      reel_url: f.reelUrl || f.reel_url || undefined,
+      thumbnails: f.thumbnails || [f.image, f.image2, f.image3, f.image4].filter(Boolean),
       is_sale: isSale,
       discount_percent: discountPercent,
       original_price: originalPrice,
@@ -1141,6 +1310,11 @@ export default function MarketingDashboard({
       category: f.category,
       price: basePrice,
       image: f.image || current?.image || '',
+      image2: f.image2 || undefined,
+      image3: f.image3 || undefined,
+      image4: f.image4 || undefined,
+      reel_url: f.reelUrl || f.reel_url || undefined,
+      thumbnails: f.thumbnails || [f.image, f.image2, f.image3, f.image4].filter(Boolean),
       is_sale: isSale,
       discount_percent: discountPercent,
       original_price: originalPrice,
@@ -1596,6 +1770,157 @@ export default function MarketingDashboard({
         commitCategories((prev) => prev.filter((c) => c !== name));
         setConfirmModal(null);
         toast(`Kategori ${name} dihapus.`, 'warning');
+      }
+    });
+  };
+
+  /* ------------------------------------------------------------- batch PO */
+  const refreshBatches = async () => {
+    try {
+      const res = await api.management.batches();
+      if (Array.isArray(res?.data)) {
+        const normalized = res.data.map(normalizeBatch).filter(Boolean);
+        commitBatches(normalized);
+        toast('Data Batch PO berhasil disinkronkan.');
+      }
+    } catch (err) {
+      serverFail(err, 'Sinkronisasi Batch PO');
+    }
+  };
+
+  const openCreateBatchModal = () => {
+    const defaultBrand = brands[0] ? (dbId(brands[0]) || brands[0].id) : '';
+    setBatchModal({
+      mode: 'create',
+      form: {
+        name: '',
+        brand_id: defaultBrand,
+        status: 'open',
+        start_date: todayISO(),
+        close_date: addDays(todayISO(), 14),
+        close_time: '23:59',
+        estimated_shipment: addDays(todayISO(), 45)
+      }
+    });
+  };
+
+  const openEditBatchModal = (b) => {
+    const targetBrand = brands.find((br) => br.name === b.brand || dbId(br) === b.brand_id);
+    const brandId = targetBrand ? (dbId(targetBrand) || targetBrand.id) : (b.brand_id || '');
+
+    let cDate = '';
+    let cTime = '23:59';
+    if (b.close_date) {
+      if (b.close_date.includes('T')) {
+        const parts = b.close_date.split('T');
+        cDate = parts[0];
+        cTime = parts[1]?.slice(0, 5) || '23:59';
+      } else if (b.close_date.includes(' ')) {
+        const parts = b.close_date.split(' ');
+        cDate = parts[0];
+        cTime = parts[1]?.slice(0, 5) || '23:59';
+      } else {
+        cDate = b.close_date.slice(0, 10);
+      }
+    }
+
+    setBatchModal({
+      mode: 'edit',
+      id: b.id,
+      batch: b,
+      form: {
+        name: b.name || b.title,
+        brand_id: brandId,
+        status: b.status || 'open',
+        start_date: b.start_date ? b.start_date.slice(0, 10) : todayISO(),
+        close_date: cDate || todayISO(),
+        close_time: cTime,
+        estimated_shipment: b.estimated_shipment ? b.estimated_shipment.slice(0, 10) : ''
+      }
+    });
+  };
+
+  const saveBatch = async (e) => {
+    e?.preventDefault();
+    if (!batchModal?.form) return;
+    const { name, brand_id, status, start_date, close_date, close_time, estimated_shipment } = batchModal.form;
+    const cleanName = String(name || '').trim();
+    if (!cleanName) return toast('Nama Batch PO wajib diisi.', 'error');
+    if (!brand_id) return toast('Pilih Brand pemilik Batch PO.', 'error');
+
+    const fullCloseDate = close_date ? `${close_date} ${close_time || '23:59'}:00` : null;
+
+    const payload = {
+      name: cleanName,
+      brand_id: Number(brand_id) || brand_id,
+      status: status || 'open',
+      start_date: start_date || null,
+      close_date: fullCloseDate,
+      estimated_shipment: estimated_shipment || null
+    };
+
+    if (batchModal.mode === 'edit') {
+      const targetId = batchModal.id;
+      try {
+        const res = await api.management.updateBatch(targetId, payload);
+        const updated = normalizeBatch(res?.data || { ...batchModal.batch, ...payload, id: targetId });
+        commitBatches((prev) => prev.map((b) => (b.id === targetId ? updated : b)));
+        toast(`Batch PO "${cleanName}" berhasil diperbarui.`);
+        setBatchModal(null);
+      } catch (err) {
+        serverFail(err, `Memperbarui Batch PO ${cleanName}`);
+      }
+    } else {
+      try {
+        const res = await api.management.createBatch(payload);
+        const created = normalizeBatch(res?.data || { ...payload, id: Date.now() });
+        commitBatches((prev) => [...prev, created]);
+        toast(`Batch PO "${cleanName}" berhasil dibuat.`);
+        setBatchModal(null);
+      } catch (err) {
+        serverFail(err, `Membuat Batch PO ${cleanName}`);
+      }
+    }
+  };
+
+  const toggleBatchStatus = async (b) => {
+    const nextStatus = b.status === 'closed' ? 'open' : 'closed';
+    const labelAction = nextStatus === 'open' ? 'Membuka' : 'Menutup';
+    try {
+      const res = await api.management.updateBatch(b.id, { status: nextStatus });
+      const updated = normalizeBatch(res?.data || { ...b, status: nextStatus });
+      commitBatches((prev) => prev.map((item) => (item.id === b.id ? updated : item)));
+      toast(`Batch PO "${b.name}" sekarang ${nextStatus === 'open' ? 'DIBUKA (Open)' : 'DITUTUP (Closed)'}.`);
+    } catch (err) {
+      serverFail(err, `${labelAction} Batch PO ${b.name}`);
+    }
+  };
+
+  const deleteBatch = (b) => {
+    const linkedCount =
+      b.products_count ??
+      products.filter((p) => p.po_batch_id === b.id || p.batch === b.name).length;
+    if (linkedCount > 0) {
+      return toast(
+        `Batch PO "${b.name}" masih terhubung dengan ${linkedCount} produk. Pindahkan produk terlebih dahulu.`,
+        'error'
+      );
+    }
+
+    setConfirmModal({
+      title: 'Hapus Batch PO',
+      message: `Hapus batch "${b.name}"? Batch ini akan dihapus dari sistem. Tindakan ini tidak dapat dibatalkan.`,
+      confirmLabel: 'Hapus Batch',
+      danger: true,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        try {
+          await api.management.deleteBatch(b.id);
+          commitBatches((prev) => prev.filter((item) => item.id !== b.id));
+          toast(`Batch PO "${b.name}" berhasil dihapus.`, 'warning');
+        } catch (err) {
+          serverFail(err, `Menghapus Batch PO ${b.name}`);
+        }
       }
     });
   };
@@ -2349,6 +2674,19 @@ export default function MarketingDashboard({
     return !q || `${o.invoice} ${o.mitraName} ${o.produk}`.toLowerCase().includes(q);
   });
 
+  const filteredBatches = useMemo(() => {
+    return poBatches.filter((b) => {
+      const q = batchSearch.trim().toLowerCase();
+      const matchQuery = !q || `${b.name} ${b.brand}`.toLowerCase().includes(q);
+      const matchStatus = batchStatusFilter === 'all' || b.status === batchStatusFilter;
+      const matchBrand =
+        batchBrandFilter === 'all' ||
+        String(b.brand_id) === String(batchBrandFilter) ||
+        b.brand === batchBrandFilter;
+      return matchQuery && matchStatus && matchBrand;
+    });
+  }, [poBatches, batchSearch, batchStatusFilter, batchBrandFilter]);
+
   const pendingProofList = useMemo(() => {
     const rows = [];
     orders.forEach((o) => {
@@ -3071,12 +3409,11 @@ export default function MarketingDashboard({
                       onChange={(e) => {
                         const b = brands.find((x) => x.name === e.target.value);
                         const first = products.find((p) => p.brand === b?.name);
-                        const firstStage = Array.isArray(first?.paymentStages) ? first.paymentStages[0] : null;
                         setDraft({
                           ...draft,
                           produkId: first?.id || '',
                           variantId: '',
-                          dpPct: firstStage ? num(firstStage.pct ?? firstStage.percent) : draft.dpPct
+                          dpPct: dpPercentFor(first, draft.dpPct)
                         });
                       }}
                     >
@@ -3094,14 +3431,11 @@ export default function MarketingDashboard({
                       value={draft.produkId}
                       onChange={(e) => {
                         const product = products.find((x) => x.id === e.target.value);
-                        const firstStage = Array.isArray(product?.paymentStages)
-                          ? product.paymentStages[0]
-                          : null;
                         setDraft({
                           ...draft,
                           produkId: e.target.value,
                           variantId: '',
-                          dpPct: firstStage ? num(firstStage.pct ?? firstStage.percent) : draft.dpPct
+                          dpPct: dpPercentFor(product, draft.dpPct)
                         });
                       }}
                       disabled={!draftPreview.brand}
@@ -4491,7 +4825,7 @@ export default function MarketingDashboard({
                     <div className="space-y-2">
                       <input
                         type="file"
-                        accept="image/*"
+                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                         onChange={(e) => handleProofFile(e.target.files?.[0])}
                         className="block w-full text-[11px] text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-semibold file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
                       />
@@ -4753,8 +5087,43 @@ export default function MarketingDashboard({
           <>
             <PageHead
               title="Penjualan Terhapus"
-              desc="Pesanan yang dipindahkan ke sini tidak dihitung pada omzet. Pulihkan jika pesanan ternyata masih berjalan."
+              desc="Pesanan yang dipindahkan ke sini tidak dihitung pada omzet. Pulihkan jika pesanan ternyata masih berjalan, atau hapus permanen jika data tidak lagi dibutuhkan."
               badge={<Badge tone="gray">{deletedOrders.length} pesanan</Badge>}
+              actions={
+                <div className="flex items-center gap-2">
+                  {trashSelected.length > 0 ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        icon="refresh"
+                        onClick={restoreSelectedTrash}
+                      >
+                        Pulihkan Terpilih ({trashSelected.length})
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        icon="trash"
+                        onClick={askDeleteSelectedTrash}
+                      >
+                        Hapus Permanen Terpilih ({trashSelected.length})
+                      </Button>
+                    </>
+                  ) : (
+                    deletedOrders.length > 0 && (
+                      <Button
+                        size="sm"
+                        variant="dangerOutline"
+                        icon="trash"
+                        onClick={askEmptyTrash}
+                      >
+                        Kosongkan Arsip
+                      </Button>
+                    )
+                  )}
+                </div>
+              }
             />
 
             <Card
@@ -4772,6 +5141,16 @@ export default function MarketingDashboard({
               <TableWrap>
                 <thead className="bg-gray-50 border-b border-gray-100">
                   <tr>
+                    <th className={`${TH} w-10 text-center`}>
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                        checked={filteredTrash.length > 0 && filteredTrash.every((o) => trashSelected.includes(o.invoice))}
+                        onChange={(e) =>
+                          setTrashSelected(e.target.checked ? filteredTrash.map((o) => o.invoice) : [])
+                        }
+                      />
+                    </th>
                     <th className={TH}>Invoice</th>
                     <th className={TH}>Mitra</th>
                     <th className={TH}>Produk</th>
@@ -4782,33 +5161,64 @@ export default function MarketingDashboard({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {filteredTrash.map((o) => (
-                    <tr key={o.invoice} className="hover:bg-gray-50/70">
-                      <td className={TD}>
-                        <p className="font-bold text-gray-900">{o.invoice}</p>
-                        <p className="text-[10px] text-gray-400">{fmtDate(o.date)}</p>
-                      </td>
-                      <td className={TD}>
-                        <p className="font-medium text-gray-800">{o.mitraName}</p>
-                        <p className="text-[10px] text-gray-400">{o.level}</p>
-                      </td>
-                      <td className={TD}>
-                        <p className="text-gray-800">{o.produk}</p>
-                        <p className="text-[10px] text-gray-400">{o.variant} · {o.qty} pcs</p>
-                      </td>
-                      <td className={`${TD} text-right font-semibold`}>{rp(o.subtotal)}</td>
-                      <td className={TD}>
-                        <p>{fmtDate(o.deletedAt)}</p>
-                        <p className="text-[10px] text-gray-400">oleh {o.deletedBy || '—'}</p>
-                      </td>
-                      <td className={`${TD} max-w-[200px] text-[11px] text-gray-600`}>{o.deleteReason || '—'}</td>
-                      <td className={`${TD} text-right`}>
-                        <Button size="xs" variant="outline" icon="refresh" onClick={() => restoreOrder(o)}>
-                          Pulihkan
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredTrash.map((o) => {
+                    const isSelected = trashSelected.includes(o.invoice);
+                    return (
+                      <tr key={o.invoice} className={`hover:bg-gray-50/70 ${isSelected ? 'bg-rose-50/30' : ''}`}>
+                        <td className={`${TD} text-center`}>
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                            checked={isSelected}
+                            onChange={() =>
+                              setTrashSelected((prev) =>
+                                isSelected ? prev.filter((x) => x !== o.invoice) : [...prev, o.invoice]
+                              )
+                            }
+                          />
+                        </td>
+                        <td className={TD}>
+                          <button
+                            type="button"
+                            className="font-bold text-gray-900 hover:text-emerald-700 hover:underline text-left cursor-pointer"
+                            onClick={() => setDetailInvoice(o.invoice)}
+                          >
+                            {o.invoice}
+                          </button>
+                          <p className="text-[10px] text-gray-400">{fmtDate(o.date)}</p>
+                        </td>
+                        <td className={TD}>
+                          <p className="font-medium text-gray-800">{o.mitraName}</p>
+                          <p className="text-[10px] text-gray-400">{o.level}</p>
+                        </td>
+                        <td className={TD}>
+                          <p className="text-gray-800">{o.produk}</p>
+                          <p className="text-[10px] text-gray-400">{o.variant} · {o.qty} pcs</p>
+                        </td>
+                        <td className={`${TD} text-right font-semibold`}>{rp(o.subtotal)}</td>
+                        <td className={TD}>
+                          <p>{fmtDate(o.deletedAt)}</p>
+                          <p className="text-[10px] text-gray-400">oleh {o.deletedBy || '—'}</p>
+                        </td>
+                        <td className={`${TD} max-w-[200px] text-[11px] text-gray-600`}>{o.deleteReason || '—'}</td>
+                        <td className={`${TD} text-right`}>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button size="xs" variant="outline" icon="refresh" onClick={() => restoreOrder(o)}>
+                              Pulihkan
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="dangerOutline"
+                              icon="trash"
+                              onClick={() => askPermanentDelete(o)}
+                            >
+                              Hapus Permanen
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </TableWrap>
               {filteredTrash.length === 0 && (
@@ -4816,6 +5226,178 @@ export default function MarketingDashboard({
                   title="Arsip kosong"
                   desc="Tidak ada pesanan terhapus yang cocok dengan pencarian."
                   icon="trash"
+                />
+              )}
+            </Card>
+          </>
+        )}
+
+        {/* ============================ BATCH PO ============================ */}
+        {activeMenu === 'batch' && (
+          <>
+            <PageHead
+              title="Batch Pre-Order"
+              desc="Kelola batch periode buka dan tutup PO. Menutup batch (Closed) akan otomatis menutup pemesanan pada seluruh produk yang terhubung ke batch tersebut di toko dan dashboard mitra."
+              badge={
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Badge tone="gray">{poBatches.length} batch</Badge>
+                  <Badge tone="emerald">
+                    {poBatches.filter((b) => b.status === 'open').length} Open
+                  </Badge>
+                  <Badge tone="rose">
+                    {poBatches.filter((b) => b.status === 'closed').length} Closed
+                  </Badge>
+                </div>
+              }
+              actions={
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" icon="refresh" onClick={refreshBatches}>
+                    Sinkron
+                  </Button>
+                  <Button icon="plus" onClick={openCreateBatchModal}>
+                    Batch Baru
+                  </Button>
+                </div>
+              }
+            />
+
+            <Card
+              title="Daftar Batch Pre-Order"
+              subtitle="Jadwal buka-tutup PO dan status batch otomatis mengontrol status pre-order produk."
+              action={
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                  <div className="w-full sm:w-56">
+                    <SearchBox
+                      value={batchSearch}
+                      onChange={setBatchSearch}
+                      placeholder="Cari nama batch, brand…"
+                    />
+                  </div>
+                  <select
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 focus:border-emerald-500 focus:outline-none"
+                    value={batchStatusFilter}
+                    onChange={(e) => setBatchStatusFilter(e.target.value)}
+                  >
+                    <option value="all">Semua Status</option>
+                    <option value="open">Open (Buka PO)</option>
+                    <option value="closed">Closed (Tutup PO)</option>
+                  </select>
+                  <select
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 focus:border-emerald-500 focus:outline-none"
+                    value={batchBrandFilter}
+                    onChange={(e) => setBatchBrandFilter(e.target.value)}
+                  >
+                    <option value="all">Semua Brand</option>
+                    {brands.map((br) => (
+                      <option key={br.id || br.name} value={br.name}>
+                        {br.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              }
+            >
+              <TableWrap>
+                <thead className="bg-gray-50 border-b border-gray-100">
+                  <tr>
+                    <th className={TH}>Batch PO</th>
+                    <th className={TH}>Brand</th>
+                    <th className={TH}>Jadwal PO</th>
+                    <th className={TH}>Estimasi Kirim</th>
+                    <th className={`${TH} text-center`}>Produk Terhubung</th>
+                    <th className={`${TH} text-center`}>Status Batch</th>
+                    <th className={`${TH} text-right`}>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredBatches.map((b) => {
+                    const linkedCount =
+                      b.products_count ??
+                      products.filter((p) => p.po_batch_id === b.id || p.batch === b.name).length;
+                    const isOpen = b.status === 'open';
+
+                    let closeText = '—';
+                    if (b.close_date) {
+                      const datePart = b.close_date.slice(0, 10);
+                      const timePart = b.close_date.includes(' ')
+                        ? b.close_date.split(' ')[1]?.slice(0, 5)
+                        : b.close_date.includes('T')
+                        ? b.close_date.split('T')[1]?.slice(0, 5)
+                        : '';
+                      closeText = `${fmtDate(datePart)}${timePart ? ` (${timePart} WIB)` : ''}`;
+                    }
+
+                    return (
+                      <tr key={b.id || b.name} className="hover:bg-gray-50/70">
+                        <td className={TD}>
+                          <p className="font-bold text-gray-900">{b.name}</p>
+                          <p className="text-[10px] text-gray-400">ID: #{b.id || '—'}</p>
+                        </td>
+                        <td className={TD}>
+                          <span className="font-medium text-gray-800">{b.brand || 'Semua Brand'}</span>
+                        </td>
+                        <td className={TD}>
+                          <p className="text-xs text-gray-800">
+                            <span className="text-[10px] text-gray-400">Buka:</span> {b.start_date ? fmtDate(b.start_date) : '—'}
+                          </p>
+                          <p className="text-xs text-gray-800">
+                            <span className="text-[10px] text-gray-400">Tutup:</span> {closeText}
+                          </p>
+                        </td>
+                        <td className={TD}>
+                          <span className="text-xs text-gray-700">
+                            {b.estimated_shipment ? fmtDate(b.estimated_shipment) : '—'}
+                          </span>
+                        </td>
+                        <td className={`${TD} text-center`}>
+                          <Badge tone={linkedCount > 0 ? 'teal' : 'gray'}>
+                            {linkedCount} produk
+                          </Badge>
+                        </td>
+                        <td className={`${TD} text-center`}>
+                          <Badge tone={isOpen ? 'emerald' : 'rose'}>
+                            {isOpen ? 'OPEN' : 'CLOSED'}
+                          </Badge>
+                        </td>
+                        <td className={`${TD} text-right`}>
+                          <div className="inline-flex items-center gap-1.5">
+                            <Button
+                              size="xs"
+                              variant={isOpen ? 'outline' : 'soft'}
+                              icon={isOpen ? 'x' : 'check'}
+                              onClick={() => toggleBatchStatus(b)}
+                              title={isOpen ? 'Tutup Pre-Order Batch ini' : 'Buka Pre-Order Batch ini'}
+                            >
+                              {isOpen ? 'Tutup PO' : 'Buka PO'}
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              icon="edit"
+                              onClick={() => openEditBatchModal(b)}
+                            >
+                              Ubah
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="dangerOutline"
+                              icon="trash"
+                              onClick={() => deleteBatch(b)}
+                            >
+                              Hapus
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </TableWrap>
+              {filteredBatches.length === 0 && (
+                <EmptyState
+                  title="Belum ada batch PO"
+                  desc="Belum ada batch yang cocok dengan pencarian / filter."
+                  icon="clock"
                 />
               )}
             </Card>
@@ -5275,49 +5857,76 @@ export default function MarketingDashboard({
               <Button variant="outline" icon="chat" onClick={() => openWA(detailOrder, 'ringkasan')}>
                 WhatsApp
               </Button>
-              {detailOrder.marketingStatus === MKT.PENDING && (
+              {detailOrder.deletedAt ? (
                 <>
                   <Button
-                    variant="dangerOutline"
-                    onClick={() =>
-                      setReasonModal({
-                        title: 'Tolak pesanan',
-                        subtitle: `${detailOrder.invoice} · ${detailOrder.mitraName}`,
-                        label: 'Alasan penolakan',
-                        confirmLabel: 'Tolak pesanan',
-                        danger: true,
-                        onSubmit: (reason) => {
-                          rejectOrder(detailOrder, reason);
-                          setReasonModal(null);
-                          setDetailInvoice(null);
-                        }
-                      })
-                    }
-                  >
-                    Tolak
-                  </Button>
-                  <Button
+                    variant="outline"
+                    icon="refresh"
                     onClick={() => {
-                      approveOrder(detailOrder);
+                      restoreOrder(detailOrder);
                       setDetailInvoice(null);
                     }}
                   >
-                    ACC Pesanan
+                    Pulihkan
+                  </Button>
+                  <Button
+                    variant="dangerOutline"
+                    icon="trash"
+                    onClick={() => {
+                      setDetailInvoice(null);
+                      askPermanentDelete(detailOrder);
+                    }}
+                  >
+                    Hapus Permanen
                   </Button>
                 </>
+              ) : (
+                <>
+                  {detailOrder.marketingStatus === MKT.PENDING && (
+                    <>
+                      <Button
+                        variant="dangerOutline"
+                        onClick={() =>
+                          setReasonModal({
+                            title: 'Tolak pesanan',
+                            subtitle: `${detailOrder.invoice} · ${detailOrder.mitraName}`,
+                            label: 'Alasan penolakan',
+                            confirmLabel: 'Tolak pesanan',
+                            danger: true,
+                            onSubmit: (reason) => {
+                              rejectOrder(detailOrder, reason);
+                              setReasonModal(null);
+                              setDetailInvoice(null);
+                            }
+                          })
+                        }
+                      >
+                        Tolak
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          approveOrder(detailOrder);
+                          setDetailInvoice(null);
+                        }}
+                      >
+                        ACC Pesanan
+                      </Button>
+                    </>
+                  )}
+                  {detailOrder.marketingStatus === MKT.ACC &&
+                    !['selesai', 'ditolak'].includes(orderStage(detailOrder)) && (
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setDetailInvoice(null);
+                          askDelete(detailOrder);
+                        }}
+                      >
+                        Hapus
+                      </Button>
+                    )}
+                </>
               )}
-              {detailOrder.marketingStatus === MKT.ACC &&
-                !['selesai', 'ditolak'].includes(orderStage(detailOrder)) && (
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setDetailInvoice(null);
-                      askDelete(detailOrder);
-                    }}
-                  >
-                    Hapus
-                  </Button>
-                )}
             </>
           }
         />
@@ -5937,6 +6546,136 @@ export default function MarketingDashboard({
             {categoryModal.mode === 'edit' && (
               <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
                 Mengubah nama kategori otomatis memperbarui kategori pada semua produk yang memakainya.
+              </p>
+            )}
+          </form>
+        </Modal>
+      )}
+
+      {/* ======================= MODAL BATCH PO ======================= */}
+      {batchModal && (
+        <Modal
+          title={batchModal.mode === 'edit' ? 'Ubah Batch Pre-Order' : 'Batch Pre-Order Baru'}
+          subtitle="Batch PO mengatur periode buka-tutup PO yang dipakai oleh produk-produk di dalamnya."
+          onClose={() => setBatchModal(null)}
+          footer={
+            <>
+              <Button variant="outline" onClick={() => setBatchModal(null)}>
+                Batal
+              </Button>
+              <Button type="submit" form="batch-form" icon="check">
+                {batchModal.mode === 'edit' ? 'Simpan Perubahan' : 'Buat Batch'}
+              </Button>
+            </>
+          }
+        >
+          <form id="batch-form" onSubmit={saveBatch} className="space-y-3.5">
+            <Field label="Nama Batch PO" required hint="Contoh: Batch 1 - Sarimbit Raya, Batch Oktober">
+              <Input
+                placeholder="Nama Batch PO"
+                value={batchModal.form.name || ''}
+                onChange={(e) =>
+                  setBatchModal((prev) => ({
+                    ...prev,
+                    form: { ...prev.form, name: e.target.value }
+                  }))
+                }
+              />
+            </Field>
+
+            <Field label="Brand Vendor" required hint="Batch PO wajib terhubung ke salah satu brand">
+              <Select
+                value={batchModal.form.brand_id || ''}
+                onChange={(e) =>
+                  setBatchModal((prev) => ({
+                    ...prev,
+                    form: { ...prev.form, brand_id: e.target.value }
+                  }))
+                }
+              >
+                <option value="">-- Pilih Brand --</option>
+                {brands.map((br) => (
+                  <option key={br.id || br.name} value={dbId(br) || br.id}>
+                    {br.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Tanggal Buka PO" hint="Tanggal awal pemesanan">
+                <Input
+                  type="date"
+                  value={batchModal.form.start_date || ''}
+                  onChange={(e) =>
+                    setBatchModal((prev) => ({
+                      ...prev,
+                      form: { ...prev.form, start_date: e.target.value }
+                    }))
+                  }
+                />
+              </Field>
+
+              <Field label="Status Batch PO">
+                <Select
+                  value={batchModal.form.status || 'open'}
+                  onChange={(e) =>
+                    setBatchModal((prev) => ({
+                      ...prev,
+                      form: { ...prev.form, status: e.target.value }
+                    }))
+                  }
+                >
+                  <option value="open">OPEN (Buka PO)</option>
+                  <option value="closed">CLOSED (Tutup PO)</option>
+                </Select>
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Tanggal Tutup PO" hint="Batas akhir pesanan">
+                <Input
+                  type="date"
+                  value={batchModal.form.close_date || ''}
+                  onChange={(e) =>
+                    setBatchModal((prev) => ({
+                      ...prev,
+                      form: { ...prev.form, close_date: e.target.value }
+                    }))
+                  }
+                />
+              </Field>
+
+              <Field label="Jam Tutup PO" hint="Waktu tutup (default 23:59)">
+                <Input
+                  type="time"
+                  value={batchModal.form.close_time || '23:59'}
+                  onChange={(e) =>
+                    setBatchModal((prev) => ({
+                      ...prev,
+                      form: { ...prev.form, close_time: e.target.value }
+                    }))
+                  }
+                />
+              </Field>
+            </div>
+
+            <Field label="Estimasi Pengiriman (Ready)" hint="Perkiraan barang siap dikirim ke mitra">
+              <Input
+                type="date"
+                value={batchModal.form.estimated_shipment || ''}
+                onChange={(e) =>
+                  setBatchModal((prev) => ({
+                    ...prev,
+                    form: { ...prev.form, estimated_shipment: e.target.value }
+                  }))
+                }
+              />
+            </Field>
+
+            {batchModal.mode === 'edit' && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                Mengubah status menjadi Closed atau melewati tanggal tutup PO akan otomatis mengunci pesanan produk dalam batch ini di toko & dashboard mitra.
               </p>
             )}
           </form>

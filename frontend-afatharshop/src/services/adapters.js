@@ -1,11 +1,11 @@
 import {
   DEFAULT_COLORS,
   DEFAULT_MODELS,
-  DEFAULT_PAYMENT_STAGES,
   DEFAULT_SIZES,
   DEFAULT_STORE
 } from '../data/mockData';
 import { mediaUrl } from './api';
+import { DEFAULT_DP_PCT, terminPlanFor } from '../utils/terminScheme';
 
 const FALLBACK_IMAGE =
   'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=800&q=80';
@@ -81,7 +81,9 @@ export const mapProduct = (product) => {
     priceValues.length ? Math.min(...priceValues) : 0
   );
   const maxPrice = priceValues.length ? Math.max(...priceValues) : basePrice;
-  const dpPct = Math.min(100, Math.max(0, toNumber(product.min_dp_percent ?? product.dp_percent, 25)));
+  // Jadwal termin katalog adalah sumber persen; min_dp_percent hanya cadangan.
+  const paymentStages = terminPlanFor(product);
+  const dpPct = paymentStages[0]?.pct || 0;
 
   const rawVariants = Array.isArray(product.variants) ? product.variants : [];
   const variantModels = unique(rawVariants.map((variant) => variant.model));
@@ -133,7 +135,8 @@ export const mapProduct = (product) => {
     dpPct,
     pelunasanDueDate: '',
     stockQuota: toNumber(product.stock_quota),
-    paymentStages: DEFAULT_PAYMENT_STAGES,
+    terminCount: paymentStages.length,
+    paymentStages,
     models: (variantModels.length ? variantModels : DEFAULT_MODELS.map((model) => model.name)).map(
       (name) => ({ name, price: basePrice })
     ),
@@ -150,7 +153,27 @@ export const mapProduct = (product) => {
       addon: 0
     })),
     image: mediaUrl(product.image) || FALLBACK_IMAGE,
-    thumbnails: [mediaUrl(product.image) || FALLBACK_IMAGE],
+    image2: mediaUrl(product.image2),
+    image3: mediaUrl(product.image3),
+    image4: mediaUrl(product.image4),
+    reelUrl: mediaUrl(product.reel_url || product.reelUrl),
+    videoUrl: mediaUrl(product.reel_url || product.reelUrl),
+    thumbnails: (() => {
+      const raw = [
+        product.image,
+        product.image2,
+        product.image3,
+        product.image4,
+        ...(Array.isArray(product.thumbnails) ? product.thumbnails : [])
+      ]
+        .filter(Boolean)
+        .map((img) => mediaUrl(img))
+        .filter(Boolean);
+      const set = Array.from(new Set(raw));
+      return set.length ? set : [mediaUrl(product.image) || FALLBACK_IMAGE];
+    })(),
+    material: product.material_detail || product.materialDetail || product.material || '',
+    materialDetail: product.material_detail || product.materialDetail || product.material || '',
     description: product.description || '',
     descriptionDetailed: {
       summary: product.description || '',
@@ -309,7 +332,7 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
   // Termin dibagi di atas subtotal produk; ongkir ditagih terpisah.
   const stageBase = subtotal > 0 ? subtotal : total;
   const dpPct =
-    stageBase > 0 && dpRow ? Math.round((toNumber(dpRow.amount) / stageBase) * 100) : 25;
+    stageBase > 0 && dpRow ? Math.round((toNumber(dpRow.amount) / stageBase) * 100) : DEFAULT_DP_PCT;
 
   const paid = toNumber(order.invoice?.paid_amount);
   const invoiceStatus = String(order.invoice?.status || '').toLowerCase();
@@ -729,7 +752,7 @@ export const mapSettings = (payload) => {
   return {
     shopName: raw.shopName || 'Afathar Shop',
     senderName: raw.senderName || '',
-    dpPct: toNumber(raw.dpPct, 25),
+    dpPct: toNumber(raw.dpPct, DEFAULT_DP_PCT),
     pelunasanDueDays: toNumber(raw.pelunasanDueDays, 30),
     ongkirDueDays: toNumber(raw.ongkirDueDays, 3),
     waFooter: raw.waFooter || '',

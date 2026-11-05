@@ -14,11 +14,18 @@ import {
 import {
   DEFAULT_COLORS,
   DEFAULT_MODELS,
-  DEFAULT_PAYMENT_STAGES,
   DEFAULT_SIZES,
   DEFAULT_STORE
 } from '../../data/mockData';
 import { mapOrderToProjectOrder } from '../../services/adapters';
+import {
+  DEFAULT_DP_PCT,
+  clampPercent,
+  defaultStagePcts,
+  dpPercentFor,
+  stageLabelFor,
+  stageRowsOf
+} from '../../utils/terminScheme';
 
 const FALLBACK_IMAGE =
   'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=800&q=80';
@@ -50,23 +57,21 @@ const longDate = (iso) => {
 };
 
 const stageDate = (value) => (value ? parseProjectDate(value) : '');
+
+// Susunan termin dianggap sah hanya bila >= 2 baris dan total persennya 100,
+// sama seperti syarat TerminPlan di backend.
 const cleanPaymentStages = (stages) => {
-  const plan = (Array.isArray(stages) ? stages : [])
-    .filter(Boolean)
-    .map((stage, index) => ({
-      label: stage.label || stage.stage || `Termin ${index + 1}`,
-      pct: Math.min(100, Math.max(0, num(stage.pct ?? stage.percent))),
-      date: stageDate(stage.date)
-    }))
-    .filter((stage) => stage.pct > 0);
-  return plan.length >= 2 ? plan.slice(0, 3) : null;
+  const rows = stageRowsOf({ paymentStages: stages });
+  if (!rows) return null;
+  return rows.slice(0, 3).map((row) => ({ ...row, date: stageDate(row.date) }));
 };
+
 export const normalizePaymentStages = (stages) =>
   cleanPaymentStages(stages) ||
-  DEFAULT_PAYMENT_STAGES.map((stage, index) => ({
-    label: stage.label || `Termin ${index + 1}`,
-    pct: num(stage.percent ?? stage.pct),
-    date: stageDate(stage.date)
+  defaultStagePcts().map((pct, index, total) => ({
+    label: stageLabelFor(index, total.length),
+    pct,
+    date: ''
   }));
 
 const slug = (text) =>
@@ -175,7 +180,9 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
     const discountPct =
       num(order.discountPct) ||
       (gross ? Math.round(((discountNominal || feeMitraNominal) / gross) * 100) : 0);
-    const schemeDpPct = num(order.dpPct) || num(matchedProduct?.dpPct) || 50;
+    // DP berasal dari jadwal termin (order, lalu katalog produk), bukan angka
+    // tetap: produk boleh punya skema 2 atau 3 termin berbeda.
+    const schemeDpPct = dpPercentFor(order, dpPercentFor(matchedProduct, DEFAULT_DP_PCT));
     const dpNominal = num(order.dpNominal) || Math.round((subtotal * schemeDpPct) / 100);
     const flags = statusFlags(order.status);
     const date = parseProjectDate(order.date);
@@ -191,14 +198,17 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       cleanPaymentStages(order.paymentStages) ||
       cleanPaymentStages(matchedProduct?.paymentStages) ||
       (() => {
-        const dp = Math.min(100, Math.max(0, num(order.dpPct) || num(matchedProduct?.dpPct) || 50));
         const lastDate = parseProjectDate(
           order.pelunasanDueDate || matchedProduct?.pelunasanDueDate || order.closeDate
         );
-        return [
-          { label: 'Termin 1 · DP', pct: dp, date: parseProjectDate(order.date) },
-          { label: 'Termin 2 · Pelunasan', pct: 100 - dp, date: lastDate }
-        ].filter((stage) => stage.pct > 0);
+        const pcts = defaultStagePcts(matchedProduct?.terminCount, schemeDpPct);
+        return pcts
+          .map((pct, index) => ({
+            label: stageLabelFor(index, pcts.length),
+            pct,
+            date: index === pcts.length - 1 ? lastDate : parseProjectDate(order.date)
+          }))
+          .filter((stage) => stage.pct > 0);
       })();
 
     const core = {
@@ -561,8 +571,8 @@ export const projectProductsToCore = (products) =>
       closeTime: closeTimeMatch ? closeTimeMatch[1] : '',
       status: product.status === 'closed' || product.status === 'closed_po' ? 'closed' : 'open',
       readyEstimate: product.estimatedShipment || '-',
-      terms: `DP ${num(product.dpPct) || 50}% saat checkout · pelunasan sebelum kirim`,
-      dpPct: Math.min(100, Math.max(0, num(product.dpPct) || 50)),
+      terms: `DP ${dpPercentFor(product)}% saat checkout · pelunasan sebelum kirim`,
+      dpPct: clampPercent(dpPercentFor(product)),
       pelunasanDueDate: product.pelunasanDueDate ? parseProjectDate(product.pelunasanDueDate) : '',
       paymentStages: normalizePaymentStages(product.paymentStages),
       description: product.descriptionDetailed?.summary || product.sku || '',
@@ -613,6 +623,14 @@ export const coreProductsToProject = (coreProducts, prevProducts) => {
       if (!mergedColors.some((c) => c.name === name)) mergedColors.push({ name, hex: '#CBD5E1' });
     });
     const quotaSum = variants.reduce((sum, v) => sum + num(v.quota), 0);
+    const stages =
+      cleanPaymentStages(product.paymentStages) ||
+      cleanPaymentStages(base?.paymentStages) ||
+      normalizePaymentStages();
+    const dpPct = dpPercentFor({
+      paymentStages: product.paymentStages || base?.paymentStages,
+      dpPct: product.dpPct ?? base?.dpPct
+    });
     return {
       ...(base || {}),
       id: base?.id || baseId,
@@ -636,15 +654,13 @@ export const coreProductsToProject = (coreProducts, prevProducts) => {
         : base?.tutupPODetail || `${longDate(product.closeDate)} pukul 23:59 WIB`,
       estimatedShipment: product.readyEstimate || '-',
       overlayText: `Tutup PO ${longDate(product.closeDate)}`,
-      minDpPercent: num(product.dpPct) || base?.minDpPercent || 50,
-      dpPct: num(product.dpPct) || base?.dpPct || 50,
+      minDpPercent: dpPct,
+      dpPct,
+      terminCount: stages.length,
       pelunasanDueDate: product.pelunasanDueDate || base?.pelunasanDueDate || '',
       openDate: product.openDate || base?.openDate || '',
       stockQuota: base && base.stockQuota != null ? base.stockQuota : quotaSum,
-      paymentStages:
-        cleanPaymentStages(product.paymentStages) ||
-        cleanPaymentStages(base?.paymentStages) ||
-        normalizePaymentStages(),
+      paymentStages: stages,
       models: mergedModels.length ? mergedModels : DEFAULT_MODELS,
       sizes: mergedSizes.length ? mergedSizes : DEFAULT_SIZES,
       colors: mergedColors.length ? mergedColors : DEFAULT_COLORS,

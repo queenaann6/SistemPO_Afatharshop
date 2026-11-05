@@ -2547,7 +2547,7 @@ export default function OwnerFinanceDashboard({
                 <div>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                     onChange={(e) => handleTransferProof(e.target.files?.[0])}
                     className="block w-full text-[11px] text-gray-500 file:mr-2 file:px-3 file:py-2 file:rounded-lg file:border-0 file:text-[11px] file:font-semibold file:bg-gray-900 file:text-white hover:file:bg-gray-800"
                   />

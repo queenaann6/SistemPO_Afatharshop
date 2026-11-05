@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { XIcon, ClockIcon, ShieldCheckIcon, CheckIcon } from './Icons';
+import { dpPercentFor } from '../utils/terminScheme';
 
 export default function ProductDetailModal({ product, onClose, onAddToCart }) {
   if (!product) return null;
@@ -29,7 +30,8 @@ export default function ProductDetailModal({ product, onClose, onAddToCart }) {
   };
 
   const totalPrice = product.price * qty;
-  const minDp = Math.round((totalPrice * (product.minDpPercent || 30)) / 100);
+  const dpPct = dpPercentFor(product);
+  const minDp = Math.round((totalPrice * dpPct) / 100);
   const remainingBill = totalPrice - minDp;
 
   const handleBooking = () => {
@@ -227,7 +229,7 @@ export default function ProductDetailModal({ product, onClose, onAddToCart }) {
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-stone-900">Bayar DP {product.minDpPercent || 30}%</span>
+                      <span className="text-xs font-bold text-stone-900">Bayar DP {dpPct}%</span>
                       {orderType === 'dp' && <CheckIcon className="w-3.5 h-3.5 text-[#6B1416]" />}
                     </div>
                     <p className="text-[11px] font-bold text-amber-800 mt-0.5">{formatRupiah(minDp)}</p>

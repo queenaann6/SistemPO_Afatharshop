@@ -378,7 +378,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
               type="file"
               ref={fileInputRef}
               onChange={handleImageChange}
-              accept="image/*"
+              accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
               className="hidden"
             />
           </div>

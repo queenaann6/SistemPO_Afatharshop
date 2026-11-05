@@ -10,6 +10,7 @@ import {
 } from './Icons';
 import AddressFormModal from './AddressFormModal';
 import { getStoredAddresses, pushAddressBookItem, saveStoredAddresses } from './dashboard/mitra/mitraAddressBook';
+import { dpPercentFor } from '../utils/terminScheme';
 
 export default function CheckoutPage({
   checkoutItems = [],
@@ -163,7 +164,7 @@ export default function CheckoutPage({
     setIsSummaryModalOpen(false);
 
     const firstItem = items[0] || {};
-    const schemeDpPct = Math.min(100, Math.max(0, Number(firstItem.dpPct ?? 50)));
+    const schemeDpPct = dpPercentFor(firstItem);
     const addonNominal = items.reduce(
       (sum, it) => sum + (Number(it.addon) || 0) * (Number(it.qty) || 1),
       0
@@ -197,6 +198,7 @@ export default function CheckoutPage({
       isClosedPO: false,
       closeDate: firstItem.closeDate || firstItem.tutupPO || '-',
       dpPct: schemeDpPct,
+      paymentStages: firstItem.paymentStages || null,
       pelunasanDueDate: firstItem.pelunasanDueDate || '',
       addonNominal,
       feeMitraNominal,

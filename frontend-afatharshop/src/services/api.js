@@ -211,6 +211,7 @@ export const api = {
       request(`/management/orders/${id}/invoice`, { method: 'PATCH', body: payload }),
     updateOrder: (id, payload) =>
       request(`/management/orders/${id}`, { method: 'PUT', body: payload }),
+    deleteOrder: (id) => request(`/management/orders/${id}`, { method: 'DELETE' }),
 
     batches: (options) => request('/management/batches', options),
     createBatch: (payload) =>

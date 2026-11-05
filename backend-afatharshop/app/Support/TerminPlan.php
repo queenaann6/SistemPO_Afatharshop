@@ -16,6 +16,14 @@ use Carbon\Carbon;
 class TerminPlan
 {
     /**
+     * DP dan termin terakhir yang dipakai bila katalog belum punya payment_stages.
+     * Angka ini adalah satu-satunya default di sistem: sisi frontend memakai nilai
+     * yang sama lewat src/utils/terminScheme.js.
+     */
+    public const DEFAULT_DP_PERCENT = 25.0;
+
+    public const DEFAULT_LAST_STAGE_PERCENT = 25.0;
+    /**
      * @return list<array{type: string, sequence: int, percent: float, due_at: Carbon}>|null
      *         null bila payment_stages katalog tidak layak pakai.
      */
@@ -52,9 +60,12 @@ class TerminPlan
         }
 
         $anchor = $anchor ? $anchor->copy() : now();
-        $percent = $dpPct ?? (float) ($product?->min_dp_percent ?? 25);
+        $percent = $dpPct ?? (float) ($product?->min_dp_percent ?? 0);
+        if ($percent <= 0) {
+            $percent = self::DEFAULT_DP_PERCENT;
+        }
         $percent = max(10, min(90, $percent));
-        $cicilan = max(0, 100 - $percent - 25);
+        $cicilan = max(0, 100 - $percent - self::DEFAULT_LAST_STAGE_PERCENT);
 
         if ($cicilan > 0) {
             return [

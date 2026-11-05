@@ -22,6 +22,7 @@ import FinanceDashboard from './components/dashboard/FinanceDashboard';
 import OwnerDashboard from './components/dashboard/OwnerFinanceDashboard';
 import { createSeedData, PAY } from './components/dashboard/poCore';
 import { openInvoicePrintTab } from './utils/printInvoice';
+import { dpPercentFor } from './utils/terminScheme';
 import {
   alignCoreOrdersToProducts,
   buildMitraList,
@@ -897,7 +898,7 @@ export default function App() {
 
   const handleCompleteOrder = (newOrder) => {
     // Add new order with full metadata to Global Orders
-    const schemeDpPct = Math.min(100, Math.max(0, Number(newOrder.dpPct ?? 50)));
+    const schemeDpPct = dpPercentFor(newOrder);
     const dpNominal = Math.round((newOrder.total || 0) * (schemeDpPct / 100));
     const enrichedOrder = {
       ...newOrder,
@@ -1419,6 +1420,8 @@ export default function App() {
             suppliers={poSuppliers}
             mitra={poMitra}
             team={poTeam}
+            poBatches={poBatches}
+            onChangeBatches={setPoBatches}
             paymentRequests={poPaymentRequests}
             bankAccounts={adminBankAccounts}
             couriers={couriersToCore(adminCouriers)}

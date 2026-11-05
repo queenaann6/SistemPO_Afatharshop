@@ -1,5 +1,6 @@
 import React from 'react';
 import { XIcon, CartIcon, ShieldCheckIcon } from './Icons';
+import { dpPercentFor } from '../utils/terminScheme';
 
 export default function CartDrawer({
   isOpen,
@@ -91,7 +92,7 @@ export default function CartDrawer({
                         Warna: {item.selectedColor} | Size: {item.selectedSize}
                       </p>
                       <span className="text-[10px] bg-amber-100 text-amber-900 px-1.5 py-0.2 rounded font-semibold inline-block mt-1">
-                        {item.orderType === 'dp' ? 'Skema DP 30%' : 'Lunas'}
+                        {item.orderType === 'dp' ? `Skema DP ${dpPercentFor(item)}%` : 'Lunas'}
                       </span>
                     </div>
 

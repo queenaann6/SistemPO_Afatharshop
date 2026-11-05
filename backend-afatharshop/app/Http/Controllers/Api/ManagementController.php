@@ -1423,11 +1423,16 @@ class ManagementController extends Controller
                 'category_id'        => $categoryId,
                 'po_batch_id'        => $batchId,
                 'image'              => $request->image ?? null,
+                'image2'             => $request->image2 ?? null,
+                'image3'             => $request->image3 ?? null,
+                'image4'             => $request->image4 ?? null,
+                'reel_url'           => $request->reel_url ?? $request->reelUrl ?? $request->video_url ?? null,
+                'thumbnails'         => $request->thumbnails ?? array_values(array_filter([$request->image, $request->image2, $request->image3, $request->image4])),
                 'series'             => $request->series ?? null,
                 'status'             => $request->status ?? 'pre_order',
                 'tutup_po'           => $request->tutup_po ? date('Y-m-d H:i:s', strtotime($request->tutup_po)) : null,
                 'estimated_shipment' => $request->estimated_shipment ? date('Y-m-d', strtotime($request->estimated_shipment)) : null,
-                'min_dp_percent'     => (int) ($request->min_dp_percent ?? ($request->dpPct ?? 25)),
+                'min_dp_percent'     => (int) ($request->min_dp_percent ?: ($request->dpPct ?: TerminPlan::DEFAULT_DP_PERCENT)),
                 'payment_stages'     => $request->input('paymentStages') ?? $request->input('stages') ?? null,
                 'termin_count'       => (int) ($request->input('terminCount') ?? $request->input('termin_count') ?? 2),
                 'stock_quota'        => (int) ($request->stock_quota ?? 50),
@@ -1490,13 +1495,17 @@ class ManagementController extends Controller
 
         $fields = [
             'name', 'series', 'status', 'description', 'material_detail',
-            'image', 'is_active', 'is_sale', 'discount_percent', 'original_price',
+            'image', 'image2', 'image3', 'image4', 'reel_url', 'thumbnails',
+            'is_active', 'is_sale', 'discount_percent', 'original_price',
             'min_dp_percent', 'payment_stages', 'termin_count', 'stock_quota'
         ];
         foreach ($fields as $f) {
             if ($request->has($f)) {
                 $product->{$f} = $request->{$f};
             }
+        }
+        if ($request->has('reelUrl') || $request->has('video_url')) {
+            $product->reel_url = $request->input('reelUrl') ?? $request->input('video_url');
         }
         if ($request->has('paymentStages') || $request->has('stages')) {
             $product->payment_stages = $request->input('paymentStages') ?? $request->input('stages');
@@ -2154,6 +2163,39 @@ class ManagementController extends Controller
             'success' => true,
             'message' => "Status pesanan {$order->order_number} berhasil diperbarui menjadi {$order->status}.",
             'data'    => $this->orderPayload($order->fresh(['user', 'address', 'items.variant.product.brand', 'invoice.installments', 'invoice.payments'])),
+        ]);
+    }
+
+    public function destroyOrder($id): JsonResponse
+    {
+        $order = is_numeric($id) ? Order::find($id) : Order::where('order_number', $id)->first();
+        if (!$order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Pesanan tidak ditemukan.',
+            ], 404);
+        }
+
+        $orderNumber = $order->order_number;
+
+        DB::transaction(function () use ($order) {
+            if ($order->invoice) {
+                $invoice = $order->invoice;
+                Payment::where('invoice_id', $invoice->id)->delete();
+                Installment::where('invoice_id', $invoice->id)->delete();
+                $invoice->delete();
+            }
+
+            $order->items()->delete();
+            $order->statusHistories()->delete();
+            $order->delete();
+        });
+
+        $this->logActivity('order.delete_permanent', 'Penjualan', "Pesanan {$orderNumber} berhasil dihapus permanen");
+
+        return response()->json([
+            'success' => true,
+            'message' => "Pesanan {$orderNumber} berhasil dihapus permanen dari database.",
         ]);
     }
 
@@ -3048,12 +3090,18 @@ class ManagementController extends Controller
             'batch'              => $product->batch?->name ?? '',
             'po_batch_id'        => $product->po_batch_id,
             'image'              => $product->image,
+            'image2'             => $product->image2,
+            'image3'             => $product->image3,
+            'image4'             => $product->image4,
+            'reel_url'           => $product->reel_url,
+            'reelUrl'            => $product->reel_url,
+            'thumbnails'         => $product->thumbnails ?: array_values(array_filter([$product->image, $product->image2, $product->image3, $product->image4])),
             'series'             => $product->series,
             'status'             => $product->status,
             'tutup_po'           => optional($product->tutup_po)->toIso8601String(),
             'estimated_shipment' => optional($product->estimated_shipment)->toDateString(),
-            'min_dp_percent'     => (int) ($product->min_dp_percent ?? 25),
-            'dp_percent'         => (int) ($product->min_dp_percent ?? 25),
+            'min_dp_percent'     => (int) ($product->min_dp_percent ?: TerminPlan::DEFAULT_DP_PERCENT),
+            'dp_percent'         => (int) ($product->min_dp_percent ?: TerminPlan::DEFAULT_DP_PERCENT),
             'payment_stages'     => $product->payment_stages,
             'stages'             => $product->payment_stages,
             'termin_count'       => (int) ($product->termin_count ?? 2),

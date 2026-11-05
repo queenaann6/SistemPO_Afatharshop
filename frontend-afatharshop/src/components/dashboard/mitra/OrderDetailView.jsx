@@ -6,6 +6,7 @@ import SplitAddressModal from './SplitAddressModal';
 import AddressFormModal from '../../AddressFormModal';
 import InvoiceModal from '../../InvoiceModal';
 import { openInvoicePrintTab } from '../../../utils/printInvoice';
+import { dpPercentFor } from '../../../utils/terminScheme';
 import { getStoredAddresses, syncAddressBookFromApi, formatFullAddress, pushAddressBookItem } from './mitraAddressBook';
 import {
   PrinterIcon,
@@ -536,9 +537,8 @@ export default function OrderDetailView({
   const isMultiItem = items.length > 1;
   const summaryTitle = isMultiItem ? `Pesanan (${items.length} Varian)` : primaryTitle;
   const totalQty = items.reduce((sum, item) => sum + (Number(item.qty) || 1), 0);
-  const dpNominal = Number(order?.dpNominal) || Math.round(totalItemsPrice * 0.4);
-  const dpPct =
-    Number(order?.dpPct) || Math.round((dpNominal / Math.max(1, totalItemsPrice)) * 100);
+  const dpNominal = Number(order?.dpNominal) || Math.round(totalItemsPrice * (dpPercentFor(order) / 100));
+  const dpPct = Number(order?.dpPct) || dpPercentFor(order);
   const pelunasanNominal = Math.max(0, totalItemsPrice - dpNominal);
   const pelunasanPct = Math.max(0, 100 - dpPct);
   const buyerName = String(order?.mitraName || currentUser?.name || 'Mitra').split(' (')[0];
@@ -2910,7 +2910,7 @@ export default function OrderDetailView({
                           type="file"
                           ref={proofFileRef}
                           onChange={handleProofImageChange}
-                          accept="image/*"
+                          accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                           className="hidden"
                         />
                       </div>

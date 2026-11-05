@@ -9,6 +9,8 @@
  * - Format penulisan Rupiah rapi (tabular-nums, right-aligned)
  */
 
+import { DEFAULT_DP_PCT, defaultStagePcts, stageRowsOf } from './terminScheme';
+
 export function openInvoicePrintTab(order, bankAccounts = []) {
   if (!order) return;
 
@@ -234,23 +236,22 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
     Number(order.dpPct) ||
     (totalDue > 0 && dpNominal > 0 ? Math.round((dpNominal / totalDue) * 100) : 0);
 
-  const schemeStages =
-    Array.isArray(order.paymentStages) && order.paymentStages.length
-      ? order.paymentStages.map((s, i, arr) => ({
-          label:
-            clean(s.label) ||
-            (i === 0 ? 'DP' : i === arr.length - 1 ? 'Pelunasan' : `Termin ${i + 1}`),
-          pct: Number(s.pct) || 0,
-          date: clean(s.date)
-        }))
-      : [
-          { label: 'DP', pct: dpPctInvoice, date: '' },
-          {
-            label: 'Pelunasan',
-            pct: Math.max(0, 100 - dpPctInvoice),
-            date: clean(order.pelunasanDueDate)
-          }
-        ];
+  const schemeStages = (() => {
+    const rows = stageRowsOf(order);
+    if (rows) {
+      return rows.map((s, i, arr) => ({
+        label: clean(s.label) || (i === 0 ? 'DP' : i === arr.length - 1 ? 'Pelunasan' : `Termin ${i + 1}`),
+        pct: Number(s.pct) || 0,
+        date: clean(s.date)
+      }));
+    }
+    const pcts = defaultStagePcts(order.terminCount, dpPctInvoice || DEFAULT_DP_PCT);
+    return pcts.map((pct, index) => ({
+      label: index === 0 ? 'DP' : index === pcts.length - 1 ? 'Pelunasan' : `Termin ${index + 1}`,
+      pct,
+      date: index === pcts.length - 1 ? clean(order.pelunasanDueDate) : ''
+    }));
+  })();
 
   const isWaitingStatus = (value) => String(value || '').toLowerCase().includes('menunggu');
   const bankOf = (bankField, accountField) => ({

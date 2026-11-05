@@ -6,6 +6,7 @@ import {
   CartIcon
 } from './Icons';
 import { brandDiscountNominalFor, feeNominalFor, num } from './dashboard/poCore';
+import { dpPercentFor } from '../utils/terminScheme';
 
 export default function ProductDetailPage({
   product,
@@ -22,6 +23,7 @@ export default function ProductDetailPage({
   const [selectedImage, setSelectedImage] = useState(
     product.thumbnails?.[0] || product.image
   );
+  const [isVideoActive, setIsVideoActive] = useState(false);
   const [selectedModel, setSelectedModel] = useState(
     product.models?.[0]?.name || 'MOM DRESS ONLY STYLE 1'
   );
@@ -70,7 +72,7 @@ export default function ProductDetailPage({
     : activeModelObj
       ? Number(activeModelObj.addon || 0)
       : 0;
-  const dpPct = Math.min(100, Math.max(0, Number(product.dpPct ?? product.minDpPercent ?? 50)));
+  const dpPct = dpPercentFor(product);
   const brand = (brands || []).find(
     (b) => String(b.name || '').toLowerCase() === String(product.brand || '').toLowerCase()
   );
@@ -102,6 +104,7 @@ export default function ProductDetailPage({
       addonTotal: currentAddon * qty,
       totalPrice: netPrice * qty,
       dpPct,
+      paymentStages: product.paymentStages || null,
       pelunasanDueDate: product.pelunasanDueDate || '',
       closeDate: product.tutupPO || '',
       tutupPO: product.tutupPO,
@@ -153,13 +156,22 @@ export default function ProductDetailPage({
             {/* LEFT COLUMN: Gallery & Store Card (5 Cols) */}
             <div className="lg:col-span-5 space-y-4">
               
-              {/* Main Image View */}
+              {/* Main Image / Video View */}
               <div className="relative aspect-[3/4] w-full rounded-2xl overflow-hidden bg-stone-100 border border-stone-200 shadow-xs">
-                <img
-                  src={selectedImage}
-                  alt={product.title}
-                  className="w-full h-full object-cover object-top transition duration-300"
-                />
+                {isVideoActive && (product.videoUrl || product.reelUrl) ? (
+                  <video
+                    src={product.videoUrl || product.reelUrl}
+                    controls
+                    autoPlay
+                    className="w-full h-full object-contain bg-black"
+                  />
+                ) : (
+                  <img
+                    src={selectedImage}
+                    alt={product.title}
+                    className="w-full h-full object-cover object-top transition duration-300"
+                  />
+                )}
 
                 {/* Top Badges */}
                 <div className="absolute top-3 left-3 right-3 flex items-center justify-between gap-2 pointer-events-none z-10">
@@ -175,14 +187,36 @@ export default function ProductDetailPage({
                 </div>
               </div>
 
-              {/* Thumbnails Row */}
+              {/* Thumbnails & Video Row */}
               <div className="flex items-center gap-2.5 overflow-x-auto pb-1">
+                {/* Tombol Video jika ada */}
+                {(product.videoUrl || product.reelUrl) && (
+                  <button
+                    type="button"
+                    onClick={() => setIsVideoActive(true)}
+                    className={`w-16 h-20 rounded-xl overflow-hidden border-2 transition shrink-0 cursor-pointer flex flex-col items-center justify-center bg-stone-900 text-white relative ${
+                      isVideoActive
+                        ? 'border-amber-500 ring-2 ring-amber-400'
+                        : 'border-stone-300 hover:border-amber-400'
+                    }`}
+                    title="Tonton Video Produk"
+                  >
+                    <span className="text-xl">▶</span>
+                    <span className="text-[9px] font-bold uppercase tracking-wider mt-1 text-amber-300">Video</span>
+                  </button>
+                )}
+
+                {/* Foto Thumbnails */}
                 {(product.thumbnails || [product.image]).map((thumb, idx) => (
                   <button
                     key={idx}
-                    onClick={() => setSelectedImage(thumb)}
+                    type="button"
+                    onClick={() => {
+                      setIsVideoActive(false);
+                      setSelectedImage(thumb);
+                    }}
                     className={`w-16 h-20 rounded-xl overflow-hidden border-2 transition shrink-0 cursor-pointer ${
-                      selectedImage === thumb
+                      !isVideoActive && selectedImage === thumb
                         ? 'border-[#C27E43] ring-1 ring-[#C27E43]'
                         : 'border-stone-200 hover:border-stone-400'
                     }`}
@@ -196,7 +230,7 @@ export default function ProductDetailPage({
                 ))}
               </div>
 
-              {/* Download Catalog PDF Button (Matches Screenshot 1) */}
+              {/* Download Catalog PDF Button */}
               <button
                 onClick={() =>
                   alert('Mempersiapkan materi promosi HD dan panduan PO untuk mitra...')
@@ -207,7 +241,7 @@ export default function ProductDetailPage({
                 <span>Download Gambar Katalog & Panduan PO</span>
               </button>
 
-              {/* Store Profile Card (Matches Screenshot 1) */}
+              {/* Store Profile Card */}
               <div className="bg-stone-50 border border-stone-200 rounded-xl p-3.5 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 rounded-full overflow-hidden bg-white border border-[#F0C973] flex items-center justify-center shadow-xs shrink-0">
@@ -215,17 +249,13 @@ export default function ProductDetailPage({
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5">
-                      <h4 className="font-bold text-xs text-stone-900">{store.name}</h4>
+                      <h4 className="font-bold text-xs text-stone-900">{store.name || 'Afatharshop'}</h4>
                       <span className="bg-emerald-100 text-emerald-800 text-[9px] font-bold px-1.5 py-0.2 rounded">
-                        {store.badge}
+                        Distributor Resmi
                       </span>
                     </div>
-                    <p className="text-[10px] text-stone-500 flex items-center gap-1 mt-0.5">
-                      <span>📍</span>
-                      <span>{store.city}</span>
-                    </p>
-                    <p className="text-[10px] text-stone-500 mt-0.5">
-                      Produk: <strong>{store.productsCount}</strong> • Proses: <strong>{store.processTime}</strong>
+                    <p className="text-[10px] text-stone-600 flex items-center gap-1 mt-0.5 font-medium">
+                      <span>Distributor Resmi & Kota Bekasi</span>
                     </p>
                   </div>
                 </div>
@@ -234,7 +264,7 @@ export default function ProductDetailPage({
                   onClick={onNavigateHome}
                   className="text-[11px] font-semibold text-amber-900 border border-amber-300 bg-white hover:bg-amber-50 px-3 py-1.5 rounded-lg transition cursor-pointer whitespace-nowrap shadow-xs"
                 >
-                  🏪 Kunjungi Toko
+                  🛍️ Katalog Lain
                 </button>
               </div>
 
@@ -260,19 +290,27 @@ export default function ProductDetailPage({
               <div className="space-y-1.5">
                 <div className="flex items-baseline gap-2.5 flex-wrap">
                   <span className="text-2xl sm:text-3xl font-bold text-red-600">{formatRupiah(netPrice)}</span>
-                  {feeNominal > 0 && (
-                    <span className="text-sm text-stone-400 line-through">
-                      {formatRupiah(num(currentPrice))}
-                    </span>
-                  )}
+                  {/* Single strikethrough price to prevent double crossed-out */}
+                  {(() => {
+                    const strikethroughPrice =
+                      product.originalPrice && num(product.originalPrice) > netPrice
+                        ? num(product.originalPrice)
+                        : feeNominal > 0 && num(currentPrice) > netPrice
+                        ? num(currentPrice)
+                        : null;
+
+                    if (!strikethroughPrice || strikethroughPrice <= netPrice) return null;
+
+                    return (
+                      <span className="text-sm text-stone-400 line-through">
+                        {formatRupiah(strikethroughPrice)}
+                      </span>
+                    );
+                  })()}
+
                   {currentAddon > 0 && (
                     <span className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
                       + Tambahan {formatRupiah(currentAddon)} / pcs
-                    </span>
-                  )}
-                  {product.originalPrice && (
-                    <span className="text-sm text-stone-400 line-through">
-                      {formatRupiah(product.originalPrice)}
                     </span>
                   )}
                   {product.discountPercent > 0 && (
@@ -300,7 +338,7 @@ export default function ProductDetailPage({
                 </p>
               </div>
 
-              {/* Informasi Pemesanan Card (Matches Screenshot 1) */}
+              {/* Informasi Pemesanan Card */}
               <div className="bg-[#FFF8F3] border border-[#FBE5D8] rounded-xl p-3.5 space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
                   <div className="flex items-center gap-1.5 text-stone-800">
@@ -312,20 +350,24 @@ export default function ProductDetailPage({
                   <div className="flex items-center gap-1.5 text-stone-800">
                     <span className="text-amber-700">📅</span>
                     <span>
-                      ESTIMASI SIAP KIRIM : <strong className="text-stone-900">{product.estimatedShipment}</strong>
+                      ESTIMASI SIAP KIRIM : <strong className="text-stone-900">
+                        {product.estimatedShipment && !product.estimatedShipment.includes('1970') && product.estimatedShipment !== '-'
+                          ? product.estimatedShipment
+                          : '14 Hari setelah Tutup PO'}
+                      </strong>
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* Variasi Model Busana (Matches Screenshot 1 & 2) */}
+              {/* Variasi Model Busana */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-stone-800">
                     PILIH VARIASI MODEL
                   </label>
                   <span className="text-[11px] text-stone-500">
-                    Tersedia {product.models?.length || 10} Model Busana
+                    Tersedia {product.models?.length || 1} Model Busana
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -333,19 +375,13 @@ export default function ProductDetailPage({
                     <button
                       key={m.name}
                       onClick={() => setSelectedModel(m.name)}
-                      className={`text-xs px-3 py-1.5 rounded-lg border transition cursor-pointer font-medium text-left ${
+                      className={`text-xs px-3.5 py-2 rounded-lg border transition cursor-pointer font-medium text-left ${
                         selectedModel === m.name
                           ? 'bg-white border-stone-800 ring-2 ring-stone-800 text-stone-900 shadow-xs'
                           : 'bg-white border-stone-200 text-stone-700 hover:border-stone-400'
                       }`}
                     >
-                      <span className="block">{m.name}</span>
-                      {m.price != null && (
-                        <span className="block text-[10px] font-semibold text-stone-500 mt-0.5">
-                          {formatRupiah(m.price)}
-                          {Number(m.addon) > 0 ? ` · +${formatRupiah(Number(m.addon))}` : ''}
-                        </span>
-                      )}
+                      <span>{m.name}</span>
                     </button>
                   ))}
                 </div>
@@ -478,7 +514,7 @@ export default function ProductDetailPage({
                 </div>
                 <div className="flex items-center justify-center gap-1">
                   <span>💎</span>
-                  <span>Material Premium Silk</span>
+                  <span>Kualitas Terjamin</span>
                 </div>
               </div>
 
@@ -487,9 +523,26 @@ export default function ProductDetailPage({
           </div>
         </div>
 
-        {/* BOTTOM SECTION: Deskripsi Produk (Matches Screenshot 1 & 2) */}
+        {/* BOTTOM SECTION: Deskripsi & Bahan Produk */}
         <div className="bg-white rounded-2xl shadow-xs border border-orange-100/70 p-5 sm:p-7 space-y-5">
           
+          {/* Bahan / Material (Sinkron dari Admin Katalog Produk) */}
+          {(product.material || product.materialDetail || product.material_detail || product.descriptionDetailed?.materialGamis) && (
+            <div className="bg-[#FFF8F3] border border-[#FBE5D8] rounded-xl p-4 flex items-center gap-3">
+              <span className="w-8 h-8 rounded-full bg-[#6B1416] text-[#F0C973] flex items-center justify-center text-sm shrink-0 font-bold">
+                🧵
+              </span>
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 block">
+                  Bahan / Material
+                </span>
+                <p className="text-xs sm:text-sm font-semibold text-stone-900 mt-0.5">
+                  {product.material || product.materialDetail || product.material_detail || product.descriptionDetailed?.materialGamis}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Header */}
           <div className="flex items-center gap-2 border-b border-stone-100 pb-3">
             <span className="text-[#6B1416] font-bold text-base">📑</span>

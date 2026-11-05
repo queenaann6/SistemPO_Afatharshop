@@ -61,12 +61,6 @@ export const DEFAULT_STORE = {
   processTime: '± 1-2 hari'
 };
 
-export const DEFAULT_PAYMENT_STAGES = [
-  { stage: 'TAHAP 1', label: 'DP 25%', date: '05 Okt - 02 Nov 2026', percent: 25 },
-  { stage: 'TAHAP 2', label: 'Cicilan 50%', date: '07 Desember 2026', percent: 50 },
-  { stage: 'TAHAP 3', label: 'Pelunasan 25%', date: '04 Januari 2027', percent: 25 }
-];
-
 export const DEFAULT_MODELS = [
   { name: 'MOM DRESS ONLY STYLE 1', price: 265000 },
   { name: 'MOM DRESS ONLY STYLE 2', price: 265000 },

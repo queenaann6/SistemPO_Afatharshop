@@ -3,6 +3,7 @@ import api from '../../services/api';
 import { dbId } from '../../services/adapters';
 import BankAccountModal from './BankAccountModal';
 import { serverMoneyPatch } from './projectBridge';
+import { dpPercentFor } from '../../utils/terminScheme';
 import {
   ACCENTS,
   Badge,
@@ -749,7 +750,7 @@ export default function FinanceDashboard({
           addon: it.addon || 0,
           dueDate: it.dueDate || ''
         })),
-        dpPct: num(o.dpPct) || 50,
+        dpPct: dpPercentFor(o),
         notes: o.notes || ''
       }
     });
@@ -2218,7 +2219,7 @@ export default function FinanceDashboard({
                     <div className="space-y-2">
                       <input
                         type="file"
-                        accept="image/*"
+                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                         onChange={(e) => handleProofFile(e.target.files?.[0])}
                         className="block w-full text-[11px] text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-semibold file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
                       />

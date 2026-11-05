@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { DEFAULT_DP_PCT, defaultStagePcts } from '../../utils/terminScheme';
 
 const PRESET_COLORS = [
   { name: 'Emerald Green', hex: '#059669' },
@@ -16,6 +17,24 @@ const PRESET_COLORS = [
 
 const PRESET_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3L', 'All Size'];
 const PRESET_MODELS = ['Standard', 'Jumbo', 'Mom', 'Dad', 'Kids'];
+
+const stageLabelOf = (index, total) =>
+  index === 0
+    ? 'Tahap 1 (DP)'
+    : index === total - 1
+      ? `Tahap ${index + 1} (Pelunasan)`
+      : `Tahap ${index + 1} (Cicilan ${index})`;
+
+// Susunan termin awal form katalog: persennya dari aturan termin sistem,
+// bukan angka yang diketik manual di komponen ini.
+const seedStages = (count, dpPct, firstDate = '', lastDate = '') => {
+  const pcts = defaultStagePcts(count, dpPct);
+  return pcts.map((pct, index, arr) => ({
+    label: stageLabelOf(index, arr.length),
+    pct,
+    date: index === 0 ? firstDate : lastDate
+  }));
+};
 
 // Tabs navigasi tanpa nomor halaman
 const TABS = [
@@ -110,11 +129,8 @@ export default function ProductCatalogModal({
   const [manualOriginalPrice, setManualOriginalPrice] = useState('');
 
   // Termin Pembayaran PO
-  const [terminCount, setTerminCount] = useState(2);
-  const [stages, setStages] = useState([
-    { label: 'Tahap 1 (DP)', pct: 50, date: '' },
-    { label: 'Tahap 2 (Pelunasan)', pct: 50, date: '' }
-  ]);
+  const [terminCount, setTerminCount] = useState(3);
+  const [stages, setStages] = useState(() => seedStages(3, DEFAULT_DP_PCT));
 
   // Dialog pembantu variasi
   const [showAddColorModal, setShowAddColorModal] = useState(false);
@@ -182,18 +198,10 @@ export default function ProductCatalogModal({
       } else if (initialData.stages && initialData.stages.length >= 2) {
         setStages(initialData.stages);
       } else {
-        setStages(
-          tCount === 2
-            ? [
-                { label: 'Tahap 1 (DP)', pct: initialData.min_dp_percent || 50, date: today },
-                { label: 'Tahap 2 (Pelunasan)', pct: 100 - (initialData.min_dp_percent || 50), date: defaultClose }
-              ]
-            : [
-                { label: 'Tahap 1 (DP)', pct: 40, date: today },
-                { label: 'Tahap 2 (Cicilan 1)', pct: 30, date: defaultClose },
-                { label: 'Tahap 3 (Pelunasan)', pct: 30, date: defaultClose }
-              ]
-        );
+        // Produk lama tanpa jadwal: pakai pola termin sistem (DP default lalu
+        // termin terakhir 25%), bukan angka yang diketik di sini.
+        const seedDpPct = Number(initialData.min_dp_percent) || DEFAULT_DP_PCT;
+        setStages(seedStages(tCount, seedDpPct, today, defaultClose));
       }
 
       const existingColors = [];
@@ -291,11 +299,9 @@ export default function ProductCatalogModal({
       setSaleQuota('');
       setManualOriginalPrice('');
 
-      setTerminCount(2);
-      setStages([
-        { label: 'Tahap 1 (DP)', pct: 50, date: today },
-        { label: 'Tahap 2 (Pelunasan)', pct: 50, date: defaultClose }
-      ]);
+      const seed = seedStages(3, DEFAULT_DP_PCT, today, defaultClose);
+      setTerminCount(seed.length);
+      setStages(seed);
 
       setModels(['Standard']);
       setColors([]);
@@ -328,15 +334,67 @@ export default function ProductCatalogModal({
     return stages.slice(0, terminCount).reduce((sum, s) => sum + (Number(s.pct) || 0), 0);
   }, [stages, terminCount]);
 
+  // Kompresi foto otomatis di sisi browser jika file berukuran besar (> 1.5MB) untuk mencegah Chrome freeze / not responding
+  const compressImageIfNeeded = async (file) => {
+    if (!file || !file.type?.startsWith('image/') || file.size <= 1.5 * 1024 * 1024) {
+      return file;
+    }
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          const maxDimension = 1920;
+          if (width > maxDimension || height > maxDimension) {
+            if (width > height) {
+              height = Math.round((height * maxDimension) / width);
+              width = maxDimension;
+            } else {
+              width = Math.round((width * maxDimension) / height);
+              height = maxDimension;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          canvas.toBlob(
+            (blob) => {
+              if (blob && blob.size < file.size) {
+                const compressedFile = new File([blob], file.name.replace(/\.[^/.]+$/, '.jpg'), {
+                  type: 'image/jpeg',
+                  lastModified: Date.now()
+                });
+                resolve(compressedFile);
+              } else {
+                resolve(file);
+              }
+            },
+            'image/jpeg',
+            0.85
+          );
+        };
+        img.onerror = () => resolve(file);
+        img.src = e.target.result;
+      };
+      reader.onerror = () => resolve(file);
+      reader.readAsDataURL(file);
+    });
+  };
+
   // Upload berkas internal
-  const handleInternalFileUpload = async (file, slot) => {
-    if (!file) return;
-    if (file.size > 20 * 1024 * 1024) {
-      alert('Ukuran berkas maksimal 20 MB.');
+  const handleInternalFileUpload = async (rawFile, slot) => {
+    if (!rawFile) return;
+    if (rawFile.size > 25 * 1024 * 1024) {
+      alert('Ukuran berkas maksimal 25 MB.');
       return;
     }
     setUploadingSlot(slot);
     try {
+      const file = slot === 'video' ? rawFile : await compressImageIfNeeded(rawFile);
       if (uploadFile) {
         const res = await uploadFile(file, 'product');
         const path = res?.data?.path || res?.path || '';
@@ -371,18 +429,8 @@ export default function ProductCatalogModal({
 
   const handleTerminCountChange = (count) => {
     setTerminCount(count);
-    if (count === 2) {
-      setStages([
-        { label: 'Tahap 1 (DP)', pct: 50, date: openDate || '' },
-        { label: 'Tahap 2 (Pelunasan)', pct: 50, date: closeDate || '' }
-      ]);
-    } else {
-      setStages([
-        { label: 'Tahap 1 (DP)', pct: 40, date: openDate || '' },
-        { label: 'Tahap 2 (Cicilan 1)', pct: 30, date: closeDate || '' },
-        { label: 'Tahap 3 (Pelunasan)', pct: 30, date: closeDate || '' }
-      ]);
-    }
+    // DP yang sudah diketik tetap dipakai, sisanya dibagi oleh aturan termin sistem.
+    setStages(seedStages(count, Number(stages[0]?.pct) || DEFAULT_DP_PCT, openDate || '', closeDate || ''));
   };
 
   const handleBrandChange = (brandName) => {
@@ -736,7 +784,7 @@ export default function ProductCatalogModal({
         terminCount: terminCount,
         stages: activeStages,
         paymentStages: activeStages,
-        dpPct: activeStages[0]?.pct || 50,
+        dpPct: activeStages[0]?.pct || DEFAULT_DP_PCT,
         pelunasanDueDate: activeStages[activeStages.length - 1]?.date || closeDate,
         options: {
           models: models.map((m) => ({ name: m })),
@@ -839,11 +887,14 @@ export default function ProductCatalogModal({
                 </label>
                 <div className="flex flex-col sm:flex-row items-start gap-4">
                   <div
-                    onClick={() => fileInputMainRef.current?.click()}
+                    onClick={() => {
+                      if (!uploadingSlot) fileInputMainRef.current?.click();
+                    }}
                     className="w-44 h-44 rounded-xl border-2 border-dashed border-gray-300 hover:border-gray-500 overflow-hidden relative group bg-gray-50 flex flex-col items-center justify-center cursor-pointer transition shrink-0"
                   >
                     {uploadingSlot === 'main' ? (
                       <div className="text-center p-3 text-xs text-gray-500">
+                        <span className="inline-block animate-spin mr-1">⏳</span>
                         <span>Mengunggah foto...</span>
                       </div>
                     ) : image ? (
@@ -871,14 +922,19 @@ export default function ProductCatalogModal({
                         <span className="text-[10px] text-gray-400 block mt-0.5">Klik untuk upload berkas</span>
                       </div>
                     )}
-                    <input
-                      ref={fileInputMainRef}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => handleInternalFileUpload(e.target.files?.[0], 'main')}
-                    />
                   </div>
+
+                  <input
+                    ref={fileInputMainRef}
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleInternalFileUpload(f, 'main');
+                      e.target.value = '';
+                    }}
+                  />
 
                   <div className="space-y-2 pt-1 text-xs text-gray-600">
                     <p className="font-medium text-gray-800">Petunjuk Foto Sampul:</p>
@@ -890,7 +946,9 @@ export default function ProductCatalogModal({
                     {image && (
                       <button
                         type="button"
-                        onClick={() => fileInputMainRef.current?.click()}
+                        onClick={() => {
+                          if (!uploadingSlot) fileInputMainRef.current?.click();
+                        }}
                         className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-medium hover:bg-gray-50 text-gray-700 transition"
                       >
                         Pilih Berkas Lain
@@ -910,7 +968,9 @@ export default function ProductCatalogModal({
                   <div className="space-y-1">
                     <span className="text-[11px] text-gray-500 block">Foto 2</span>
                     <div
-                      onClick={() => fileInput2Ref.current?.click()}
+                      onClick={() => {
+                        if (!uploadingSlot) fileInput2Ref.current?.click();
+                      }}
                       className="aspect-square rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-500 overflow-hidden relative group bg-gray-50 flex flex-col items-center justify-center cursor-pointer transition text-gray-400"
                     >
                       {uploadingSlot === '2' ? (
@@ -935,21 +995,27 @@ export default function ProductCatalogModal({
                           <span className="text-[10px] text-gray-400">Pilih Berkas</span>
                         </div>
                       )}
-                      <input
-                        ref={fileInput2Ref}
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => handleInternalFileUpload(e.target.files?.[0], '2')}
-                      />
                     </div>
+                    <input
+                      ref={fileInput2Ref}
+                      type="file"
+                      accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleInternalFileUpload(f, '2');
+                        e.target.value = '';
+                      }}
+                    />
                   </div>
 
                   {/* Slot Foto 3 */}
                   <div className="space-y-1">
                     <span className="text-[11px] text-gray-500 block">Foto 3</span>
                     <div
-                      onClick={() => fileInput3Ref.current?.click()}
+                      onClick={() => {
+                        if (!uploadingSlot) fileInput3Ref.current?.click();
+                      }}
                       className="aspect-square rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-500 overflow-hidden relative group bg-gray-50 flex flex-col items-center justify-center cursor-pointer transition text-gray-400"
                     >
                       {uploadingSlot === '3' ? (
@@ -974,21 +1040,27 @@ export default function ProductCatalogModal({
                           <span className="text-[10px] text-gray-400">Pilih Berkas</span>
                         </div>
                       )}
-                      <input
-                        ref={fileInput3Ref}
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => handleInternalFileUpload(e.target.files?.[0], '3')}
-                      />
                     </div>
+                    <input
+                      ref={fileInput3Ref}
+                      type="file"
+                      accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleInternalFileUpload(f, '3');
+                        e.target.value = '';
+                      }}
+                    />
                   </div>
 
                   {/* Slot Foto 4 */}
                   <div className="space-y-1">
                     <span className="text-[11px] text-gray-500 block">Foto 4</span>
                     <div
-                      onClick={() => fileInput4Ref.current?.click()}
+                      onClick={() => {
+                        if (!uploadingSlot) fileInput4Ref.current?.click();
+                      }}
                       className="aspect-square rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-500 overflow-hidden relative group bg-gray-50 flex flex-col items-center justify-center cursor-pointer transition text-gray-400"
                     >
                       {uploadingSlot === '4' ? (
@@ -1013,21 +1085,27 @@ export default function ProductCatalogModal({
                           <span className="text-[10px] text-gray-400">Pilih Berkas</span>
                         </div>
                       )}
-                      <input
-                        ref={fileInput4Ref}
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => handleInternalFileUpload(e.target.files?.[0], '4')}
-                      />
                     </div>
+                    <input
+                      ref={fileInput4Ref}
+                      type="file"
+                      accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleInternalFileUpload(f, '4');
+                        e.target.value = '';
+                      }}
+                    />
                   </div>
 
                   {/* Slot Video Produk (Internal File Upload) */}
                   <div className="space-y-1">
                     <span className="text-[11px] text-gray-500 block">Video Produk (MP4/WebM)</span>
                     <div
-                      onClick={() => fileInputVideoRef.current?.click()}
+                      onClick={() => {
+                        if (!uploadingSlot) fileInputVideoRef.current?.click();
+                      }}
                       className="aspect-square rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-500 overflow-hidden relative group bg-gray-50 flex flex-col items-center justify-center cursor-pointer transition text-gray-400"
                     >
                       {uploadingSlot === 'video' ? (
@@ -1056,14 +1134,18 @@ export default function ProductCatalogModal({
                           <span className="text-[10px] text-gray-400">MP4 / WebM</span>
                         </div>
                       )}
-                      <input
-                        ref={fileInputVideoRef}
-                        type="file"
-                        accept="video/mp4,video/webm,video/*"
-                        className="hidden"
-                        onChange={(e) => handleInternalFileUpload(e.target.files?.[0], 'video')}
-                      />
                     </div>
+                    <input
+                      ref={fileInputVideoRef}
+                      type="file"
+                      accept=".mp4,.webm,.mov,video/mp4,video/webm"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleInternalFileUpload(f, 'video');
+                        e.target.value = '';
+                      }}
+                    />
                   </div>
                 </div>
               </div>
