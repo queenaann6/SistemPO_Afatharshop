@@ -1,10 +1,45 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { SearchIcon, XIcon, EyeIcon } from '../../Icons';
+import { api, mediaUrl } from '../../../services/api';
 
-export default function MitraPaymentsTab({ orders = [] }) {
+export default function MitraPaymentsTab({ orders = [], payments: paymentsProp = [] }) {
   const [selectedProof, setSelectedProof] = useState(null);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [remotePayments, setRemotePayments] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.my.payments()
+      .then((res) => {
+        if (!cancelled && Array.isArray(res?.data)) {
+          setRemotePayments(res.data);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const normalizedRemote = useMemo(() => {
+    const list = remotePayments.length ? remotePayments : paymentsProp;
+    return (list || []).map((p) => {
+      const isAcc = p.status === 'disetujui' || p.status === 'ACC' || p.status === 'lunas';
+      const isTolak = p.status === 'ditolak';
+      return {
+        id: `pay-server-${p.id}`,
+        inv: p.invoice_number || p.order_number || `PAY-${p.id}`,
+        title: `${(p.stage || 'Pembayaran').toUpperCase()} — ${p.order_number || 'Pesanan PO'}`,
+        method: 'Transfer Bank',
+        amount: Number(p.amount) || 0,
+        status: isAcc ? 'Berhasil Diverifikasi' : isTolak ? `Ditolak: ${p.rejection_reason || 'Bukti tidak sesuai'}` : 'Menunggu Validasi',
+        proofImage: p.proof_url ? mediaUrl(p.proof_url) : null,
+        date: p.uploaded_at ? new Date(p.uploaded_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Hari ini',
+        rawDate: p.uploaded_at || ''
+      };
+    });
+  }, [remotePayments, paymentsProp]);
 
   const dynamicOrderPayments = useMemo(() => {
     const items = [];
@@ -17,7 +52,9 @@ export default function MitraPaymentsTab({ orders = [] }) {
           method: 'Transfer',
           amount: ord.dpNominal || 0,
           status: ord.dpStatus === 'ACC' || ord.dpStatus === 'Lunas' ? 'Berhasil Diverifikasi' : 'Menunggu Validasi',
-          proofImage: ord.dpProof
+          proofImage: ord.dpProof,
+          date: ord.dpVerifiedAt || ord.date || 'Hari ini',
+          rawDate: ord.date || ''
         });
       }
       if (ord.pelunasanProof) {
@@ -28,19 +65,39 @@ export default function MitraPaymentsTab({ orders = [] }) {
           method: 'Transfer',
           amount: ord.pelunasanNominal || 0,
           status: ord.pelunasanStatus === 'ACC' || ord.pelunasanStatus === 'Lunas' ? 'Berhasil Diverifikasi' : 'Menunggu Validasi',
-          proofImage: ord.pelunasanProof
+          proofImage: ord.pelunasanProof,
+          date: ord.pelunasanVerifiedAt || ord.date || 'Hari ini',
+          rawDate: ord.date || ''
         });
       }
     });
     return items;
   }, [orders]);
 
+  const combinedPayments = useMemo(() => {
+    if (normalizedRemote.length > 0) {
+      // Prioritaskan data resmi dari server
+      const seen = new Set();
+      const list = [];
+      normalizedRemote.forEach((p) => {
+        seen.add(p.id);
+        list.push(p);
+      });
+      // Masukkan local yang belum tercakup di server jika ada
+      dynamicOrderPayments.forEach((p) => {
+        if (!seen.has(p.id)) list.push(p);
+      });
+      return list;
+    }
+    return dynamicOrderPayments;
+  }, [normalizedRemote, dynamicOrderPayments]);
+
   const paymentGroups = useMemo(() => {
-    if (dynamicOrderPayments.length > 0) {
-      return [{ date: 'Hari ini (Terbaru)', items: dynamicOrderPayments }];
+    if (combinedPayments.length > 0) {
+      return [{ date: 'Riwayat Transaksi', items: combinedPayments }];
     }
     return [];
-  }, [dynamicOrderPayments]);
+  }, [combinedPayments]);
 
   const allPaymentItems = useMemo(
     () => paymentGroups.flatMap((g) => g.items || []),

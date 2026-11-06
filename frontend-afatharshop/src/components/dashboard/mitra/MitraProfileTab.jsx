@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { CameraIcon, CheckIcon } from '../../Icons';
+import { api, mediaUrl } from '../../../services/api';
 
 export default function MitraProfileTab({
   currentUser,
@@ -18,38 +19,92 @@ export default function MitraProfileTab({
   const [accountType, setAccountType] = useState('Perorangan');
   const [language, setLanguage] = useState('Bahasa Indonesia');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   // Handle Photo Upload
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        alert('Ukuran gambar maksimal 1 MB');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const dataUrl = reader.result;
-        onUpdateAvatar && onUpdateAvatar(dataUrl);
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Ukuran gambar maksimal 5 MB');
+      return;
+    }
+
+    setErrorMessage('');
+    setIsUploading(true);
+    try {
+      const uploadRes = await api.uploadFile(file, 'avatar');
+      const serverPath = uploadRes?.data?.path;
+      const avatarUrl = serverPath ? mediaUrl(serverPath) : '';
+
+      if (avatarUrl) {
+        await api.updateProfile({ avatar: avatarUrl });
+        onUpdateAvatar && onUpdateAvatar(avatarUrl);
         setSavedSuccess(true);
         setTimeout(() => setSavedSuccess(false), 3000);
+      } else {
+        // Fallback local reader
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          onUpdateAvatar && onUpdateAvatar(reader.result);
+          setSavedSuccess(true);
+          setTimeout(() => setSavedSuccess(false), 3000);
+        };
+        reader.readAsDataURL(file);
+      }
+    } catch (err) {
+      console.warn('Gagal upload avatar ke backend:', err);
+      // Fallback local preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        onUpdateAvatar && onUpdateAvatar(reader.result);
       };
       reader.readAsDataURL(file);
+    } finally {
+      setIsUploading(false);
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    onUpdateUser && onUpdateUser({
-      name,
-      email,
-      phone,
-      gender,
-      accountType,
-      language
-    });
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    setErrorMessage('');
+    setIsSaving(true);
+
+    try {
+      await api.updateProfile({
+        nama: name,
+        email: email,
+        phone: phone
+      });
+
+      onUpdateUser && onUpdateUser({
+        name,
+        email,
+        phone,
+        gender,
+        accountType,
+        language
+      });
+
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } catch (err) {
+      setErrorMessage(err?.message || 'Gagal menyimpan profil ke server.');
+      // Masih panggil onUpdateUser agar data lokal tetap sinkron
+      onUpdateUser && onUpdateUser({
+        name,
+        email,
+        phone,
+        gender,
+        accountType,
+        language
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -68,6 +123,12 @@ export default function MitraProfileTab({
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs px-4 py-2.5 rounded-xl flex items-center gap-2 animate-in fade-in">
           <CheckIcon className="w-4 h-4 text-emerald-600" />
           <span>Perubahan profil berhasil disimpan dan diperbarui!</span>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs px-4 py-2.5 rounded-xl animate-in fade-in">
+          <span>{errorMessage}</span>
         </div>
       )}
 
@@ -290,9 +351,10 @@ export default function MitraProfileTab({
         <div className="pt-2">
           <button
             type="submit"
-            className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs px-6 py-2.5 rounded-xl transition cursor-pointer shadow-xs"
+            disabled={isSaving || isUploading}
+            className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs px-6 py-2.5 rounded-xl transition cursor-pointer shadow-xs disabled:opacity-50"
           >
-            Simpan
+            {isSaving ? 'Menyimpan...' : 'Simpan Profil'}
           </button>
         </div>
       </form>

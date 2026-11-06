@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { PlusIcon } from '../../Icons';
 import AddressFormModal from '../../AddressFormModal';
 import {
@@ -6,7 +6,8 @@ import {
   getStoredAddresses,
   pushAddressBookItem,
   saveStoredAddresses,
-  setDefaultAddressItem
+  setDefaultAddressItem,
+  syncAddressBookFromApi
 } from './mitraAddressBook';
 
 export default function MitraAddressTab() {
@@ -18,6 +19,18 @@ export default function MitraAddressTab() {
   const applyServerBook = (book) => {
     if (Array.isArray(book) && book.length) setAddresses(book);
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    syncAddressBookFromApi().then((book) => {
+      if (!cancelled && Array.isArray(book)) {
+        applyServerBook(book);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSetDefault = (id) => {
     setAddresses((prev) => {

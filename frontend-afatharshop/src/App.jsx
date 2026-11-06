@@ -40,7 +40,7 @@ import {
 } from './components/dashboard/projectBridge';
 import Toast from './components/Toast';
 import { BRANDS, CATEGORIES, PRODUCTS, ROLES } from './data/mockData';
-import { api, tokenStore } from './services/api';
+import { api, mediaUrl, tokenStore } from './services/api';
 import {
   buildOrderPayload,
   mapApiUser,
@@ -220,11 +220,15 @@ export default function App() {
   const [poPaymentRequests, setPoPaymentRequests] = useState(poSeed.paymentRequests);
   const [poLedger, setPoLedger] = useState(poSeed.ledger);
   const [poSettings, setPoSettings] = useState(poSeed.settings);
+  const [mitraPayments, setMitraPayments] = useState([]);
   const mitraOrders = useMemo(() => coreOrdersToProject(coreOrders), [coreOrders]);
 
   // Live synchronous balance & total bill computation for the active user
   const computedUserBalance = useMemo(() => {
     if (!currentUser || (activeRole?.id && activeRole.id !== 'mitra')) return 'Rp 0';
+    if (currentUser?.deposit_balance !== undefined && Number(currentUser.deposit_balance) > 0) {
+      return `Rp ${Math.round(Number(currentUser.deposit_balance)).toLocaleString('id-ID')}`;
+    }
     const m = poMitra.find(
       (x) => x.name.toLowerCase() === (currentUser?.name || 'Mitra').toLowerCase()
     );
@@ -235,12 +239,18 @@ export default function App() {
       .filter((d) => {
         const dName = String(d.mitraName || '').toLowerCase();
         const uName = String(currentUser?.name || 'Mitra').toLowerCase();
-        const isMatch = dName.includes(uName) || uName.includes(dName);
+        const isMatch = !dName || dName.includes(uName) || uName.includes(dName);
         const st = String(d.status || '').toLowerCase();
         return isMatch && (st === 'acc' || (PAY && d.status === PAY.ACC) || st.includes('berhasil') || st.includes('terbukti'));
       })
       .reduce((sum, d) => sum + (Number(d.nominal) || 0), 0);
-    return `Rp ${Math.round(userAccDeposits).toLocaleString('id-ID')}`;
+    if (userAccDeposits > 0) {
+      return `Rp ${Math.round(userAccDeposits).toLocaleString('id-ID')}`;
+    }
+    if (currentUser?.deposit_balance !== undefined) {
+      return `Rp ${Math.round(Number(currentUser.deposit_balance)).toLocaleString('id-ID')}`;
+    }
+    return 'Rp 0';
   }, [poMitra, poDeposits, currentUser, activeRole?.id]);
 
   const computedUserTotalBill = useMemo(() => {
@@ -305,6 +315,11 @@ export default function App() {
       show: true,
       message: `Bukti pembayaran ${paymentData.orderNo} berhasil dikirim ke Admin Finance untuk validasi mutasi.`
     });
+    if (tokenStore.get()) {
+      api.my.payments().then((res) => {
+        if (Array.isArray(res?.data)) setMitraPayments(res.data);
+      }).catch(() => {});
+    }
   };
 
   const handleDepositSubmit = (depositData) => {
@@ -313,6 +328,13 @@ export default function App() {
       show: true,
       message: `Pengajuan deposit Rp ${Number(depositData.nominal || 0).toLocaleString('id-ID')} diteruskan ke antrean Finance.`
     });
+    if (tokenStore.get()) {
+      api.my.deposits().then((res) => {
+        if (Array.isArray(res?.data)) {
+          setPoDeposits(res.data.map(mapDepositToCore));
+        }
+      }).catch(() => {});
+    }
   };
 
   // Mitra Membayar Tagihan menggunakan Saldo Deposit (Potong Saldo & Langsung ACC)
@@ -596,15 +618,18 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [sessionToken, currentUser?.roleId]);
+  }, [sessionToken, currentUser?.roleId, activeRole?.id, currentPage]);
 
   // Seluruh data operasional dashboard admin berasal dari tabel backend
   // (pesanan lintas mitra, pengguna, deposit, pembayaran, supplier, batch,
   // pengajuan, notifikasi, pengaturan). Fallback demo dipakai bila kosong/offline.
   useEffect(() => {
-    const roleId = currentUser?.roleId;
-    const isAdminRole = ['owner', 'finance', 'marketing'].includes(roleId);
-    if (!sessionToken || !isAdminRole) return undefined;
+    const rawRole = String(currentUser?.roleId || activeRole?.id || currentUser?.role || '').toLowerCase();
+    const isAdminRole =
+      ['owner', 'finance', 'marketing'].some((r) => rawRole.includes(r)) ||
+      ['marketing_dashboard', 'finance_dashboard', 'owner_dashboard'].includes(currentPage);
+    const token = sessionToken || tokenStore.get();
+    if (!token || !isAdminRole) return undefined;
 
     let cancelled = false;
     const options = { timeout: 25000 };
@@ -614,9 +639,24 @@ export default function App() {
       try {
         const response = await api.management.bootstrap(options);
         snapshot = response?.data || null;
-      } catch {
+      } catch (err) {
+        console.warn('Bootstrap API error:', err);
         snapshot = null;
       }
+
+      // Fallback: jika bootstrap gagal atau daftar users kosong, muat langsung dari endpoint users
+      if (!snapshot || !Array.isArray(snapshot.users) || snapshot.users.length === 0) {
+        try {
+          const usersRes = await api.management.users(options);
+          if (Array.isArray(usersRes?.data) && usersRes.data.length > 0) {
+            snapshot = snapshot || {};
+            snapshot.users = usersRes.data;
+          }
+        } catch (err) {
+          console.warn('Direct users fetch error:', err);
+        }
+      }
+
       if (cancelled || !snapshot) return;
 
       const remoteOrders = snapshot.orders || [];
@@ -637,7 +677,7 @@ export default function App() {
       }
 
       const remoteUsers = snapshot.users || [];
-      if (Array.isArray(snapshot.users)) {
+      if (Array.isArray(snapshot.users) && remoteUsers.length > 0) {
         const mitraUsers = remoteUsers
           .filter((user) => roleIdFromApiUser(user) === 'mitra')
           .map(mapUserToMitra);
@@ -716,23 +756,49 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [sessionToken, currentUser?.roleId]);
+  }, [sessionToken, currentUser?.roleId, activeRole?.id, currentPage]);
 
-  // Notifikasi dan buku alamat mitra mengikuti akun JWT aktif.
+  // Notifikasi, deposit, pembayaran, dan buku alamat mitra mengikuti akun JWT aktif.
   useEffect(() => {
     if (!sessionToken || currentUser?.roleId !== 'mitra') return undefined;
 
     let cancelled = false;
 
     const syncMitraProfile = async () => {
-      const [notifResponse] = await Promise.all([
-        api.my.notifications().catch(() => null),
-        syncAddressBookFromApi()
-      ]);
-      if (cancelled) return;
+      try {
+        const [notifResponse, depositsRes, paymentsRes, meRes] = await Promise.all([
+          api.my.notifications().catch(() => null),
+          api.my.deposits().catch(() => null),
+          api.my.payments().catch(() => null),
+          api.me().catch(() => null),
+          syncAddressBookFromApi()
+        ]);
+        if (cancelled) return;
 
-      const remoteNotifs = notifResponse?.data || [];
-      if (remoteNotifs.length) setNotifications(remoteNotifs.map(mapNotificationToHeader));
+        const remoteNotifs = notifResponse?.data || [];
+        if (remoteNotifs.length) setNotifications(remoteNotifs.map(mapNotificationToHeader));
+
+        const remoteDeposits = depositsRes?.data || [];
+        if (Array.isArray(remoteDeposits) && remoteDeposits.length) {
+          const coreDeposits = remoteDeposits.map(mapDepositToCore);
+          setPoDeposits(coreDeposits);
+        }
+
+        const remotePayments = paymentsRes?.data || [];
+        if (Array.isArray(remotePayments) && remotePayments.length) {
+          setMitraPayments(remotePayments);
+        }
+
+        if (meRes?.data) {
+          const fresh = meRes.data;
+          setCurrentUser((prev) => ({
+            ...prev,
+            deposit_balance: fresh.deposit_balance ?? prev?.deposit_balance
+          }));
+        }
+      } catch (err) {
+        console.warn('Gagal sinkron data mitra dari server:', err);
+      }
     };
 
     syncMitraProfile();
@@ -740,7 +806,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [sessionToken, currentUser?.roleId]);
+  }, [sessionToken, currentUser?.roleId, activeRole?.id, currentPage]);
 
   // Setelah login, muat ulang katalog agar harga sesuai level mitra (token terkirim)
   useEffect(() => {
@@ -1002,12 +1068,25 @@ export default function App() {
     );
   };
 
-  const handleUpdateAvatar = (newAvatar) => {
-    setCurrentUser((prev) => {
-      const updated = { ...prev, avatar: newAvatar || '' };
+  const handleUpdateAvatar = async (newAvatar, fileObj = null) => {
+    let savedAvatarUrl = newAvatar || '';
+
+    if (fileObj && tokenStore.get()) {
       try {
-        if (newAvatar) {
-          localStorage.setItem('afatharshop_user_avatar', newAvatar);
+        const upRes = await api.uploadFile(fileObj, 'avatar');
+        if (upRes?.data?.path) {
+          savedAvatarUrl = mediaUrl(upRes.data.path);
+        }
+      } catch (err) {
+        console.warn('Gagal unggah foto ke backend, menggunakan data URL:', err);
+      }
+    }
+
+    setCurrentUser((prev) => {
+      const updated = { ...prev, avatar: savedAvatarUrl };
+      try {
+        if (savedAvatarUrl) {
+          localStorage.setItem('afatharshop_user_avatar', savedAvatarUrl);
         } else {
           localStorage.removeItem('afatharshop_user_avatar');
         }
@@ -1016,19 +1095,58 @@ export default function App() {
       }
       return updated;
     });
+
+    if (tokenStore.get()) {
+      try {
+        await api.updateProfile({ avatar: savedAvatarUrl });
+      } catch (e) {
+        console.warn('Gagal sinkron avatar ke backend:', e);
+      }
+    }
+
     setToast({
       show: true,
-      message: newAvatar
+      message: savedAvatarUrl
         ? 'Foto profil akun berhasil diperbarui dan disinkronkan ke seluruh sistem.'
         : 'Foto profil berhasil dihapus.'
     });
   };
 
-  const handleUpdateUser = (updatedInfo) => {
+  const handleUpdateUser = async (updatedInfo) => {
     setCurrentUser((prev) => ({
       ...prev,
       ...updatedInfo
     }));
+
+    if (tokenStore.get()) {
+      try {
+        const payload = {
+          nama: updatedInfo.name || updatedInfo.nama,
+          name: updatedInfo.name || updatedInfo.nama,
+          email: updatedInfo.email,
+          phone: updatedInfo.phone,
+          city: updatedInfo.city,
+          avatar: updatedInfo.avatar
+        };
+        const res = await api.updateProfile(payload);
+        if (res?.data || res?.user) {
+          const fresh = res.data || res.user;
+          setCurrentUser((prev) => ({
+            ...prev,
+            ...mapApiUser(fresh),
+            ...updatedInfo
+          }));
+        }
+        setToast({
+          show: true,
+          message: 'Informasi profil berhasil disimpan ke database backend.'
+        });
+        return;
+      } catch (err) {
+        console.warn('Gagal simpan profil ke backend:', err);
+      }
+    }
+
     setToast({
       show: true,
       message: 'Informasi profil berhasil disimpan.'
@@ -1394,6 +1512,7 @@ export default function App() {
             poBatches={poBatches}
             products={products}
             deposits={poDeposits}
+            payments={mitraPayments}
             onUploadPayment={handleUploadPayment}
             onDepositSubmit={handleDepositSubmit}
             onPayWithDeposit={handlePayWithDeposit}
@@ -1412,6 +1531,8 @@ export default function App() {
         {currentPage === 'marketing_dashboard' && (
           <MarketingDashboard
             currentUser={{ ...synchronizedUser, role: 'marketing' }}
+            onUpdateUser={handleUpdateUser}
+            onUpdateAvatar={handleUpdateAvatar}
             onNavigateStore={handleNavigateHome}
             onLogout={handleLogout}
             orders={coreOrders}
@@ -1448,6 +1569,8 @@ export default function App() {
         {currentPage === 'finance_dashboard' && (
           <FinanceDashboard
             currentUser={{ ...synchronizedUser, role: 'finance' }}
+            onUpdateUser={handleUpdateUser}
+            onUpdateAvatar={handleUpdateAvatar}
             onNavigateStore={handleNavigateHome}
             onLogout={handleLogout}
             orders={coreOrders}
@@ -1478,6 +1601,8 @@ export default function App() {
         {currentPage === 'owner_dashboard' && (
           <OwnerDashboard
             currentUser={{ ...synchronizedUser, role: 'owner' }}
+            onUpdateUser={handleUpdateUser}
+            onUpdateAvatar={handleUpdateAvatar}
             onNavigateStore={handleNavigateHome}
             onLogout={handleLogout}
             orders={coreOrders}
@@ -1491,8 +1616,10 @@ export default function App() {
             ledger={poLedger}
             settings={poSettings}
             onChangeOrders={setCoreOrders}
+            onChangeMitra={setPoMitra}
             onChangeTeam={setPoTeam}
             onChangePaymentRequests={setPoPaymentRequests}
+            onChangeLedger={setPoLedger}
             onChangeSettings={setPoSettings}
             onPrintInvoice={(order) => openInvoicePrintTab(order, publicBankAccounts)}
           />

@@ -119,6 +119,122 @@ class AuthController extends Controller
         ]);
     }
 
+    public function updateProfile(Request $request)
+    {
+        $user = auth('api')->user();
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated.',
+            ], 401);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'name'     => 'nullable|string|max:100',
+            'nama'     => 'nullable|string|max:100',
+            'email'    => 'nullable|email|max:100|unique:users,email,' . $user->id,
+            'phone'    => 'nullable|string|max:20',
+            'avatar'   => 'nullable|string',
+            'city'     => 'nullable|string|max:100',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validasi gagal.',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        $nama = trim((string) ($request->input('nama') ?? $request->input('name') ?? ''));
+        if ($nama !== '') {
+            $user->nama = $nama;
+        }
+
+        if ($request->filled('email')) {
+            $user->email = Str::lower($request->email);
+        }
+
+        if ($request->has('phone')) {
+            $user->phone = $request->phone;
+        }
+
+        if ($request->has('avatar')) {
+            $user->avatar = $request->avatar;
+        }
+
+        if ($request->has('city')) {
+            $user->city = $request->city;
+        }
+
+        $user->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Profil berhasil diperbarui.',
+            'data'    => $this->userPayload($user->fresh()),
+            'user'    => $this->userPayload($user->fresh()),
+        ]);
+    }
+
+    public function changePassword(Request $request)
+    {
+        $user = auth('api')->user();
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated.',
+            ], 401);
+        }
+
+        $oldPassword = $request->input('current_password') ?? $request->input('old_password');
+        $newPassword = $request->input('new_password') ?? $request->input('password');
+        $confirmPassword = $request->input('new_password_confirmation')
+            ?? $request->input('password_confirmation')
+            ?? $request->input('confirm_password');
+
+        $validator = Validator::make([
+            'current_password'          => $oldPassword,
+            'new_password'              => $newPassword,
+            'new_password_confirmation' => $confirmPassword,
+        ], [
+            'current_password' => 'required|string',
+            'new_password'     => 'required|string|min:6',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validasi gagal.',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        if (!Hash::check($oldPassword, $user->password ?? '')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Password saat ini salah.',
+                'errors'  => ['current_password' => ['Password saat ini salah.']],
+            ], 422);
+        }
+
+        if ($confirmPassword && $newPassword !== $confirmPassword) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Konfirmasi password baru tidak cocok.',
+                'errors'  => ['new_password_confirmation' => ['Konfirmasi password baru tidak cocok.']],
+            ], 422);
+        }
+
+        $user->password = Hash::make($newPassword);
+        $user->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password berhasil diperbarui.',
+        ]);
+    }
+
     public function refresh()
     {
         $token = auth('api')->refresh();

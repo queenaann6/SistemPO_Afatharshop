@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { XIcon, ShieldCheckIcon } from './Icons';
+import { XIcon, ShieldCheckIcon, CheckIcon, WhatsAppIcon } from './Icons';
 import { ROLES } from '../data/mockData';
+import { api } from '../services/api';
+import { mapApiUser, roleIdFromApiUser } from '../services/adapters';
 
 export default function AuthModal({
   isOpen,
@@ -19,27 +21,102 @@ export default function AuthModal({
   const [ownerName, setOwnerName] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [city, setCity] = useState('');
+  const [email, setEmail] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [regSuccessMsg, setRegSuccessMsg] = useState('');
 
   const currentRole = ROLES.find((r) => r.id === selectedRoleId) || ROLES[0];
 
-  const handleLoginSubmit = (e) => {
+  const handleLoginSubmit = async (e) => {
     e.preventDefault();
-    const displayName = identifier ? identifier.split('@')[0] : currentRole.name;
-    onLoginSuccess && onLoginSuccess(currentRole, { identifier, name: displayName });
-    onClose();
+    setErrorMsg('');
+
+    if (!identifier.trim()) {
+      setErrorMsg('Email atau Nomor WhatsApp wajib diisi.');
+      return;
+    }
+    if (!password) {
+      setErrorMsg('Password wajib diisi.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const response = await api.login(identifier.trim(), password);
+      const apiUser = response?.user || {};
+      const roleId = roleIdFromApiUser(apiUser);
+      const matchedRole = ROLES.find((r) => r.id === roleId) || {
+        id: roleId,
+        name: apiUser.role || roleId
+      };
+      const mappedUser = mapApiUser(apiUser);
+
+      onLoginSuccess &&
+        onLoginSuccess(matchedRole, {
+          ...mappedUser,
+          identifier: identifier.trim(),
+          role: matchedRole.name,
+          roleId
+        });
+      onClose();
+    } catch (err) {
+      setErrorMsg(err?.message || 'Login gagal. Periksa email/no. HP dan password Anda.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleRegisterSubmit = (e) => {
+  const handleRegisterSubmit = async (e) => {
     e.preventDefault();
-    const mitraRole = ROLES.find((r) => r.id === 'mitra');
-    onLoginSuccess && onLoginSuccess(mitraRole, { storeName, whatsapp, name: storeName || 'Mitra Baru' });
-    onClose();
+    setErrorMsg('');
+    setRegSuccessMsg('');
+
+    const fullName = (ownerName || storeName).trim();
+    if (!fullName) {
+      setErrorMsg('Nama lengkap / nama pengelola wajib diisi.');
+      return;
+    }
+    if (!whatsapp.trim()) {
+      setErrorMsg('Nomor WhatsApp wajib diisi.');
+      return;
+    }
+    if (!email.trim()) {
+      setErrorMsg('Alamat email wajib diisi.');
+      return;
+    }
+    if (regPassword.length < 8) {
+      setErrorMsg('Password minimal 8 karakter.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        name: fullName,
+        nama: fullName,
+        email: email.trim(),
+        phone: whatsapp.trim(),
+        password: regPassword,
+        password_confirmation: regPassword
+      };
+
+      const res = await api.register(payload);
+      setRegSuccessMsg(
+        res?.message || 'Pendaftaran kemitraan berhasil! Menunggu verifikasi admin.'
+      );
+    } catch (err) {
+      setErrorMsg(err?.message || 'Pendaftaran gagal. Periksa kembali isian formulir.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-stone-200 overflow-hidden max-h-[92vh] flex flex-col">
-        
         {/* Header */}
         <div className="px-5 py-4 bg-[#6B1416] text-white flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -66,7 +143,10 @@ export default function AuthModal({
         {/* Tab Switcher */}
         <div className="flex border-b border-stone-200 bg-stone-50 text-xs font-semibold">
           <button
-            onClick={() => setMode('login')}
+            onClick={() => {
+              setMode('login');
+              setErrorMsg('');
+            }}
             className={`flex-1 py-3 text-center transition cursor-pointer ${
               mode === 'login'
                 ? 'bg-white text-[#6B1416] border-b-2 border-[#6B1416] font-bold'
@@ -76,7 +156,10 @@ export default function AuthModal({
             Masuk ke Akun
           </button>
           <button
-            onClick={() => setMode('register')}
+            onClick={() => {
+              setMode('register');
+              setErrorMsg('');
+            }}
             className={`flex-1 py-3 text-center transition cursor-pointer ${
               mode === 'register'
                 ? 'bg-white text-[#6B1416] border-b-2 border-[#6B1416] font-bold'
@@ -89,26 +172,15 @@ export default function AuthModal({
 
         {/* Content Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-4">
-          
+          {errorMsg && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl">
+              {errorMsg}
+            </div>
+          )}
+
           {/* LOGIN FORM */}
           {mode === 'login' && (
             <form onSubmit={handleLoginSubmit} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 mb-1">
-                  Pilih Akses Pengguna
-                </label>
-                <select
-                  value={selectedRoleId}
-                  onChange={(e) => setSelectedRoleId(e.target.value)}
-                  className="w-full text-xs px-3 py-2 border border-stone-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-[#6B1416] font-medium"
-                >
-                  <option value="mitra">Mitra / Agen Distributor (Pemesanan & PO)</option>
-                  <option value="marketing">Admin Purchasing (Katalog & Jadwal PO)</option>
-                  <option value="finance">Admin Finance (Verifikasi DP & Invoice)</option>
-                  <option value="owner">Owner / Direksi (Executive Summary)</option>
-                </select>
-              </div>
-
               <div>
                 <label className="block text-xs font-medium text-stone-700 mb-1">
                   Email atau No. WhatsApp
@@ -124,14 +196,9 @@ export default function AuthModal({
               </div>
 
               <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="text-xs font-medium text-stone-700">
-                    Kata Sandi
-                  </label>
-                  <a href="#" className="text-[11px] text-[#6B1416] hover:underline font-medium">
-                    Lupa sandi?
-                  </a>
-                </div>
+                <label className="block text-xs font-medium text-stone-700 mb-1">
+                  Kata Sandi
+                </label>
                 <input
                   type="password"
                   required
@@ -145,9 +212,10 @@ export default function AuthModal({
               <div className="pt-1">
                 <button
                   type="submit"
-                  className="w-full bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs sm:text-sm py-2.5 rounded-xl shadow-md transition cursor-pointer"
+                  disabled={isSubmitting}
+                  className="w-full bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-xs sm:text-sm py-2.5 rounded-xl shadow-md transition disabled:opacity-50 cursor-pointer"
                 >
-                  Masuk Sekarang
+                  {isSubmitting ? 'Memproses login...' : 'Masuk Sekarang'}
                 </button>
               </div>
 
@@ -156,7 +224,10 @@ export default function AuthModal({
                   Belum terdaftar sebagai mitra?{' '}
                   <button
                     type="button"
-                    onClick={() => setMode('register')}
+                    onClick={() => {
+                      setMode('register');
+                      setErrorMsg('');
+                    }}
                     className="text-[#6B1416] font-bold hover:underline cursor-pointer"
                   >
                     Daftar di sini
@@ -166,99 +237,79 @@ export default function AuthModal({
             </form>
           )}
 
-          {/* REGISTER FORM */}
+          {/* REGISTER MODE DIRECT TO ADMIN */}
           {mode === 'register' && (
-            <form onSubmit={handleRegisterSubmit} className="space-y-3">
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-900 flex items-start gap-2">
-                <ShieldCheckIcon className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                <span>
-                  Khusus pendaftaran <strong>Mitra & Agen Resmi</strong> untuk mendapatkan harga distributor, sistem booking kuota PO, dan fasilitas katalog.
-                </span>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-stone-700 mb-1">
-                  Nama Butik / Toko Anda
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Contoh: Butik Hijab Zahra"
-                  value={storeName}
-                  onChange={(e) => setStoreName(e.target.value)}
-                  className="w-full text-xs px-3 py-2 border border-stone-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#6B1416]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-stone-700 mb-1">
-                  Nama Pemilik / Pengelola
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Nama Lengkap"
-                  value={ownerName}
-                  onChange={(e) => setOwnerName(e.target.value)}
-                  className="w-full text-xs px-3 py-2 border border-stone-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#6B1416]"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5">
+            <div className="space-y-4 text-center">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 flex items-start gap-2.5 text-left">
+                <ShieldCheckIcon className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
                 <div>
-                  <label className="block text-xs font-medium text-stone-700 mb-1">
-                    No. WhatsApp
-                  </label>
-                  <input
-                    type="tel"
-                    required
-                    placeholder="0812xxxxxxxx"
-                    value={whatsapp}
-                    onChange={(e) => setWhatsapp(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-stone-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#6B1416]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-stone-700 mb-1">
-                    Kota / Wilayah
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Kota Bogor"
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
-                    className="w-full text-xs px-3 py-2 border border-stone-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-[#6B1416]"
-                  />
+                  <p className="font-bold">Pendaftaran Kemitraan Resmi</p>
+                  <p className="text-[11px] text-amber-800 mt-0.5">
+                    Pendaftaran Mitra / Agen / Sub Distributor diproses langsung melalui Admin Resmi kami via WhatsApp untuk verifikasi wilayah & alokasi harga terbaik.
+                  </p>
                 </div>
               </div>
 
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  className="w-full bg-[#F0C973] hover:bg-[#E5BC64] text-[#420C0E] font-bold text-xs sm:text-sm py-2.5 rounded-xl shadow-md transition cursor-pointer"
+              <div className="bg-[#FFFBF7] border border-[#FBEAD6] rounded-xl p-3 text-left space-y-1.5 text-xs">
+                <p className="font-bold text-[#8B6A3E] text-[11px] uppercase tracking-wider">
+                  Keuntungan Mitra Afathar Shop:
+                </p>
+                <ul className="space-y-1 text-stone-700 text-[11px]">
+                  <li className="flex items-center gap-2">
+                    <CheckIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Akses Katalog Pre-Order Lebih Awal</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Harga Khusus Reseller & Agen Resmi</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Foto & Video Promosi Siap Pakai</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div className="pt-1 space-y-2">
+                <a
+                  href={`https://wa.me/6281219991888?text=${encodeURIComponent(
+                    'Halo Admin Afathar Shop, saya tertarik mendaftar sebagai Mitra / Reseller resmi Afathar Shop. Mohon informasi syarat & ketentuannya. Terima kasih! 🙏✨'
+                  )}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full py-3 px-4 rounded-xl bg-[#1E7E4E] hover:bg-[#16673F] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
                 >
-                  Ajukan Kemitraan
-                </button>
+                  <WhatsAppIcon className="w-4 h-4 fill-white" />
+                  <span>Daftar via WhatsApp Admin</span>
+                </a>
+                <div className="space-y-0.5 text-center">
+                  <p className="text-[10px] text-stone-600 font-medium">
+                    Admin Online: Senin - Jumat 09.00-17.00 • Sabtu 09.00-14.00
+                  </p>
+                  <p className="text-[9.5px] text-stone-500">
+                    Hari Libur & Ramadhan akan ada perubahan jam kerja.
+                  </p>
+                </div>
               </div>
 
-              <div className="text-center pt-1">
+              <div className="text-center pt-2 border-t border-stone-100">
                 <p className="text-xs text-stone-500">
                   Sudah memiliki akun?{' '}
                   <button
                     type="button"
-                    onClick={() => setMode('login')}
+                    onClick={() => {
+                      setMode('login');
+                      setErrorMsg('');
+                    }}
                     className="text-[#6B1416] font-bold hover:underline cursor-pointer"
                   >
                     Masuk ke akun
                   </button>
                 </p>
               </div>
-            </form>
+            </div>
           )}
-
         </div>
-
       </div>
     </div>
   );

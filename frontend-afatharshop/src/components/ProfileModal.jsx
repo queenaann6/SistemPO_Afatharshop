@@ -31,7 +31,7 @@ export default function ProfileModal({
       const reader = new FileReader();
       reader.onloadend = () => {
         const dataUrl = reader.result;
-        onUpdateAvatar && onUpdateAvatar(dataUrl);
+        onUpdateAvatar && onUpdateAvatar(dataUrl, file);
         setUploadSuccess(true);
         setTimeout(() => setUploadSuccess(false), 3000);
       };

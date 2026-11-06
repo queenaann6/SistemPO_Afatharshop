@@ -29,6 +29,7 @@ export default function MitraDashboard({
   adminCouriers = [],
   onUpdateOrder,
   deposits = [],
+  payments = [],
   products = []
 }) {
   return (
@@ -114,7 +115,7 @@ export default function MitraDashboard({
             )}
 
             {activeTab === 'riwayat_pembayaran' && (
-              <MitraPaymentsTab orders={orders} currentUser={currentUser} />
+              <MitraPaymentsTab orders={orders} currentUser={currentUser} payments={payments} />
             )}
 
             {activeTab === 'deposit' && (

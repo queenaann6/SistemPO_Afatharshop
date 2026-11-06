@@ -1082,7 +1082,9 @@ const ICON_PATHS = {
   arrow: 'M4 11h12.2l-4.6-4.6L13 5l7 7-7 7-1.4-1.4 4.6-4.6H4v-2Z',
   card: 'M3 5h18v14H3V5Zm2 3v2h14V8H5Zm0 4v5h8v-5H5Z',
   shield: 'M12 2 4 5v6c0 5 3.4 9.5 8 11 4.6-1.5 8-6 8-11V5l-8-3Zm0 2.2 6 2.2V11c0 3.9-2.5 7.5-6 8.8C8.5 18.5 6 14.9 6 11V6.4l6-2.2Z',
-  spark: 'm12 2 2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4L12 2Z'
+  spark: 'm12 2 2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4L12 2Z',
+  settings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.44.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
+  key: 'M12.65 10C11.7 7.31 8.9 5.5 5.77 6.12 3.48 6.58 1.62 8.44 1.14 10.74c-.82 3.93 1.84 7.26 5.51 7.26 2.37 0 4.41-1.29 5.5-3.2l2.43 2.42c.39.39 1.02.39 1.41 0l1.42-1.42 1.41 1.42c.39.39 1.02.39 1.41 0l2.83-2.83c.39-.39.39-1.02 0-1.41L12.65 10zm-6.15 4c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z'
 };
 
 export function Icon({ name, className = 'w-4 h-4' }) {
@@ -2418,11 +2420,25 @@ export function DashboardShell({
           </div>
 
           <div className={`p-3 border-t ${sideBorder} space-y-2`}>
-            <div className={`flex items-center gap-2.5 px-2 py-2 rounded-lg ${darkSidebar ? 'bg-white/5' : 'bg-gray-50'}`}>
-              <div className={`w-8 h-8 rounded-full ${accent.solidText} flex items-center justify-center text-[11px] font-bold shrink-0`}>
-                {initials(currentUser?.name || 'User')}
+            <div
+              onClick={() => onNavigate && onNavigate('pengaturan_akun')}
+              className={`flex items-center gap-2.5 px-2 py-2 rounded-lg cursor-pointer transition ${
+                darkSidebar ? 'bg-white/5 hover:bg-white/10' : 'bg-gray-50 hover:bg-gray-100'
+              }`}
+              title="Buka Pengaturan Akun"
+            >
+              <div className={`w-8 h-8 rounded-full ${accent.solidText} overflow-hidden flex items-center justify-center text-[11px] font-bold shrink-0 border border-gray-200/50`}>
+                {currentUser?.avatar && !currentUser.avatar.includes('unsplash.com') ? (
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser?.name || 'User'}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  initials(currentUser?.name || 'User')
+                )}
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className={`text-[11px] font-semibold truncate ${darkSidebar ? 'text-white' : 'text-gray-900'}`}>
                   {currentUser?.name || 'User'}
                 </p>
@@ -2430,6 +2446,7 @@ export function DashboardShell({
                   {roleLabel(currentUser?.role)}
                 </p>
               </div>
+              <Icon name="settings" className={`w-3.5 h-3.5 shrink-0 ${sideMuted}`} />
             </div>
             {onNavigateStore && (
               <button
@@ -2531,9 +2548,21 @@ export function DashboardShell({
                   </>
                 )}
               </div>
-              <div className="flex items-center gap-2 pl-2 border-l border-gray-200">
-                <div className={`w-8 h-8 rounded-full ${accent.solidText} flex items-center justify-center text-[11px] font-bold`}>
-                  {initials(currentUser?.name || 'U')}
+              <div
+                onClick={() => onNavigate && onNavigate('pengaturan_akun')}
+                className="flex items-center gap-2 pl-2 border-l border-gray-200 cursor-pointer hover:opacity-80 transition"
+                title="Buka Pengaturan Akun"
+              >
+                <div className={`w-8 h-8 rounded-full ${accent.solidText} overflow-hidden flex items-center justify-center text-[11px] font-bold border border-gray-200/50`}>
+                  {currentUser?.avatar && !currentUser.avatar.includes('unsplash.com') ? (
+                    <img
+                      src={currentUser.avatar}
+                      alt={currentUser?.name || 'User'}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    initials(currentUser?.name || 'U')
+                  )}
                 </div>
                 <div className="hidden sm:block">
                   <p className="text-[11px] font-bold text-gray-900 leading-none">{currentUser?.name || 'User'}</p>

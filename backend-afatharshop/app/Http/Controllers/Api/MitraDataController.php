@@ -26,18 +26,21 @@ class MitraDataController extends Controller
             ->get();
 
         $data = $deposits->map(fn (DepositTransaction $deposit) => [
-            'id'            => $deposit->id,
-            'type'          => $deposit->type,
-            'amount'        => (float) $deposit->amount,
-            'bank'          => $deposit->bankAccount?->bank_name,
-            'bank_account'  => $deposit->bankAccount?->account_number,
-            'proof_url'     => $deposit->proof_url,
-            'status'        => $deposit->status,
-            'verified_by'   => $deposit->verifier?->nama,
-            'verified_at'   => optional($deposit->verified_at)->toIso8601String(),
-            'balance_after' => (float) $deposit->balance_after,
-            'description'   => $deposit->description,
-            'created_at'    => optional($deposit->created_at)->toIso8601String(),
+            'id'             => $deposit->id,
+            'type'           => $deposit->type,
+            'mitra_id'       => $user->id,
+            'mitra_name'     => $user->nama ?? $user->name,
+            'amount'         => (float) $deposit->amount,
+            'bank'           => $deposit->bankAccount?->bank_name,
+            'bank_account'   => $deposit->bankAccount?->account_number,
+            'proof_url'      => $deposit->proof_url,
+            'status'         => $deposit->status,
+            'verified_by'    => $deposit->verifier?->nama,
+            'verified_at'    => optional($deposit->verified_at)->toIso8601String(),
+            'balance_before' => (float) $deposit->balance_before,
+            'balance_after'  => (float) $deposit->balance_after,
+            'description'    => $deposit->description,
+            'created_at'     => optional($deposit->created_at)->toIso8601String(),
         ]);
 
         return response()->json([

@@ -44,26 +44,37 @@ class ManagementController extends Controller
      */
     public function bootstrap(): JsonResponse
     {
-        $section = fn (JsonResponse $response) => $response->getData(true)['data'];
+        $section = function (callable $fn) {
+            try {
+                $response = $fn();
+                if ($response instanceof JsonResponse) {
+                    return $response->getData(true)['data'] ?? [];
+                }
+                return [];
+            } catch (\Throwable $e) {
+                Log::warning('Bootstrap section failed: ' . $e->getMessage());
+                return [];
+            }
+        };
 
         return response()->json([
             'success' => true,
             'message' => 'Snapshot data manajemen.',
             'data'    => [
-                'orders'           => $section($this->orders()),
-                'users'            => $section($this->users()),
-                'products'         => $section($this->products()),
-                'brands'           => $section($this->brands()),
-                'categories'       => $section($this->categories()),
-                'deposits'         => $section($this->deposits()),
-                'payments'         => $section($this->payments()),
-                'suppliers'        => $section($this->suppliers()),
-                'batches'          => $section($this->batches()),
-                'payment_requests' => $section($this->paymentRequests()),
-                'notifications'    => $section($this->notifications()),
-                'bank_accounts'    => $section($this->bankAccounts()),
-                'couriers'         => $section($this->couriers()),
-                'settings'         => $section($this->settings()),
+                'orders'           => $section(fn () => $this->orders()),
+                'users'            => $section(fn () => $this->users()),
+                'products'         => $section(fn () => $this->products()),
+                'brands'           => $section(fn () => $this->brands()),
+                'categories'       => $section(fn () => $this->categories()),
+                'deposits'         => $section(fn () => $this->deposits()),
+                'payments'         => $section(fn () => $this->payments()),
+                'suppliers'        => $section(fn () => $this->suppliers()),
+                'batches'          => $section(fn () => $this->batches()),
+                'payment_requests' => $section(fn () => $this->paymentRequests()),
+                'notifications'    => $section(fn () => $this->notifications()),
+                'bank_accounts'    => $section(fn () => $this->bankAccounts()),
+                'couriers'         => $section(fn () => $this->couriers()),
+                'settings'         => $section(fn () => $this->settings()),
             ],
         ]);
     }
@@ -647,6 +658,14 @@ class ManagementController extends Controller
     public function notifications(): JsonResponse
     {
         $user = auth('api')->user();
+        if (!$user) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Notifikasi pengguna.',
+                'total'   => 0,
+                'data'    => [],
+            ]);
+        }
 
         $notifications = Notification::query()
             ->where('user_id', $user->id)
@@ -736,7 +755,7 @@ class ManagementController extends Controller
      */
     public function uploadFile(Request $request): JsonResponse
     {
-        $folder = in_array((string) $request->folder, ['proof', 'product', 'avatar'], true)
+        $folder = in_array((string) $request->folder, ['proof', 'product', 'avatar', 'avatars'], true)
             ? (string) $request->folder
             : 'proof';
 
@@ -784,10 +803,11 @@ class ManagementController extends Controller
         ], 201);
     }
 
-    public function bankAccounts(Request $request): JsonResponse
+    public function bankAccounts(?Request $request = null): JsonResponse
     {
+        $request ??= request();
         $query = BankAccount::query();
-        if ($request->filled('type')) {
+        if ($request && $request->filled('type')) {
             $query->where('type', $request->type);
         }
         $accounts = $query->orderBy('id')->get();
@@ -1147,10 +1167,16 @@ class ManagementController extends Controller
     }
 
     // =========================================================================
-    // 1. USER MANAGEMENT (Owner & Marketing)
+    // 1. USER MANAGEMENT (Owner, Marketing, Finance)
     // =========================================================================
     public function storeUser(Request $request): JsonResponse
     {
+        if ($request->filled('email')) {
+            $request->merge([
+                'email' => strtolower(trim((string) $request->email)),
+            ]);
+        }
+
         $validator = Validator::make($request->all(), [
             'email'    => 'required|email|max:150|unique:users,email',
             'nama'     => 'nullable|string|max:150',
@@ -1159,6 +1185,7 @@ class ManagementController extends Controller
             'level'    => 'nullable|string|max:50',
             'phone'    => 'nullable|string|max:30',
             'city'     => 'nullable|string|max:100',
+            'address'  => 'nullable|string|max:255',
             'password' => 'nullable|string|min:6',
         ]);
 
@@ -1180,7 +1207,12 @@ class ManagementController extends Controller
         }
 
         $role = strtolower(trim((string) ($request->role ?? 'mitra')));
+        if ($role === 'purchasing') $role = 'marketing';
+        if ($role === 'keuangan') $role = 'finance';
+        if ($role === 'direksi') $role = 'owner';
+
         $level = strtolower(trim((string) ($request->level ?? '')));
+        $level = str_replace(['-', '_'], ' ', $level);
 
         if ($level === '') {
             $level = $role === 'mitra' ? 'reseller' : $role;
@@ -1194,22 +1226,33 @@ class ManagementController extends Controller
                 ], 422);
             }
             $level = $role;
-        } elseif (!in_array($level, User::MITRA_LEVELS, true)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Level mitra harus salah satu dari: ' . implode(', ', User::MITRA_LEVELS) . '.',
-            ], 422);
+        } else {
+            if (str_contains($level, 'sub')) {
+                $level = 'sub db';
+            } elseif (str_contains($level, 'agen')) {
+                $level = 'agen';
+            } elseif (str_contains($level, 'reseller')) {
+                $level = 'reseller';
+            } elseif (str_contains($level, 'db')) {
+                $level = 'db all';
+            } elseif (!in_array($level, User::MITRA_LEVELS, true)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Level mitra harus salah satu dari: ' . implode(', ', User::MITRA_LEVELS) . '.',
+                ], 422);
+            }
         }
 
         $password = $request->filled('password') ? (string) $request->password : 'Afathar#123';
+        $city = trim((string) ($request->city ?? $request->address ?? ''));
 
         $user = User::create([
             'nama'            => $nama,
             'email'           => strtolower(trim((string) $request->email)),
-            'password'        => Hash::make($password),
+            'password'        => $password,
             'level'           => $level,
             'phone'           => $request->phone ?? null,
-            'city'            => $request->city ?? null,
+            'city'            => $city !== '' ? $city : null,
             'deposit_balance' => (float) ($request->deposit_balance ?? 0),
             'is_active'       => $request->boolean('is_active', true),
         ]);
@@ -1243,7 +1286,8 @@ class ManagementController extends Controller
 
     public function updateUser(Request $request, $id): JsonResponse
     {
-        $user = User::find($id);
+        $numericId = is_numeric($id) ? (int) $id : (int) preg_replace('/\D/', '', (string) $id);
+        $user = $numericId > 0 ? User::find($numericId) : null;
         if (!$user) {
             return response()->json(['success' => false, 'message' => 'User tidak ditemukan.'], 404);
         }
@@ -1265,11 +1309,22 @@ class ManagementController extends Controller
         if ($request->filled('phone')) {
             $user->phone = trim((string) $request->phone);
         }
-        if ($request->filled('city')) {
-            $user->city = trim((string) $request->city);
+        if ($request->has('city') || $request->has('address')) {
+            $user->city = trim((string) ($request->city ?? $request->address ?? ''));
         }
         if ($request->filled('level')) {
             $level = strtolower(trim((string) $request->level));
+            $level = str_replace(['-', '_'], ' ', $level);
+            if (str_contains($level, 'sub')) {
+                $level = 'sub db';
+            } elseif (str_contains($level, 'agen')) {
+                $level = 'agen';
+            } elseif (str_contains($level, 'reseller')) {
+                $level = 'reseller';
+            } elseif (str_contains($level, 'db')) {
+                $level = 'db all';
+            }
+
             $allowed = array_merge(User::MITRA_LEVELS, ['owner', 'finance', 'marketing']);
             if (!in_array($level, $allowed, true)) {
                 return response()->json([
@@ -1280,6 +1335,9 @@ class ManagementController extends Controller
             $user->level = $level;
         } elseif ($request->filled('role')) {
             $r = strtolower(trim((string) $request->role));
+            if ($r === 'purchasing') $r = 'marketing';
+            if ($r === 'keuangan') $r = 'finance';
+            if ($r === 'direksi') $r = 'owner';
             if (!in_array($r, ['mitra', 'owner', 'finance', 'marketing'], true)) {
                 return response()->json([
                     'success' => false,
@@ -1311,7 +1369,16 @@ class ManagementController extends Controller
             }
         }
         if ($request->filled('password')) {
-            $user->password = Hash::make((string) $request->password);
+            $pwd = (string) $request->password;
+            if (strlen($pwd) < 6) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Password minimal 6 karakter.',
+                    'errors'  => ['password' => ['Password minimal 6 karakter.']],
+                ], 422);
+            }
+            $user->password = $pwd;
+            $this->logActivity('user.password_reset', 'Pengguna', "Password pengguna {$user->nama} diperbarui");
         }
         $user->save();
 
@@ -1337,7 +1404,11 @@ class ManagementController extends Controller
 
     public function destroyUser($id): JsonResponse
     {
-        $user = User::find($id);
+        $numericId = is_numeric($id) ? (int) $id : (int) preg_replace('/\D/', '', (string) $id);
+        $user = $numericId > 0 ? User::find($numericId) : null;
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'User tidak ditemukan.'], 404);
+        }
         if (!$user) {
             return response()->json(['success' => false, 'message' => 'User tidak ditemukan.'], 404);
         }
@@ -1351,12 +1422,24 @@ class ManagementController extends Controller
 
         $orderCount = $user->orders()->count();
         if ($orderCount > 0) {
-            return $this->linkedResponse('pengguna', 'pesanan', $orderCount);
+            if (request()->boolean('force')) {
+                foreach ($user->orders as $order) {
+                    $order->items()->delete();
+                    $order->payments()->delete();
+                    $order->delete();
+                }
+            } else {
+                return $this->linkedResponse('pengguna', 'pesanan', $orderCount);
+            }
         }
 
         $depositCount = DepositTransaction::where('user_id', $user->id)->count();
         if ($depositCount > 0) {
-            return $this->linkedResponse('pengguna', 'riwayat deposit', $depositCount);
+            if (request()->boolean('force')) {
+                DepositTransaction::where('user_id', $user->id)->delete();
+            } else {
+                return $this->linkedResponse('pengguna', 'riwayat deposit', $depositCount);
+            }
         }
 
         $nama = $user->nama;
@@ -2778,6 +2861,87 @@ class ManagementController extends Controller
             'success' => true,
             'message' => "Pengajuan pembayaran {$pr->code} berhasil diperbarui ({$pr->status}).",
             'data'    => $this->paymentRequestRow($pr->fresh(['creator', 'bankAccount'])),
+        ]);
+    }
+
+    public function destroyPaymentRequest($id): JsonResponse
+    {
+        $pr = PaymentRequest::find($id);
+        if (!$pr) {
+            return response()->json(['success' => false, 'message' => 'Pengajuan pembayaran tidak ditemukan.'], 404);
+        }
+
+        $code = $pr->code;
+        $pr->delete();
+
+        $this->logActivity('payment_request.delete', 'Pengajuan Bayar', "Pengajuan pembayaran {$code} dihapus oleh owner");
+
+        return response()->json([
+            'success' => true,
+            'message' => "Pengajuan pembayaran {$code} berhasil dihapus.",
+        ]);
+    }
+
+    public function destroyPayment($id): JsonResponse
+    {
+        $payment = Payment::find($id);
+        if (!$payment) {
+            return response()->json(['success' => false, 'message' => 'Catatan mutasi kas pembayaran tidak ditemukan.'], 404);
+        }
+
+        $ref = $payment->reference ?: 'INV-' . $payment->id;
+        $payment->delete();
+
+        $this->logActivity('payment.delete', 'Buku Kas', "Catatan mutasi kas pembayaran {$ref} dihapus oleh owner");
+
+        return response()->json([
+            'success' => true,
+            'message' => "Mutasi pembayaran {$ref} berhasil dihapus dari buku kas.",
+        ]);
+    }
+
+    public function destroyDeposit($id): JsonResponse
+    {
+        $dep = DepositTransaction::find($id);
+        if (!$dep) {
+            return response()->json(['success' => false, 'message' => 'Catatan mutasi deposit tidak ditemukan.'], 404);
+        }
+
+        $ref = 'DEP-' . $dep->id;
+        $dep->delete();
+
+        $this->logActivity('deposit.delete', 'Buku Kas', "Catatan mutasi deposit {$ref} dihapus oleh owner");
+
+        return response()->json([
+            'success' => true,
+            'message' => "Mutasi deposit {$ref} berhasil dihapus dari buku kas.",
+        ]);
+    }
+
+    public function destroyActivityLog($id): JsonResponse
+    {
+        $log = ActivityLog::find($id);
+        if (!$log) {
+            return response()->json(['success' => false, 'message' => 'Log aktivitas tidak ditemukan.'], 404);
+        }
+
+        $log->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Log riwayat aktivitas berhasil dihapus.',
+        ]);
+    }
+
+    public function clearActivityLogs(): JsonResponse
+    {
+        ActivityLog::truncate();
+
+        $this->logActivity('audit.clear', 'Audit Trail', 'Seluruh riwayat jejak audit dibersihkan oleh owner');
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Seluruh jejak riwayat audit berhasil dibersihkan.',
         ]);
     }
 

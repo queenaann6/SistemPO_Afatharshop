@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api, { mediaUrl } from '../../services/api';
-import { dbId, mapBrandToCore, mapSupplier } from '../../services/adapters';
+import { dbId, mapBrandToCore, mapSupplier, normalizeLevel } from '../../services/adapters';
 import { DEFAULT_DP_PCT, defaultStagePcts, dpPercentFor } from '../../utils/terminScheme';
 import ProductCatalogModal from './ProductCatalogModal';
 import BankAccountModal from './BankAccountModal';
+import AccountSettingsPanel from './AccountSettingsPanel';
 import {
   ACCENTS,
   Badge,
@@ -163,6 +164,8 @@ const PAGE_DESC =
 
 export default function MarketingDashboard({
   currentUser,
+  onUpdateUser,
+  onUpdateAvatar,
   onNavigateStore,
   onLogout,
   orders: ordersProp,
@@ -666,7 +669,8 @@ export default function MarketingDashboard({
           { id: 'ekspedisi', label: 'Ekspedisi', title: 'Master Ekspedisi Pengiriman', icon: 'truck' }
         ]
       },
-      { id: 'terhapus', label: 'Penjualan Terhapus', title: 'Penjualan Terhapus', icon: 'trash' }
+      { id: 'terhapus', label: 'Penjualan Terhapus', title: 'Penjualan Terhapus', icon: 'trash' },
+      { id: 'pengaturan_akun', label: 'Pengaturan Akun', title: 'Pengaturan Profil & Keamanan', icon: 'settings' }
     ],
     [pendingAcc.length, marketingPR.length]
   );
@@ -2164,25 +2168,29 @@ export default function MarketingDashboard({
 
     if (mitraModal.mode === 'edit') {
       const current = mitra.find((m) => m.id === mitraModal.id);
-      const targetId = dbId(current) || dbId(mitraModal);
+      const targetId = dbId(current) || dbId(mitraModal.form) || dbId(mitraModal);
       if (!targetId) return notOnServer(`Mitra ${current?.name || f.name}`);
       try {
         await api.management.updateUser(targetId, {
           nama: f.name.trim(),
           phone: f.phone,
           city: f.city,
-          level: f.level || 'reseller'
+          address: f.address,
+          email: f.email ? String(f.email).trim() : undefined,
+          level: f.level || 'reseller',
+          is_active: f.active !== false,
+          password: f.password?.trim() ? f.password.trim() : undefined
         });
       } catch (err) {
         return serverFail(err, `Memperbarui mitra ${f.name}`);
       }
-      commitMitra((prev) => prev.map((m) => (m.id === mitraModal.id ? { ...m, ...f } : m)));
+      commitMitra((prev) => prev.map((m) => (m.id === mitraModal.id ? { ...m, ...f, level: normalizeLevel(f.level) } : m)));
       toast(`Mitra ${f.name} diperbarui.`);
       setMitraModal(null);
       return;
     }
 
-    const tempPassword = `Mitra#${Math.floor(1000 + Math.random() * 9000)}`;
+    const tempPassword = f.password?.trim() || `Mitra#${Math.floor(1000 + Math.random() * 9000)}`;
     let created;
     try {
       created = await api.management.createUser({
@@ -2192,6 +2200,7 @@ export default function MarketingDashboard({
         level: String(f.level || 'reseller').toLowerCase(),
         phone: f.phone,
         city: f.city,
+        address: f.address,
         password: tempPassword,
         is_active: true
       });
@@ -2202,6 +2211,7 @@ export default function MarketingDashboard({
     commitMitra((prev) => [
       {
         ...f,
+        level: normalizeLevel(f.level),
         id: row?.id != null ? `m-${row.id}` : uid('m'),
         backendId: row?.id ?? null,
         active: true,
@@ -2264,7 +2274,30 @@ export default function MarketingDashboard({
     const f = teamModal.form;
     if (!f.name?.trim() || !f.email?.trim()) return toast('Nama dan email wajib diisi.', 'error');
     if (f.role === 'owner') return toast('Peran owner hanya dapat dibuat dari portal owner.', 'error');
-    const tempPassword = `Tim#${Math.floor(1000 + Math.random() * 9000)}`;
+
+    if (teamModal.mode === 'edit') {
+      const current = team.find((u) => u.id === teamModal.id);
+      const targetId = dbId(current) || dbId(teamModal.form) || dbId(teamModal);
+      if (!targetId) return notOnServer(`Akun tim ${current?.name || f.name}`);
+      try {
+        await api.management.updateUser(targetId, {
+          nama: f.name.trim(),
+          phone: f.phone,
+          role: f.role,
+          email: f.email.trim(),
+          is_active: f.active !== false,
+          password: f.password?.trim() ? f.password.trim() : undefined
+        });
+      } catch (err) {
+        return serverFail(err, `Memperbarui akun tim ${f.name}`);
+      }
+      commitTeam((prev) => prev.map((x) => (x.id === teamModal.id ? { ...x, ...f } : x)));
+      toast(`Akun tim ${f.name} diperbarui.`);
+      setTeamModal(null);
+      return;
+    }
+
+    const tempPassword = f.password?.trim() || `Tim#${Math.floor(1000 + Math.random() * 9000)}`;
     let created;
     try {
       created = await api.management.createUser({
@@ -4644,6 +4677,14 @@ export default function MarketingDashboard({
                         <div className="flex items-center justify-end gap-1.5">
                           <Button
                             size="xs"
+                            variant="outline"
+                            disabled={u.role === 'owner'}
+                            onClick={() => setTeamModal({ mode: 'edit', id: u.id, form: { ...u, password: '' } })}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="xs"
                             variant={u.active ? 'dangerOutline' : 'primary'}
                             disabled={u.role === 'owner'}
                             onClick={() => toggleTeam(u)}
@@ -5762,6 +5803,17 @@ export default function MarketingDashboard({
             </Card>
           </>
         )}
+
+        {/* ============================= PENGATURAN AKUN ============================= */}
+        {activeMenu === 'pengaturan_akun' && (
+          <AccountSettingsPanel
+            currentUser={me}
+            onUpdateUser={onUpdateUser}
+            onUpdateAvatar={onUpdateAvatar}
+            toast={toast}
+            role="marketing"
+          />
+        )}
       </DashboardShell>
 
       {/* Modals & overlays */}
@@ -6435,13 +6487,25 @@ export default function MarketingDashboard({
               />
             </Field>
             {mitraModal.mode === 'edit' && (
-              <Switch
-                checked={!!mitraModal.form.active}
-                label="Akun aktif"
-                onChange={(next) =>
-                  setMitraModal((prev) => ({ ...prev, form: { ...prev.form, active: next } }))
-                }
-              />
+              <>
+                <Field label="Reset Password (Opsional)" hint="Kosongkan jika mitra tidak meminta ganti password. Minimal 6 karakter.">
+                  <Input
+                    type="password"
+                    placeholder="Password baru mitra"
+                    value={mitraModal.form.password || ''}
+                    onChange={(e) =>
+                      setMitraModal((prev) => ({ ...prev, form: { ...prev.form, password: e.target.value } }))
+                    }
+                  />
+                </Field>
+                <Switch
+                  checked={!!mitraModal.form.active}
+                  label="Akun aktif"
+                  onChange={(next) =>
+                    setMitraModal((prev) => ({ ...prev, form: { ...prev.form, active: next } }))
+                  }
+                />
+              </>
             )}
             <p className="text-[10px] text-gray-400">
               Email dipakai sebagai ID login mitra. WhatsApp tetap dipakai untuk reminder & konfirmasi. Password
@@ -6453,8 +6517,8 @@ export default function MarketingDashboard({
 
       {teamModal && (
         <Modal
-          title="Akun Tim Baru"
-          subtitle="Akun finance dapat verifikasi pembayaran; akun purchasing mengelola pesanan & katalog."
+          title={teamModal.mode === 'edit' ? 'Edit Akun Tim' : 'Akun Tim Baru'}
+          subtitle={teamModal.mode === 'edit' ? 'Perbarui data akun admin finance atau purchasing.' : 'Akun finance dapat verifikasi pembayaran; akun purchasing mengelola pesanan & katalog.'}
           onClose={() => setTeamModal(null)}
           footer={
             <>
@@ -6462,7 +6526,7 @@ export default function MarketingDashboard({
                 Batal
               </Button>
               <Button type="submit" form="team-form" icon="check">
-                Buat Akun Tim
+                {teamModal.mode === 'edit' ? 'Simpan Perubahan' : 'Buat Akun Tim'}
               </Button>
             </>
           }
@@ -6506,6 +6570,27 @@ export default function MarketingDashboard({
                 </Select>
               </Field>
             </div>
+            {teamModal.mode === 'edit' && (
+              <>
+                <Field label="Reset Password (Opsional)" hint="Kosongkan bila tidak ingin mengubah password. Minimal 6 karakter.">
+                  <Input
+                    type="password"
+                    placeholder="Password baru tim"
+                    value={teamModal.form.password || ''}
+                    onChange={(e) =>
+                      setTeamModal((prev) => ({ ...prev, form: { ...prev.form, password: e.target.value } }))
+                    }
+                  />
+                </Field>
+                <Switch
+                  checked={!!teamModal.form.active}
+                  label="Akun tim aktif"
+                  onChange={(next) =>
+                    setTeamModal((prev) => ({ ...prev, form: { ...prev.form, active: next } }))
+                  }
+                />
+              </>
+            )}
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-[11px] text-amber-800 flex items-start gap-2">
               <Icon name="shield" className="w-4 h-4 shrink-0 mt-0.5" />
               <p>

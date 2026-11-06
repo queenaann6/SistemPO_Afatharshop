@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api, { mediaUrl } from '../../services/api';
 import { dbId } from '../../services/adapters';
+import AccountSettingsPanel from './AccountSettingsPanel';
 import {
   ACCENTS,
   Badge,
@@ -74,6 +75,8 @@ const OWNER_ROLE_TONE = { owner: 'amber', finance: 'emerald', marketing: 'red' }
 
 export default function OwnerFinanceDashboard({
   currentUser,
+  onUpdateUser,
+  onUpdateAvatar,
   onNavigateStore,
   onLogout,
   orders: ordersProp,
@@ -87,8 +90,10 @@ export default function OwnerFinanceDashboard({
   ledger: ledgerProp,
   settings: settingsProp,
   onChangeOrders,
+  onChangeMitra,
   onChangeTeam,
   onChangePaymentRequests,
+  onChangeLedger,
   onChangeSettings,
   onPrintInvoice
 }) {
@@ -101,7 +106,7 @@ export default function OwnerFinanceDashboard({
   /* ------------------------------------------------------------------ state */
   const [activeMenu, setActiveMenu] = useState('dashboard');
   const [orders] = useDataState(ordersProp, seed.orders, onChangeOrders);
-  const [mitra] = useDataState(mitraProp, seed.mitra);
+  const [mitra, commitMitra] = useDataState(mitraProp, seed.mitra, onChangeMitra);
   const [team, commitTeam] = useDataState(teamProp, seed.team, onChangeTeam);
   const [deposits] = useDataState(depositsProp, seed.deposits);
   const [paymentRequests, commitPaymentRequests] = useDataState(
@@ -111,8 +116,10 @@ export default function OwnerFinanceDashboard({
   );
   const [bankAccounts] = useDataState(bankAccountsProp, seed.bankAccounts);
   const [couriers] = useDataState(couriersProp, seed.couriers);
-  const [ledger] = useDataState(ledgerProp, seed.ledger);
+  const [ledger, commitLedger] = useDataState(ledgerProp, seed.ledger, onChangeLedger);
   const [settings, commitSettings] = useDataState(settingsProp, seed.settings, onChangeSettings);
+  const [teamTab, setTeamTab] = useState('tim');
+  const [mitraSearch, setMitraSearch] = useState('');
 
   const [detailInvoice, setDetailInvoice] = useState(null);
   const [proofView, setProofView] = useState(null);
@@ -138,6 +145,22 @@ export default function OwnerFinanceDashboard({
   // Audit
   const [auditSearch, setAuditSearch] = useState('');
   const [auditType, setAuditType] = useState('all');
+  const [remoteAuditLogs, setRemoteAuditLogs] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.management
+      .activityLogs()
+      .then((res) => {
+        if (!cancelled && Array.isArray(res?.data) && res.data.length > 0) {
+          setRemoteAuditLogs(res.data);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Tim
   const [teamModal, setTeamModal] = useState(null);
@@ -314,6 +337,15 @@ export default function OwnerFinanceDashboard({
   }, [ledger, transferred, ledgerType]);
 
   const auditEvents = useMemo(() => {
+    if (remoteAuditLogs.length > 0) {
+      return remoteAuditLogs.map((log) => ({
+        date: log.at ? log.at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+        actor: log.by || (log.role ? log.role.toUpperCase() : 'Sistem'),
+        type: log.module || log.action || 'Aktivitas',
+        ref: log.action || `LOG-${log.id}`,
+        detail: log.description || '-'
+      }));
+    }
     const ev = [];
     orders.forEach((o) => {
       ev.push({
@@ -455,7 +487,7 @@ export default function OwnerFinanceDashboard({
     return ev
       .filter((e) => e.date)
       .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  }, [orders, paymentRequests, deposits]);
+  }, [remoteAuditLogs, orders, paymentRequests, deposits]);
 
   const auditTypes = useMemo(() => [...new Set(auditEvents.map((e) => e.type))], [auditEvents]);
 
@@ -576,7 +608,8 @@ export default function OwnerFinanceDashboard({
           { id: 'buku_kas', label: 'Buku Kas', title: 'Buku Kas Perusahaan', icon: 'card' },
           { id: 'audit', label: 'Audit Trail', title: 'Jejak Audit Aktivitas', icon: 'eye' }
         ]
-      }
+      },
+      { id: 'pengaturan_akun', label: 'Pengaturan Akun', title: 'Pengaturan Profil & Keamanan', icon: 'settings' }
     ],
     [approvals.length, readyTransfer.length]
   );
@@ -764,11 +797,148 @@ export default function OwnerFinanceDashboard({
     });
   };
 
+  const deleteMitra = (m) => {
+    setConfirmModal({
+      title: 'Hapus Akun Mitra',
+      message: `Hapus akun mitra "${m.name}" (${normalizeLevel(m.level)})? Akses login akan dicabut dan data dihapus permanen.`,
+      confirmLabel: 'Hapus Akun Mitra',
+      danger: true,
+      onConfirm: async () => {
+        const targetId = dbId(m) || m.id;
+        if (!targetId || String(targetId).startsWith('m-') || String(targetId).startsWith('usr-')) {
+          commitMitra((prev) => prev.filter((x) => x.id !== m.id));
+          setConfirmModal(null);
+          return notOnServer(`Akun ${m.name}`);
+        }
+        try {
+          await api.management.deleteUser(targetId, true);
+        } catch (err) {
+          return serverFail(err, `Menghapus akun ${m.name}`);
+        }
+        commitMitra((prev) => prev.filter((x) => x.id !== m.id));
+        setConfirmModal(null);
+        toast(`Akun mitra ${m.name} berhasil dihapus.`, 'warning');
+      }
+    });
+  };
+
+  const deletePR = (req) => {
+    setConfirmModal({
+      title: 'Hapus Pengajuan Pembayaran',
+      message: `Hapus permanen pengajuan pembayaran ${req.code} (${req.purpose} - ${rp(req.amount)})? Data pengajuan akan dihapus dari sistem.`,
+      confirmLabel: 'Hapus Pengajuan',
+      danger: true,
+      onConfirm: async () => {
+        const targetId = dbId(req) || req.id;
+        if (targetId && !String(targetId).startsWith('pr-')) {
+          try {
+            await api.management.deletePaymentRequest(targetId);
+          } catch (err) {
+            return serverFail(err, `Menghapus pengajuan ${req.code}`);
+          }
+        }
+        commitPaymentRequests((prev) => prev.filter((x) => x.id !== req.id && x.code !== req.code));
+        setConfirmModal(null);
+        if (prDetailId === req.id) setPrDetailId(null);
+        toast(`Pengajuan pembayaran ${req.code} berhasil dihapus.`, 'warning');
+      }
+    });
+  };
+
+  const deleteLedgerRow = (l) => {
+    setConfirmModal({
+      title: 'Hapus Mutasi Buku Kas',
+      message: `Hapus catatan mutasi kas "${l.ref || l.type}" sebesar ${rp(l.nominal)}? Catatan ini akan dihapus dari buku kas.`,
+      confirmLabel: 'Hapus Transaksi',
+      danger: true,
+      onConfirm: async () => {
+        const targetId = l.backendId || dbId(l);
+        if (targetId && !String(targetId).startsWith('k-') && !String(targetId).startsWith('leg-')) {
+          try {
+            if (l.type === 'Deposit' || l.direction === 'in') {
+              await api.management.deleteDeposit(targetId).catch(() => {});
+            } else {
+              await api.management.deletePayment(targetId).catch(() => {});
+            }
+          } catch (err) {
+            console.warn('Backend sync delete ledger:', err);
+          }
+        }
+        commitLedger((prev) => prev.filter((x) => x.id !== l.id));
+        setConfirmModal(null);
+        toast(`Mutasi buku kas ${l.ref || ''} berhasil dihapus.`, 'warning');
+      }
+    });
+  };
+
+  const deleteAuditLog = (logItem) => {
+    setConfirmModal({
+      title: 'Hapus Log Riwayat Aktivitas',
+      message: `Hapus rekaman audit "${logItem.action || logItem.detail}" oleh ${logItem.actor || 'user'}?`,
+      confirmLabel: 'Hapus Log',
+      danger: true,
+      onConfirm: async () => {
+        if (logItem.id && typeof logItem.id === 'number') {
+          try {
+            await api.management.deleteActivityLog(logItem.id);
+          } catch (err) {
+            console.warn('Gagal hapus log di server:', err);
+          }
+        }
+        setRemoteAuditLogs((prev) => prev.filter((x) => x.id !== logItem.id));
+        setConfirmModal(null);
+        toast('Catatan jejak aktivitas dihapus.', 'warning');
+      }
+    });
+  };
+
+  const handleClearAuditLogs = () => {
+    setConfirmModal({
+      title: 'Bersihkan Seluruh Riwayat Jejak Audit',
+      message: 'Apakah Anda yakin ingin menghapus seluruh rekaman log jejak audit? Tindakan ini tidak dapat dibatalkan.',
+      confirmLabel: 'Bersihkan Semua',
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await api.management.clearActivityLogs();
+        } catch (err) {
+          console.warn('Gagal bersihkan log di server:', err);
+        }
+        setRemoteAuditLogs([]);
+        setConfirmModal(null);
+        toast('Seluruh rekaman jejak audit berhasil dibersihkan.', 'warning');
+      }
+    });
+  };
+
   const saveTeam = async (e) => {
     e.preventDefault();
     const f = teamModal.form;
     if (!f.name?.trim() || !f.email?.trim()) return toast('Nama dan email wajib diisi.', 'error');
-    const tempPassword = `Tim#${Math.floor(1000 + Math.random() * 9000)}`;
+
+    if (teamModal.mode === 'edit') {
+      const current = team.find((u) => u.id === teamModal.id);
+      const targetId = dbId(current) || dbId(teamModal.form) || dbId(teamModal);
+      if (!targetId) return notOnServer(`Akun ${current?.name || f.name}`);
+      try {
+        await api.management.updateUser(targetId, {
+          nama: f.name.trim(),
+          phone: f.phone,
+          role: f.role,
+          email: f.email.trim(),
+          is_active: f.active !== false,
+          password: f.password?.trim() ? f.password.trim() : undefined
+        });
+      } catch (err) {
+        return serverFail(err, `Memperbarui akun ${f.name}`);
+      }
+      commitTeam((prev) => prev.map((x) => (x.id === teamModal.id ? { ...x, ...f } : x)));
+      toast(`Akun ${f.name} diperbarui.`);
+      setTeamModal(null);
+      return;
+    }
+
+    const tempPassword = f.password?.trim() || `Tim#${Math.floor(1000 + Math.random() * 9000)}`;
     let created;
     try {
       created = await api.management.createUser({
@@ -1282,6 +1452,9 @@ export default function OwnerFinanceDashboard({
                           <Button size="xs" variant="gold" onClick={() => approvePR(r)}>
                             Setujui
                           </Button>
+                          <Button size="xs" variant="dangerOutline" icon="trash" onClick={() => deletePR(r)} title="Hapus Pengajuan">
+                            Hapus
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -1380,16 +1553,27 @@ export default function OwnerFinanceDashboard({
                         </td>
                         <td className={`${TD} text-right font-bold text-gray-900`}>{rp(r.amount)}</td>
                         <td className={`${TD} text-right`}>
-                          <Button
-                            size="xs"
-                            variant="gold"
-                            icon="wallet"
-                            onClick={() =>
-                              setTransferModal({ req: r, form: { note: '', ref: '', proof: '', proofFile: null } })
-                            }
-                          >
-                            Tandai Transfer
-                          </Button>
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            <Button
+                              size="xs"
+                              variant="gold"
+                              icon="wallet"
+                              onClick={() =>
+                                setTransferModal({ req: r, form: { note: '', ref: '', proof: '', proofFile: null } })
+                              }
+                            >
+                              Tandai Transfer
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="dangerOutline"
+                              icon="trash"
+                              onClick={() => deletePR(r)}
+                              title="Hapus Pengajuan"
+                            >
+                              Hapus
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1636,9 +1820,20 @@ export default function OwnerFinanceDashboard({
                         </div>
                       </td>
                       <td className={`${TD} text-right`}>
-                        <Button size="xs" variant="outline" onClick={() => setPrDetailId(r.id)}>
-                          Detail
-                        </Button>
+                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                          <Button size="xs" variant="outline" onClick={() => setPrDetailId(r.id)}>
+                            Detail
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="dangerOutline"
+                            icon="trash"
+                            onClick={() => deletePR(r)}
+                            title="Hapus Pengajuan"
+                          >
+                            Hapus
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1986,67 +2181,177 @@ export default function OwnerFinanceDashboard({
               />
             </div>
 
-            <Card title="Akun Tim" subtitle="Nonaktifkan akun yang sudah tidak bertugas">
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Nama</th>
-                    <th className={TH}>Peran</th>
-                    <th className={TH}>Kontak</th>
-                    <th className={TH}>Dibuat</th>
-                    <th className={TH}>Status</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {team.map((u) => (
-                    <tr key={u.id} className="hover:bg-gray-50/70">
-                      <td className={TD}>
-                        <div className="flex items-center gap-2">
-                          <span className="w-7 h-7 rounded-full bg-gray-900 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
-                            {u.name
-                              .split(' ')
-                              .map((n) => n[0])
-                              .slice(0, 2)
-                              .join('')}
-                          </span>
-                          <div>
-                            <p className="font-semibold text-gray-900">{u.name}</p>
-                            <p className="text-[10px] text-gray-400">{u.email}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className={TD}>
-                        <Badge tone={OWNER_ROLE_TONE[u.role] || 'gray'}>{roleLabel(u.role)}</Badge>
-                      </td>
-                      <td className={TD}>
-                        <p className="text-[11px] text-gray-700">{u.phone || '—'}</p>
-                        <p className="text-[10px] text-gray-400">oleh {u.createdBy}</p>
-                      </td>
-                      <td className={TD}>{fmtDate(u.createdAt)}</td>
-                      <td className={TD}>
-                        <Badge tone={u.active ? 'emerald' : 'gray'} dot>
-                          {u.active ? 'Aktif' : 'Nonaktif'}
-                        </Badge>
-                      </td>
-                      <td className={`${TD} text-right`}>
-                        <div className="flex items-center justify-end gap-2">
-                          <Switch checked={u.active} onChange={() => toggleTeam(u)} disabled={u.id === me.id} />
-                          <Button
-                            size="xs"
-                            variant="danger"
-                            disabled={u.id === me.id || u.role === 'owner'}
-                            onClick={() => deleteTeam(u)}
-                          >
-                            Hapus
-                          </Button>
-                        </div>
-                      </td>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setTeamTab('tim')}
+                className={`px-4 py-2 text-xs font-bold rounded-xl transition cursor-pointer ${
+                  teamTab === 'tim'
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
+                }`}
+              >
+                Akun Tim Admin ({team.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTeamTab('mitra')}
+                className={`px-4 py-2 text-xs font-bold rounded-xl transition cursor-pointer ${
+                  teamTab === 'mitra'
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
+                }`}
+              >
+                Akun Mitra & Reseller ({mitra.length})
+              </button>
+            </div>
+
+            {teamTab === 'tim' && (
+              <Card title="Akun Tim" subtitle="Nonaktifkan atau hapus akun tim yang sudah tidak bertugas">
+                <TableWrap>
+                  <thead className="bg-gray-50 border-b border-gray-100">
+                    <tr>
+                      <th className={TH}>Nama</th>
+                      <th className={TH}>Peran</th>
+                      <th className={TH}>Kontak</th>
+                      <th className={TH}>Dibuat</th>
+                      <th className={TH}>Status</th>
+                      <th className={`${TH} text-right`}>Aksi</th>
                     </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
-            </Card>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {team.map((u) => (
+                      <tr key={u.id} className="hover:bg-gray-50/70">
+                        <td className={TD}>
+                          <div className="flex items-center gap-2">
+                            <span className="w-7 h-7 rounded-full bg-gray-900 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                              {u.name
+                                .split(' ')
+                                .map((n) => n[0])
+                                .slice(0, 2)
+                                .join('')}
+                            </span>
+                            <div>
+                              <p className="font-semibold text-gray-900">{u.name}</p>
+                              <p className="text-[10px] text-gray-400">{u.email}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className={TD}>
+                          <Badge tone={OWNER_ROLE_TONE[u.role] || 'gray'}>{roleLabel(u.role)}</Badge>
+                        </td>
+                        <td className={TD}>
+                          <p className="text-[11px] text-gray-700">{u.phone || '—'}</p>
+                          <p className="text-[10px] text-gray-400">oleh {u.createdBy}</p>
+                        </td>
+                        <td className={TD}>{fmtDate(u.createdAt)}</td>
+                        <td className={TD}>
+                          <Badge tone={u.active ? 'emerald' : 'gray'} dot>
+                            {u.active ? 'Aktif' : 'Nonaktif'}
+                          </Badge>
+                        </td>
+                        <td className={`${TD} text-right`}>
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => setTeamModal({ mode: 'edit', id: u.id, form: { ...u, password: '' } })}
+                            >
+                              Edit
+                            </Button>
+                            <Switch checked={u.active} onChange={() => toggleTeam(u)} disabled={u.id === me.id} />
+                            <Button
+                              size="xs"
+                              variant="danger"
+                              disabled={u.id === me.id || u.role === 'owner'}
+                              onClick={() => deleteTeam(u)}
+                            >
+                              Hapus
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </TableWrap>
+              </Card>
+            )}
+
+            {teamTab === 'mitra' && (() => {
+              const filteredMitra = mitra.filter((m) => {
+                if (!mitraSearch.trim()) return true;
+                const q = mitraSearch.toLowerCase();
+                return (
+                  m.name?.toLowerCase().includes(q) ||
+                  m.email?.toLowerCase().includes(q) ||
+                  m.phone?.toLowerCase().includes(q) ||
+                  m.city?.toLowerCase().includes(q)
+                );
+              });
+
+              return (
+                <Card
+                  title="Akun Mitra & Reseller"
+                  subtitle="Seluruh mitra pre-order yang terdaftar pada sistem"
+                  action={
+                    <SearchBox
+                      value={mitraSearch}
+                      onChange={setMitraSearch}
+                      placeholder="Cari nama, email, kota..."
+                    />
+                  }
+                >
+                  <TableWrap>
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        <th className={TH}>Mitra</th>
+                        <th className={TH}>Level</th>
+                        <th className={TH}>No. HP / WA</th>
+                        <th className={TH}>Kota / Domisili</th>
+                        <th className={`${TH} text-right`}>Saldo Deposit</th>
+                        <th className={`${TH} text-right`}>Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {filteredMitra.map((m) => (
+                        <tr key={m.id} className="hover:bg-gray-50/70">
+                          <td className={TD}>
+                            <p className="font-semibold text-gray-900">{m.name}</p>
+                            <p className="text-[10px] text-gray-400">{m.email || '—'}</p>
+                          </td>
+                          <td className={TD}>
+                            <Badge tone={levelTone(m.level)}>{normalizeLevel(m.level)}</Badge>
+                          </td>
+                          <td className={TD}>{m.phone || '—'}</td>
+                          <td className={TD}>{m.city || '—'}</td>
+                          <td className={`${TD} text-right font-bold text-emerald-700`}>
+                            {rp(m.depositBalance || m.balance || 0)}
+                          </td>
+                          <td className={`${TD} text-right`}>
+                            <Button
+                              size="xs"
+                              variant="dangerOutline"
+                              icon="trash"
+                              onClick={() => deleteMitra(m)}
+                              title="Hapus Akun Mitra"
+                            >
+                              Hapus Akun
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                      {filteredMitra.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-12 text-center text-xs text-gray-400">
+                            Tidak ada akun mitra pada pencarian ini.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </TableWrap>
+                </Card>
+              );
+            })()}
           </>
         )}
 
@@ -2196,6 +2501,7 @@ export default function OwnerFinanceDashboard({
                     <th className={TH}>Bank</th>
                     <th className={TH}>Oleh</th>
                     <th className={TH}>Status</th>
+                    <th className={`${TH} text-right`}>Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -2233,11 +2539,22 @@ export default function OwnerFinanceDashboard({
                           {l.status || '—'}
                         </Badge>
                       </td>
+                      <td className={`${TD} text-right`}>
+                        <Button
+                          size="xs"
+                          variant="dangerOutline"
+                          icon="trash"
+                          onClick={() => deleteLedgerRow(l)}
+                          title="Hapus Transaksi Buku Kas"
+                        >
+                          Hapus
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                   {ledgerRows.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-12 text-center text-xs text-gray-400">
+                      <td colSpan={9} className="px-4 py-12 text-center text-xs text-gray-400">
                         Tidak ada transaksi pada filter ini.
                       </td>
                     </tr>
@@ -2255,6 +2572,15 @@ export default function OwnerFinanceDashboard({
               title="Jejak Audit Aktivitas"
               desc="Rekam jejak tindakan admin, mitra, dan owner lintas modul PO."
               badge={<Badge tone="gray">{filteredAudit.length} aktivitas</Badge>}
+              actions={
+                <Button
+                  variant="dangerOutline"
+                  icon="trash"
+                  onClick={handleClearAuditLogs}
+                >
+                  Bersihkan Riwayat Log
+                </Button>
+              }
             />
 
             <Card
@@ -2282,6 +2608,7 @@ export default function OwnerFinanceDashboard({
                     <th className={TH}>Tipe</th>
                     <th className={TH}>Referensi</th>
                     <th className={TH}>Detail</th>
+                    <th className={`${TH} text-right`}>Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -2298,11 +2625,22 @@ export default function OwnerFinanceDashboard({
                       <td className={TD}>
                         <p className="text-[11px] text-gray-600 max-w-[320px] leading-snug">{e.detail}</p>
                       </td>
+                      <td className={`${TD} text-right`}>
+                        <Button
+                          size="xs"
+                          variant="dangerOutline"
+                          icon="trash"
+                          onClick={() => deleteAuditLog(e)}
+                          title="Hapus rekaman audit ini"
+                        >
+                          Hapus
+                        </Button>
+                      </td>
                     </tr>
                   ))}
                   {filteredAudit.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="px-4 py-12 text-center text-xs text-gray-400">
+                      <td colSpan={6} className="px-4 py-12 text-center text-xs text-gray-400">
                         Tidak ada aktivitas pada filter ini.
                       </td>
                     </tr>
@@ -2311,6 +2649,17 @@ export default function OwnerFinanceDashboard({
               </TableWrap>
             </Card>
           </>
+        )}
+
+        {/* ============================= PENGATURAN AKUN ============================= */}
+        {activeMenu === 'pengaturan_akun' && (
+          <AccountSettingsPanel
+            currentUser={me}
+            onUpdateUser={onUpdateUser}
+            onUpdateAvatar={onUpdateAvatar}
+            toast={toast}
+            role="owner"
+          />
         )}
       </DashboardShell>
 
@@ -2353,6 +2702,13 @@ export default function OwnerFinanceDashboard({
                   Tandai Transfer
                 </Button>
               )}
+              <Button
+                variant="dangerOutline"
+                icon="trash"
+                onClick={() => deletePR(prDetail)}
+              >
+                Hapus Pengajuan
+              </Button>
             </>
           }
         >
@@ -2604,16 +2960,16 @@ export default function OwnerFinanceDashboard({
       {/* =========================== TEAM MODAL ============================ */}
       {teamModal && (
         <Modal
-          title="Akun Tim Baru"
-          subtitle="Akun admin baru untuk membantu operasional PO"
+          title={teamModal.mode === 'edit' ? 'Edit Akun Tim' : 'Akun Tim Baru'}
+          subtitle={teamModal.mode === 'edit' ? 'Perbarui profil dan peran akses pengguna' : 'Akun admin baru untuk membantu operasional PO'}
           onClose={() => setTeamModal(null)}
           footer={
             <>
               <Button variant="outline" onClick={() => setTeamModal(null)}>
                 Batal
               </Button>
-              <Button variant="gold" icon="plus" onClick={saveTeam}>
-                Buat Akun
+              <Button variant="gold" icon={teamModal.mode === 'edit' ? 'check' : 'plus'} onClick={saveTeam}>
+                {teamModal.mode === 'edit' ? 'Simpan Perubahan' : 'Buat Akun'}
               </Button>
             </>
           }
@@ -2622,7 +2978,7 @@ export default function OwnerFinanceDashboard({
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="Nama lengkap" required>
                 <Input
-                  value={teamModal.form.name}
+                  value={teamModal.form.name || ''}
                   onChange={(e) =>
                     setTeamModal({ ...teamModal, form: { ...teamModal.form, name: e.target.value } })
                   }
@@ -2632,7 +2988,7 @@ export default function OwnerFinanceDashboard({
               <Field label="Email" required>
                 <Input
                   type="email"
-                  value={teamModal.form.email}
+                  value={teamModal.form.email || ''}
                   onChange={(e) =>
                     setTeamModal({ ...teamModal, form: { ...teamModal.form, email: e.target.value } })
                   }
@@ -2641,7 +2997,7 @@ export default function OwnerFinanceDashboard({
               </Field>
               <Field label="Peran">
                 <Select
-                  value={teamModal.form.role}
+                  value={teamModal.form.role || 'finance'}
                   onChange={(e) =>
                     setTeamModal({ ...teamModal, form: { ...teamModal.form, role: e.target.value } })
                   }
@@ -2653,7 +3009,7 @@ export default function OwnerFinanceDashboard({
               </Field>
               <Field label="Nomor WhatsApp">
                 <Input
-                  value={teamModal.form.phone}
+                  value={teamModal.form.phone || ''}
                   onChange={(e) =>
                     setTeamModal({ ...teamModal, form: { ...teamModal.form, phone: e.target.value } })
                   }
@@ -2661,6 +3017,27 @@ export default function OwnerFinanceDashboard({
                 />
               </Field>
             </div>
+            {teamModal.mode === 'edit' && (
+              <>
+                <Field label="Reset Password (Opsional)" hint="Kosongkan bila tidak ingin mengubah password. Minimal 6 karakter.">
+                  <Input
+                    type="password"
+                    placeholder="Password baru tim"
+                    value={teamModal.form.password || ''}
+                    onChange={(e) =>
+                      setTeamModal({ ...teamModal, form: { ...teamModal.form, password: e.target.value } })
+                    }
+                  />
+                </Field>
+                <Switch
+                  checked={!!teamModal.form.active}
+                  label="Akun tim aktif"
+                  onChange={(next) =>
+                    setTeamModal({ ...teamModal, form: { ...teamModal.form, active: next } })
+                  }
+                />
+              </>
+            )}
             <div className="rounded-xl border border-sky-200 bg-sky-50 px-3.5 py-2.5">
               <p className="text-[10px] text-sky-800 leading-relaxed">
                 Password sementara akan dibuat otomatis dan hanya ditampilkan satu kali setelah akun

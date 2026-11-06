@@ -159,6 +159,19 @@ export const api = {
 
   me: () => request('/auth/me'),
 
+  updateProfile: (payload) =>
+    request('/auth/profile', { method: 'PUT', body: payload }),
+
+  changePassword: (payload) =>
+    request('/auth/password', { method: 'PUT', body: payload }),
+
+  uploadFile: (file, folder = 'proof') => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('folder', folder);
+    return request('/uploads', { method: 'POST', body: form, timeout: 30000 });
+  },
+
   async logout() {
     try {
       await request('/auth/logout', { method: 'POST' });
@@ -187,6 +200,11 @@ export const api = {
 
   // --- Data mitra yang sedang login ---
   my: {
+    profile: () => request('/auth/me'),
+    updateProfile: (payload) =>
+      request('/auth/profile', { method: 'PUT', body: payload }),
+    changePassword: (payload) =>
+      request('/auth/password', { method: 'PUT', body: payload }),
     deposits: () => request('/my/deposits'),
     createDeposit: (payload) => request('/my/deposits', { method: 'POST', body: payload }),
     payments: () => request('/my/payments'),
@@ -233,8 +251,8 @@ export const api = {
       request('/management/users', { method: 'POST', body: payload }),
     updateUser: (id, payload) =>
       request(`/management/users/${id}`, { method: 'PUT', body: payload }),
-    deleteUser: (id) =>
-      request(`/management/users/${id}`, { method: 'DELETE' }),
+    deleteUser: (id, force = false) =>
+      request(`/management/users/${id}${force ? '?force=1' : ''}`, { method: 'DELETE' }),
 
     deposits: (options) => request('/management/deposits', options),
     createDeposit: (payload) =>
@@ -253,6 +271,12 @@ export const api = {
       request('/management/payment-requests', { method: 'POST', body: payload }),
     updatePaymentRequest: (id, payload) =>
       request(`/management/payment-requests/${id}`, { method: 'PATCH', body: payload }),
+    deletePaymentRequest: (id) =>
+      request(`/management/payment-requests/${id}`, { method: 'DELETE' }),
+    deletePayment: (id) =>
+      request(`/management/payments/${id}`, { method: 'DELETE' }),
+    deleteDeposit: (id) =>
+      request(`/management/deposits/${id}`, { method: 'DELETE' }),
 
     suppliers: (options) => request('/management/suppliers', options),
     createSupplier: (payload) =>
@@ -305,6 +329,10 @@ export const api = {
     },
 
     activityLogs: (options) => request('/management/activity-logs', options),
+    deleteActivityLog: (id) =>
+      request(`/management/activity-logs/${id}`, { method: 'DELETE' }),
+    clearActivityLogs: () =>
+      request('/management/activity-logs', { method: 'DELETE' }),
     notifications: (options) => request('/management/notifications', options),
     settings: (options) => request('/management/settings', options)
   }

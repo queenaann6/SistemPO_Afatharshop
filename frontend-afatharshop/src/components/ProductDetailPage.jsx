@@ -412,7 +412,7 @@ export default function ProductDetailPage({
               {/* Warna Pilihan (With Color Dots) */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-stone-800">
-                  WARNA PILIHAN: <span className="font-normal text-stone-600">{selectedColor}</span>
+                  PILIHAN WARNA : <span className="font-normal text-stone-600">{selectedColor}</span>
                 </label>
                 <div className="flex flex-wrap gap-2">
                   {(product.colors || []).map((c) => (

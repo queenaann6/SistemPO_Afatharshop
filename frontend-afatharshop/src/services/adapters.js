@@ -212,6 +212,14 @@ export const roleIdFromApiUser = (user) => {
   return 'mitra';
 };
 
+export const normalizeLevel = (level) => {
+  const text = String(level || '').toLowerCase().trim();
+  if (text.includes('sub')) return 'Sub DB';
+  if (text.includes('agen')) return 'Agen';
+  if (text.includes('reseller')) return 'Reseller';
+  return 'DB All';
+};
+
 export const mapApiUser = (user, fallback = {}) => {
   if (!user) return null;
 
@@ -219,7 +227,7 @@ export const mapApiUser = (user, fallback = {}) => {
     name: user.name || user.nama || fallback.name || 'Mitra',
     role: user.role || user.level || fallback.role || 'Mitra Distributor',
     roleId: roleIdFromApiUser(user),
-    level: user.level || fallback.level || '',
+    level: normalizeLevel(user.level || fallback.level || 'DB All'),
     avatar: (user.avatar && !user.avatar.includes('unsplash.com')) ? user.avatar : (fallback.avatar && !fallback.avatar.includes('unsplash.com') ? fallback.avatar : ''),
     balance: formatRupiah(user.deposit_balance ?? 0),
     totalBill: fallback.totalBill || 'Rp 0',
@@ -603,10 +611,10 @@ export const mapUserToMitra = (user) => ({
   backendId: user.id,
   name: user.name || user.nama || '',
   email: user.email || '',
-  level: user.level || 'DB All',
+  level: normalizeLevel(user.level),
   phone: user.phone || '',
   city: user.city || '',
-  address: '',
+  address: user.address || '',
   active: user.is_active !== false,
   deposit: toNumber(user.deposit_balance),
   joinedAt: String(user.joined_at || '').slice(0, 10)
@@ -851,11 +859,19 @@ export const addressBookToPayload = (address) => ({
  */
 export const dbId = (row) => {
   if (!row) return null;
-  const candidates = [row.backendId, row.db_id, row.id];
+  const candidates = [
+    row.backendId,
+    row.db_id,
+    row.id,
+    row.form?.backendId,
+    row.form?.id
+  ];
   for (const raw of candidates) {
     if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
     const text = String(raw ?? '').trim();
     if (/^[1-9]\d*$/.test(text)) return Number(text);
+    const prefixMatch = text.match(/^[a-z]+-([1-9]\d*)$/i);
+    if (prefixMatch) return Number(prefixMatch[1]);
   }
   return null;
 };

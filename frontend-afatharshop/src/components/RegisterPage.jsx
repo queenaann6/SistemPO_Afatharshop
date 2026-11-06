@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckIcon } from './Icons';
+import { CheckIcon, WhatsAppIcon } from './Icons';
 
 export default function RegisterPage({
   onNavigateLogin,
@@ -20,17 +20,11 @@ export default function RegisterPage({
         
         {/* Brand Header Logo */}
         <div className="flex flex-col items-center justify-center">
-          <div className="w-12 h-12 rounded-full border border-[#D4AF37] overflow-hidden bg-white shadow-xs mb-1.5 flex items-center justify-center">
-            <img src="/logo.jpg" alt="AfatharShop Official" className="w-full h-full object-cover" />
-          </div>
-          <div className="text-center">
-            <h2 className="font-serif text-lg font-bold text-[#8B6A3E] tracking-wider leading-none">
-              AfatharShop
-            </h2>
-            <p className="text-[10px] text-[#A6804A] tracking-widest uppercase mt-0.5 font-medium">
-              Official
-            </p>
-          </div>
+          <img
+            src="/logo-nobg.png"
+            alt="AfatharShop Official"
+            className="h-16 sm:h-20 w-auto object-contain mx-auto mb-1"
+          />
         </div>
 
         {/* Program Badge */}
@@ -77,20 +71,27 @@ export default function RegisterPage({
           </ul>
         </div>
 
-        {/* Green WhatsApp Action Button: Direct to WhatsApp without intermediate gateway */}
-        <div className="space-y-1.5 pt-1">
+        {/* Green WhatsApp Action Button */}
+        <div className="space-y-2 pt-1">
           <a
             href={waUrl}
             target="_blank"
             rel="noreferrer"
             className="w-full py-3.5 px-6 rounded-xl bg-[#1E7E4E] hover:bg-[#16673F] text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2.5 shadow-md transition duration-150 cursor-pointer"
           >
-            <span className="text-base sm:text-lg">💬</span>
-            <span>Daftar Langsung via WhatsApp Admin</span>
+            <WhatsAppIcon className="w-5 h-5 fill-white shrink-0" />
+            <span>Lanjut Daftar via WhatsApp Admin</span>
           </a>
-          <p className="text-[10px] text-stone-500">
-            Online Setiap Hari • Respon Cepat • Bantuan Ramah
-          </p>
+          
+          {/* Admin Operating Hours */}
+          <div className="space-y-0.5 text-center pt-0.5">
+            <p className="text-[10px] sm:text-[11px] text-stone-600 font-medium">
+              Admin Online: Senin - Jumat 09.00-17.00 • Sabtu 09.00-14.00
+            </p>
+            <p className="text-[9.5px] sm:text-[10px] text-stone-500">
+              Hari Libur & Ramadhan akan ada perubahan jam kerja.
+            </p>
+          </div>
         </div>
 
         {/* Divider */}
@@ -130,7 +131,7 @@ export default function RegisterPage({
 
       {/* Sub-footer copyright */}
       <div className="mt-8 text-center text-[11px] text-stone-500">
-        © 2025 Afathar Shop Official. Hak Cipta Dilindungi Undang-Undang.
+        © 2025 Afatharshop Official. Hak Cipta Dilindungi Undang-Undang.
       </div>
 
     </div>

@@ -32,6 +32,8 @@ Route::prefix('auth')->group(function () {
 
     Route::middleware('auth:api')->group(function () {
         Route::get('me', [AuthController::class, 'me']);
+        Route::put('profile', [AuthController::class, 'updateProfile']);
+        Route::put('password', [AuthController::class, 'changePassword']);
         Route::post('logout', [AuthController::class, 'logout']);
         Route::post('refresh', [AuthController::class, 'refresh'])->middleware('throttle:30,1');
     });
@@ -78,6 +80,9 @@ Route::middleware('auth:api')->group(function () {
     Route::patch('orders/{id}/address', [OrderController::class, 'updateAddress']);
 
     Route::prefix('my')->group(function () {
+        Route::get('profile', [AuthController::class, 'me']);
+        Route::put('profile', [AuthController::class, 'updateProfile']);
+        Route::put('password', [AuthController::class, 'changePassword']);
         Route::get('deposits', [MitraDataController::class, 'deposits']);
         Route::post('deposits', [ManagementController::class, 'storeDeposit']);
         Route::get('payments', [MitraDataController::class, 'payments']);
@@ -154,6 +159,7 @@ Route::prefix('management')->middleware('auth:api')->group(function () {
         Route::get('payment-requests', [ManagementController::class, 'paymentRequests']);
         Route::post('payment-requests', [ManagementController::class, 'storePaymentRequest']);
         Route::patch('payment-requests/{id}', [ManagementController::class, 'updatePaymentRequest']);
+        Route::delete('payment-requests/{id}', [ManagementController::class, 'destroyPaymentRequest']);
 
         Route::get('notifications', [ManagementController::class, 'notifications']);
     });
@@ -162,9 +168,11 @@ Route::prefix('management')->middleware('auth:api')->group(function () {
     Route::middleware('role:owner,finance')->group(function () {
         Route::get('deposits', [ManagementController::class, 'deposits']);
         Route::patch('deposits/{id}/verify', [ManagementController::class, 'verifyDeposit']);
+        Route::delete('deposits/{id}', [ManagementController::class, 'destroyDeposit']);
 
         Route::get('payments', [ManagementController::class, 'payments']);
         Route::patch('payments/{id}/verify', [ManagementController::class, 'verifyPayment']);
+        Route::delete('payments/{id}', [ManagementController::class, 'destroyPayment']);
     });
 
     // Manajemen Pengguna (Tim & Mitra): owner, marketing, finance
@@ -179,6 +187,8 @@ Route::prefix('management')->middleware('auth:api')->group(function () {
     Route::middleware('role:owner')->group(function () {
         Route::get('settings', [ManagementController::class, 'settings']);
         Route::get('activity-logs', [ManagementController::class, 'activityLogs']);
+        Route::delete('activity-logs/{id}', [ManagementController::class, 'destroyActivityLog']);
+        Route::delete('activity-logs', [ManagementController::class, 'clearActivityLogs']);
     });
 });
 

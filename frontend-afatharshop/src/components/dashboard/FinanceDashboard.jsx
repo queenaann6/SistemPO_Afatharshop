@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '../../services/api';
-import { dbId } from '../../services/adapters';
+import { dbId, normalizeLevel } from '../../services/adapters';
 import BankAccountModal from './BankAccountModal';
+import AccountSettingsPanel from './AccountSettingsPanel';
 import { serverMoneyPatch } from './projectBridge';
 import { dpPercentFor } from '../../utils/terminScheme';
 import {
@@ -144,6 +145,8 @@ const SHIP_TABS = [
 
 export default function FinanceDashboard({
   currentUser,
+  onUpdateUser,
+  onUpdateAvatar,
   onNavigateStore,
   onLogout,
   orders: ordersProp,
@@ -675,7 +678,8 @@ export default function FinanceDashboard({
           { id: 'rekening', label: 'Rekening Bank', title: 'Master Rekening Bank', icon: 'card' },
           { id: 'ekspedisi', label: 'Ekspedisi Pengiriman', title: 'Master Ekspedisi Pengiriman', icon: 'truck' }
         ]
-      }
+      },
+      { id: 'pengaturan_akun', label: 'Pengaturan Akun', title: 'Pengaturan Profil & Keamanan', icon: 'settings' }
     ],
     [pendingDp.length, pendingPelunasan.length, pendingOngkir.length, pendingDeposit.length, needOngkir.length, readyToShip.length, pendingPr.length]
   );
@@ -1029,6 +1033,18 @@ export default function FinanceDashboard({
         ? `${o.invoice} ditandai READY. Mitra dapat melengkapi alamat.`
         : `${o.invoice} masuk tahap ${status}.`
     );
+
+    const targetId = dbId(o) || o.backendId || o.invoice;
+    if (targetId) {
+      const prodStatusDb = status === PROD.READY ? 'Ready' : 'Produksi';
+      const statusPayload = {
+        production_status: prodStatusDb,
+        ...(status === PROD.READY ? { status: 'Menunggu Alamat Mitra' } : {})
+      };
+      api.management.updateOrderStatus(targetId, statusPayload).catch((err) => {
+        console.warn('Gagal sinkron status produksi ke server:', err);
+      });
+    }
   };
 
   const openWA = (o, kind) => {
@@ -1052,6 +1068,18 @@ export default function FinanceDashboard({
     });
     setOngkirModal(null);
     toast(`Ongkir ${order.invoice} tersimpan. Mitra dapat melakukan pembayaran.`);
+
+    const targetId = dbId(order) || order.backendId || order.invoice;
+    if (targetId) {
+      api.management.updateOrderStatus(targetId, {
+        shipping_cost: num(form.ongkir),
+        courier_name: form.ekspedisi,
+        notes: form.note || '',
+        status: 'Menunggu Pelunasan'
+      }).catch((err) => {
+        console.warn('Gagal sinkron ongkir ke server:', err);
+      });
+    }
   };
 
   const saveResi = (e) => {
@@ -1062,6 +1090,17 @@ export default function FinanceDashboard({
     patchOrder(order.invoice, patch);
     setResiModal(null);
     toast(`Resi ${form.resi} tersimpan. ${order.invoice} ditandai dikirim.`);
+
+    const targetId = dbId(order) || order.backendId || order.invoice;
+    if (targetId) {
+      api.management.updateOrderStatus(targetId, {
+        tracking_number: form.resi.trim(),
+        status: 'Dikirim'
+      }).catch((err) => {
+        console.warn('Gagal sinkron resi ke server:', err);
+      });
+    }
+
     if (form.notify) {
       window.open(
         waLink(order.phone, buildWA('shipped', { ...order, ...patch }, { ...settings, banks: bankAccounts })),
@@ -1073,6 +1112,13 @@ export default function FinanceDashboard({
   const markReceived = (o) => {
     patchOrder(o.invoice, { receivedAt: todayISO(), shipStatus: SHIP.DITERIMA });
     toast(`${o.invoice} ditandai diterima. Pesanan selesai.`);
+
+    const targetId = dbId(o) || o.backendId || o.invoice;
+    if (targetId) {
+      api.management.updateOrderStatus(targetId, { status: 'Selesai' }).catch((err) => {
+        console.warn('Gagal sinkron status selesai ke server:', err);
+      });
+    }
   };
 
   const handleProofFile = (file) => {
@@ -1110,6 +1156,19 @@ export default function FinanceDashboard({
         ...prev
       ]);
       toast(`Deposit ${rp(nominal)} dicatat dan menunggu verifikasi.`);
+
+      const userId = m?.backendId || dbId(m);
+      if (userId) {
+        api.management.createDeposit({
+          user_id: userId,
+          amount: nominal,
+          bank_account_id: dbId(bank) || bank?.backendId || bank?.id,
+          description: f.refNo || 'Input manual admin finance',
+          proof_url: f.proof
+        }).catch((err) => {
+          console.warn('Gagal simpan deposit manual ke server:', err);
+        });
+      }
     } else {
       const o = orders.find((x) => x.invoice === f.invoice);
       if (!o) return toast('Invoice tidak ditemukan.', 'error');
@@ -1117,11 +1176,24 @@ export default function FinanceDashboard({
       const proofKey = { DP: 'dpProof', Pelunasan: 'pelunasanProof', Ongkir: 'ongkirProof' }[f.kind];
       patchOrder(o.invoice, { [statusKey]: PAY.MENUNGGU, [proofKey]: f.proof });
       toast(`Bukti ${f.kind} ${o.invoice} dicatat. Menunggu verifikasi.`);
+
+      const targetId = dbId(o) || o.backendId || o.invoice;
+      if (targetId) {
+        api.management.createPayment({
+          order_id: targetId,
+          amount: nominal,
+          bank_account_id: dbId(bank) || bank?.backendId || bank?.id,
+          stage: f.kind.toLowerCase(),
+          proof_url: f.proof
+        }).catch((err) => {
+          console.warn('Gagal simpan pembayaran manual ke server:', err);
+        });
+      }
     }
     setProofForm((prev) => ({ ...prev, nominal: '', invoice: '', refNo: '', proof: '' }));
   };
 
-  const savePR = (e) => {
+  const savePR = async (e) => {
     e.preventDefault();
     if (!prForm.purpose.trim()) return toast('Tujuan pembayaran wajib diisi.', 'error');
     if (!num(prForm.amount)) return toast('Nominal pengajuan harus lebih dari 0.', 'error');
@@ -1131,18 +1203,47 @@ export default function FinanceDashboard({
       (max, r) => Math.max(max, Number(String(r.code).replace(/\D/g, '')) || 0),
       0
     );
+    const code = `PR-${String(maxPr + 1).padStart(4, '0')}`;
+    const amount = num(prForm.amount);
+    const purpose = prForm.purpose.trim();
+    const ref = prForm.ref.trim() || '-';
+    const note = prForm.note.trim();
+
+    let createdId = uid('pr');
+    let backendId = null;
+
+    try {
+      const res = await api.management.createPaymentRequest({
+        amount,
+        bank_name: bank.bank,
+        account_number: bank.accountNo,
+        account_holder: bank.holder,
+        purpose,
+        reference: ref,
+        notes: note,
+        bank_account_id: dbId(bank) || bank?.backendId || bank?.id
+      });
+      if (res?.data?.id) {
+        backendId = res.data.id;
+        createdId = `pr-${res.data.id}`;
+      }
+    } catch (err) {
+      console.warn('Gagal menyimpan pengajuan bayar ke server:', err);
+    }
+
     const req = {
-      id: uid('pr'),
-      code: `PR-${String(maxPr + 1).padStart(4, '0')}`,
+      id: createdId,
+      backendId,
+      code,
       createdAt: todayISO(),
       createdBy: me.name,
-      amount: num(prForm.amount),
+      amount,
       bank: bank.bank,
       accountNo: bank.accountNo,
       holder: bank.holder,
-      purpose: prForm.purpose.trim(),
-      ref: prForm.ref.trim() || '-',
-      note: prForm.note.trim(),
+      purpose,
+      ref,
+      note,
       status: PREQ.REVIEW_MKT,
       marketing: null,
       owner: null,
@@ -1159,10 +1260,16 @@ export default function FinanceDashboard({
       message: `Batalkan pengajuan ${req.code} sebesar ${rp(req.amount)}?`,
       confirmLabel: 'Batalkan pengajuan',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
         commitPaymentRequests((prev) =>
           prev.map((r) => (r.id === req.id ? { ...r, status: PREQ.CANCELED } : r))
         );
+        const targetId = dbId(req) || req.backendId || req.id;
+        if (targetId) {
+          api.management.updatePaymentRequest(targetId, { status: 'dibatalkan' }).catch((err) => {
+            console.warn('Gagal membatalkan pengajuan di server:', err);
+          });
+        }
         setConfirmModal(null);
         setPrDetailId(null);
         toast(`${req.code} dibatalkan.`, 'warning');
@@ -1404,7 +1511,7 @@ export default function FinanceDashboard({
     });
   };
 
-  const saveMitra = (e) => {
+  const saveMitra = async (e) => {
     e.preventDefault();
     const f = mitraModal.form;
     if (!f.name?.trim() || !f.phone?.trim()) return toast('Nama dan WhatsApp wajib diisi.', 'error');
@@ -1412,61 +1519,81 @@ export default function FinanceDashboard({
       return toast('Email login mitra wajib diisi dengan format valid.', 'error');
     }
     if (mitraModal.mode === 'edit') {
-      commitMitra((prev) => prev.map((m) => (m.id === mitraModal.id ? { ...m, ...f } : m)));
+      const current = mitra.find((m) => m.id === mitraModal.id);
+      const targetId = dbId(current) || dbId(mitraModal.form) || dbId(mitraModal);
+      if (!targetId) return notOnServer(`Mitra ${current?.name || f.name}`);
+      try {
+        await api.management.updateUser(targetId, {
+          nama: f.name.trim(),
+          phone: f.phone,
+          city: f.city,
+          address: f.address,
+          email: f.email ? String(f.email).trim() : undefined,
+          level: f.level || 'reseller',
+          is_active: f.active !== false,
+          password: f.password?.trim() ? f.password.trim() : undefined
+        });
+      } catch (err) {
+        return serverFail(err, `Memperbarui mitra ${f.name}`);
+      }
+      commitMitra((prev) => prev.map((m) => (m.id === mitraModal.id ? { ...m, ...f, level: normalizeLevel(f.level) } : m)));
       toast(`Mitra ${f.name} diperbarui.`);
       setMitraModal(null);
-      const targetId = mitraModal.backendId || mitraModal.id;
-      api.management.updateUser(targetId, {
-        nama: f.name,
+      return;
+    }
+
+    const tempPassword = f.password?.trim() || `Mitra#${Math.floor(1000 + Math.random() * 9000)}`;
+    let created;
+    try {
+      created = await api.management.createUser({
+        nama: f.name.trim(),
+        email: String(f.email || '').trim(),
+        role: 'mitra',
+        level: String(f.level || 'reseller').toLowerCase(),
         phone: f.phone,
         city: f.city,
-        level: f.level || 'reseller'
-      }).catch(() => {});
-    } else {
-      const tempPassword = `Mitra#${Math.floor(1000 + Math.random() * 9000)}`;
-      const newM = {
-        id: uid('m'),
+        address: f.address,
+        password: tempPassword,
+        is_active: true
+      });
+    } catch (err) {
+      return serverFail(err, `Membuat akun mitra ${f.name}`);
+    }
+    const row = created?.data;
+    commitMitra((prev) => [
+      {
         ...f,
+        level: normalizeLevel(f.level),
+        id: row?.id != null ? `m-${row.id}` : uid('m'),
+        backendId: row?.id ?? null,
         active: true,
         deposit: 0,
         joinedAt: todayISO(),
         createdBy: me.name
-      };
-      commitMitra((prev) => [newM, ...prev]);
-      setMitraModal(null);
-      setCredential({
-        title: 'Akun mitra dibuat',
-        name: f.name,
-        email: String(f.email || '').trim(),
-        password: tempPassword,
-        note: 'Kirimkan kredensial ini ke mitra. Password hanya ditampilkan sekali.'
-      });
-      toast(`Akun mitra ${f.name} berhasil disimpan ke database.`);
-
-      api.management.createUser({
-        nama: f.name,
-        email: String(f.email || '').trim(),
-        role: 'mitra',
-        level: f.level || 'reseller',
-        phone: f.phone,
-        city: f.city,
-        password: tempPassword,
-        is_active: true
-      }).then((res) => {
-        const serverUser = res?.data;
-        if (serverUser?.id) {
-          newM.backendId = serverUser.id;
-          commitMitra((prev) => prev.map((x) => x.id === newM.id ? { ...x, backendId: serverUser.id } : x));
-        }
-      }).catch((err) => {
-        toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
-      });
-    }
+      },
+      ...prev
+    ]);
+    setMitraModal(null);
+    setCredential({
+      title: 'Akun mitra dibuat',
+      name: f.name,
+      email: String(f.email || '').trim(),
+      password: tempPassword,
+      note: 'Kirimkan kredensial ini ke mitra. Password hanya ditampilkan sekali.'
+    });
+    toast(`Akun mitra ${f.name} berhasil disimpan ke database.`);
   };
 
-  const toggleMitra = (m) => {
-    if (num(m.outstanding) > 0) {
+  const toggleMitra = async (m) => {
+    if (num(m.outstanding) > 0 && m.active) {
       return toast('Mitra masih memiliki piutang. Selesaikan tagihan sebelum menonaktifkan.', 'error');
+    }
+    const targetId = dbId(m);
+    if (!targetId) return notOnServer(`Mitra ${m.name}`);
+    try {
+      await api.management.updateUser(targetId, { is_active: !m.active });
+    } catch (err) {
+      return serverFail(err, `Mengubah status mitra ${m.name}`);
     }
     commitMitra((prev) => prev.map((x) => (x.id === m.id ? { ...x, active: !x.active } : x)));
     toast(`${m.name} ${m.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
@@ -1478,70 +1605,105 @@ export default function FinanceDashboard({
       message: `Hapus mitra "${m.name}"? Data akan dihapus dari sistem dan database.`,
       confirmLabel: 'Hapus Mitra',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetId = dbId(m);
+        if (!targetId) {
+          commitMitra((prev) => prev.filter((x) => x.id !== m.id));
+          setConfirmModal(null);
+          return notOnServer(`Mitra ${m.name}`);
+        }
+        try {
+          await api.management.deleteUser(targetId);
+        } catch (err) {
+          return serverFail(err, `Menghapus mitra ${m.name}`);
+        }
         commitMitra((prev) => prev.filter((x) => x.id !== m.id));
         setConfirmModal(null);
         toast(`Mitra ${m.name} dihapus.`, 'warning');
-        const targetId = m.backendId || (typeof m.id === 'number' ? m.id : String(m.id || '').replace(/\D/g, ''));
-        if (targetId) {
-          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
-        }
       }
     });
   };
 
-  const saveTeam = (e) => {
+  const saveTeam = async (e) => {
     e.preventDefault();
     const f = teamModal.form;
     if (!f.name?.trim() || !f.email?.trim()) return toast('Nama dan email wajib diisi.', 'error');
     if (f.role === 'owner') return toast('Peran owner hanya dapat dibuat dari portal owner.', 'error');
-    const tempPassword = `Tim#${Math.floor(1000 + Math.random() * 9000)}`;
-    const newU = {
-      id: uid('u'),
-      name: f.name.trim(),
-      email: f.email.trim(),
-      role: f.role,
-      phone: f.phone,
-      active: true,
-      createdAt: todayISO(),
-      createdBy: me.name
-    };
-    commitTeam((prev) => [newU, ...prev]);
+
+    if (teamModal.mode === 'edit') {
+      const current = team.find((u) => u.id === teamModal.id);
+      const targetId = dbId(current) || dbId(teamModal.form) || dbId(teamModal);
+      if (!targetId) return notOnServer(`Akun tim ${current?.name || f.name}`);
+      try {
+        await api.management.updateUser(targetId, {
+          nama: f.name.trim(),
+          phone: f.phone,
+          role: f.role,
+          email: f.email.trim(),
+          is_active: f.active !== false,
+          password: f.password?.trim() ? f.password.trim() : undefined
+        });
+      } catch (err) {
+        return serverFail(err, `Memperbarui akun tim ${f.name}`);
+      }
+      commitTeam((prev) => prev.map((x) => (x.id === teamModal.id ? { ...x, ...f } : x)));
+      toast(`Akun tim ${f.name} diperbarui.`);
+      setTeamModal(null);
+      return;
+    }
+
+    const tempPassword = f.password?.trim() || `Tim#${Math.floor(1000 + Math.random() * 9000)}`;
+    let created;
+    try {
+      created = await api.management.createUser({
+        nama: f.name.trim(),
+        email: f.email.trim(),
+        role: f.role,
+        phone: f.phone,
+        password: tempPassword,
+        is_active: true
+      });
+    } catch (err) {
+      return serverFail(err, `Membuat akun tim ${f.name}`);
+    }
+    const row = created?.data;
+    commitTeam((prev) => [
+      {
+        id: row?.id != null ? `u-${row.id}` : uid('u'),
+        backendId: row?.id ?? null,
+        name: f.name.trim(),
+        email: f.email.trim(),
+        role: f.role,
+        phone: f.phone,
+        active: true,
+        createdAt: todayISO(),
+        createdBy: me.name
+      },
+      ...prev
+    ]);
     setTeamModal(null);
     setCredential({
       title: 'Akun tim admin dibuat',
-      name: newU.name,
-      email: newU.email,
+      name: f.name.trim(),
+      email: f.email.trim(),
       password: tempPassword,
-      note: `Peran: ${roleLabel(newU.role)}. Password hanya ditampilkan sekali.`
+      note: `Peran: ${roleLabel(f.role)}. Password hanya ditampilkan sekali.`
     });
-    toast(`Akun tim ${newU.name} berhasil disimpan ke database.`);
-
-    api.management.createUser({
-      nama: newU.name,
-      email: newU.email,
-      role: newU.role,
-      phone: newU.phone,
-      password: tempPassword,
-      is_active: true
-    }).then((res) => {
-      const serverUser = res?.data;
-      if (serverUser?.id) {
-        newU.backendId = serverUser.id;
-        commitTeam((prev) => prev.map((x) => x.id === newU.id ? { ...x, backendId: serverUser.id } : x));
-      }
-    }).catch((err) => {
-      toast(`Gagal simpan ke database: ${err?.message || 'Error'}`, 'error');
-    });
+    toast(`Akun tim ${f.name} berhasil disimpan ke database.`);
   };
 
-  const toggleTeam = (u) => {
+  const toggleTeam = async (u) => {
     if (u.role === 'owner') return toast('Akun owner tidak dapat dinonaktifkan dari portal finance.', 'error');
     if (u.id === me.id) return toast('Tidak dapat menonaktifkan akun sendiri.', 'error');
+    const targetId = dbId(u);
+    if (!targetId) return notOnServer(`Akun ${u.name}`);
+    try {
+      await api.management.updateUser(targetId, { is_active: !u.active });
+    } catch (err) {
+      return serverFail(err, `Mengubah status akun ${u.name}`);
+    }
     commitTeam((prev) => prev.map((x) => (x.id === u.id ? { ...x, active: !x.active } : x)));
     toast(`${u.name} ${u.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
-    const targetId = u.backendId || u.id;
-    api.management.updateUser(targetId, { is_active: !u.active }).catch(() => {});
   };
 
   const deleteTeam = (u) => {
@@ -1552,14 +1714,21 @@ export default function FinanceDashboard({
       message: `Hapus akun "${u.name}" (${roleLabel(u.role)})? Akses pengguna akan dicabut dari sistem dan database.`,
       confirmLabel: 'Hapus Akun',
       danger: true,
-      onConfirm: () => {
+      onConfirm: async () => {
+        const targetId = dbId(u);
+        if (!targetId) {
+          commitTeam((prev) => prev.filter((x) => x.id !== u.id));
+          setConfirmModal(null);
+          return notOnServer(`Akun ${u.name}`);
+        }
+        try {
+          await api.management.deleteUser(targetId);
+        } catch (err) {
+          return serverFail(err, `Menghapus akun ${u.name}`);
+        }
         commitTeam((prev) => prev.filter((x) => x.id !== u.id));
         setConfirmModal(null);
         toast(`Akun tim ${u.name} berhasil dihapus.`, 'warning');
-        const targetId = u.backendId || (typeof u.id === 'number' ? u.id : String(u.id || '').replace(/\D/g, ''));
-        if (targetId) {
-          api.management.deleteUser(targetId).catch((err) => toast(`Gagal hapus di database: ${err?.message || 'Error'}`, 'error'));
-        }
       }
     });
   };
@@ -3550,6 +3719,14 @@ export default function FinanceDashboard({
                         <div className="flex items-center justify-end gap-1.5">
                           <Button
                             size="xs"
+                            variant="outline"
+                            disabled={u.role === 'owner'}
+                            onClick={() => setTeamModal({ mode: 'edit', id: u.id, form: { ...u, password: '' } })}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="xs"
                             variant={u.active ? 'dangerOutline' : 'primary'}
                             disabled={u.role === 'owner'}
                             onClick={() => toggleTeam(u)}
@@ -3863,7 +4040,18 @@ export default function FinanceDashboard({
             </Card>
           </>
         )}
-            </DashboardShell>
+
+        {/* ============================= PENGATURAN AKUN ============================= */}
+        {activeMenu === 'pengaturan_akun' && (
+          <AccountSettingsPanel
+            currentUser={me}
+            onUpdateUser={onUpdateUser}
+            onUpdateAvatar={onUpdateAvatar}
+            toast={toast}
+            role="finance"
+          />
+        )}
+      </DashboardShell>
 
       {/* ============================= MODALS ============================= */}
       {detailInvoice &&
@@ -4554,11 +4742,23 @@ export default function FinanceDashboard({
               />
             </Field>
             {mitraModal.mode === 'edit' && (
-              <Switch
-                checked={!!mitraModal.form.active}
-                label="Akun aktif"
-                onChange={(next) => setMitraModal((prev) => ({ ...prev, form: { ...prev.form, active: next } }))}
-              />
+              <>
+                <Field label="Reset Password (Opsional)" hint="Kosongkan jika mitra tidak meminta ganti password. Minimal 6 karakter.">
+                  <Input
+                    type="password"
+                    placeholder="Password baru mitra"
+                    value={mitraModal.form.password || ''}
+                    onChange={(e) =>
+                      setMitraModal((prev) => ({ ...prev, form: { ...prev.form, password: e.target.value } }))
+                    }
+                  />
+                </Field>
+                <Switch
+                  checked={!!mitraModal.form.active}
+                  label="Akun aktif"
+                  onChange={(next) => setMitraModal((prev) => ({ ...prev, form: { ...prev.form, active: next } }))}
+                />
+              </>
             )}
             <p className="text-[10px] text-gray-400">
               Email dipakai sebagai ID login mitra. WhatsApp tetap dipakai untuk reminder & konfirmasi. Password
@@ -4570,8 +4770,8 @@ export default function FinanceDashboard({
 
       {teamModal && (
         <Modal
-          title="Akun Tim Baru"
-          subtitle="Tentukan peran akses tim admin"
+          title={teamModal.mode === 'edit' ? 'Edit Akun Tim' : 'Akun Tim Baru'}
+          subtitle={teamModal.mode === 'edit' ? 'Perbarui informasi profil dan akses akun admin' : 'Tentukan peran akses tim admin'}
           onClose={() => setTeamModal(null)}
           footer={
             <>
@@ -4579,7 +4779,7 @@ export default function FinanceDashboard({
                 Batal
               </Button>
               <Button type="submit" form="fin-team-form" icon="check">
-                Buat Akun Tim
+                {teamModal.mode === 'edit' ? 'Simpan Perubahan' : 'Buat Akun Tim'}
               </Button>
             </>
           }
@@ -4623,6 +4823,27 @@ export default function FinanceDashboard({
                 </Select>
               </Field>
             </div>
+            {teamModal.mode === 'edit' && (
+              <>
+                <Field label="Reset Password (Opsional)" hint="Kosongkan jika tidak ingin mereset password. Minimal 6 karakter.">
+                  <Input
+                    type="password"
+                    placeholder="Password baru tim"
+                    value={teamModal.form.password || ''}
+                    onChange={(e) =>
+                      setTeamModal((prev) => ({ ...prev, form: { ...prev.form, password: e.target.value } }))
+                    }
+                  />
+                </Field>
+                <Switch
+                  checked={!!teamModal.form.active}
+                  label="Akun tim aktif"
+                  onChange={(next) =>
+                    setTeamModal((prev) => ({ ...prev, form: { ...prev.form, active: next } }))
+                  }
+                />
+              </>
+            )}
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-[11px] text-amber-800 flex items-start gap-2">
               <Icon name="shield" className="w-4 h-4 shrink-0 mt-0.5" />
               <p>
