@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ActivityLog;
+use App\Models\Address;
 use App\Models\AppSetting;
 use App\Models\BankAccount;
 use App\Models\Brand;
@@ -30,6 +31,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
@@ -52,7 +54,7 @@ class ManagementController extends Controller
                 }
                 return [];
             } catch (\Throwable $e) {
-                Log::warning('Bootstrap section failed: ' . $e->getMessage());
+                \Illuminate\Support\Facades\Log::warning('Bootstrap section failed: ' . $e->getMessage());
                 return [];
             }
         };
@@ -100,6 +102,39 @@ class ManagementController extends Controller
         ]);
     }
 
+    public function invoice(Request $request, string $id): JsonResponse
+    {
+        $order = Order::query()
+            ->with([
+                'user',
+                'address',
+                'items.variant.product.brand',
+                'items.variant.product.batch',
+                'items.address',
+                'invoice.installments',
+                'invoice.payments',
+            ])
+            ->where(function ($q) use ($id) {
+                $q->where('id', $id)
+                  ->orWhere('order_number', $id)
+                  ->orWhereHas('invoice', fn ($iq) => $iq->where('id', $id)->orWhere('invoice_number', $id));
+            })
+            ->first();
+
+        if (!$order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invoice atau pesanan tidak ditemukan.',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Detail invoice berhasil dimuat.',
+            'data'    => $this->orderPayload($order),
+        ]);
+    }
+
     public function users(): JsonResponse
     {
         $users = User::query()->withCount('orders')->orderBy('id')->get();
@@ -107,6 +142,7 @@ class ManagementController extends Controller
         $data = $users->map(function (User $user) {
             return [
                 'id'              => $user->id,
+                'mitra_id'        => $user->mitra_id,
                 'name'            => $user->nama,
                 'nama'            => $user->nama,
                 'email'           => $user->email,
@@ -337,14 +373,25 @@ class ManagementController extends Controller
         }
 
         $name = trim((string) $request->name);
-        if ($this->duplicateName(Brand::query(), $name)) {
-            return $this->duplicateResponse('brand');
+        $existing = Brand::with('supplier')->whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($name)])->first();
+        if ($existing) {
+            return response()->json([
+                'success' => true,
+                'message' => "Brand {$existing->name} sudah terdaftar.",
+                'data'    => $existing,
+            ], 200);
         }
 
-        $supplierId = $this->resolveMasterRef(Supplier::class, $request->supplier_id, 'supplier_id');
-        if (!$supplierId && $request->filled('supplier')) {
+        $supplierId = null;
+        if ($request->filled('supplier')) {
             $sup = Supplier::firstOrCreate(['name' => trim((string) $request->supplier)], ['city' => $request->address ?? 'Solo']);
             $supplierId = $sup->id;
+        } elseif ($request->filled('supplier_id')) {
+            try {
+                $supplierId = $this->resolveMasterRef(Supplier::class, $request->supplier_id, 'supplier_id');
+            } catch (\Throwable $e) {
+                $supplierId = null;
+            }
         }
 
         $brand = Brand::create([
@@ -361,16 +408,55 @@ class ManagementController extends Controller
 
         $this->logActivity('brand.create', 'Master Data', "Brand {$brand->name} ditambahkan");
 
+        $brand->load('supplier');
         return response()->json([
             'success' => true,
             'message' => "Brand {$brand->name} berhasil ditambahkan.",
-            'data'    => $brand->load('supplier'),
+            'data'    => [
+                'id'                => $brand->id,
+                'name'              => $brand->name,
+                'supplier_id'       => $brand->supplier_id,
+                'supplier'          => $brand->supplier?->name ?? ($request->supplier ?? ''),
+                'address'           => $request->address ?? $brand->supplier?->city ?? 'Solo',
+                'logo'              => $brand->logo,
+                'description'       => $brand->description,
+                'discount_db_all'   => (float) ($brand->discount_db_all ?? 30),
+                'discount_sub_db'   => (float) ($brand->discount_sub_db ?? 25),
+                'discount_agen'     => (float) ($brand->discount_agen ?? 20),
+                'discount_reseller' => (float) ($brand->discount_reseller ?? 15),
+                'discountDBAll'     => (float) ($brand->discount_db_all ?? 30),
+                'discountSubDB'     => (float) ($brand->discount_sub_db ?? 25),
+                'discountAgen'      => (float) ($brand->discount_agen ?? 20),
+                'discountReseller'  => (float) ($brand->discount_reseller ?? 15),
+                'discount_type'     => $request->discountType ?? $request->discount_type ?? 'pct',
+                'discountType'      => $request->discountType ?? $request->discount_type ?? 'pct',
+                'discount_value'    => (float) ($request->discountValue ?? $request->discount_value ?? $brand->discount_db_all ?? 30),
+                'discountValue'     => (float) ($request->discountValue ?? $request->discount_value ?? $brand->discount_db_all ?? 30),
+                'fee_type'          => $request->feeType ?? $request->fee_type ?? 'pct',
+                'feeType'           => $request->feeType ?? $request->fee_type ?? 'pct',
+                'is_active'         => (bool) $brand->is_active,
+                'active'            => (bool) $brand->is_active,
+                'products_count'    => 0,
+            ],
         ], 201);
     }
 
     public function updateBrand(Request $request, $id): JsonResponse
     {
-        $brand = Brand::find($id);
+        $cleanId = is_string($id) && preg_match('/^[a-z]+-(\d+)$/i', trim($id), $matches)
+            ? (int) $matches[1]
+            : (is_numeric($id) ? (int) $id : null);
+
+        $brand = $cleanId ? Brand::find($cleanId) : null;
+        if (!$brand && is_string($id)) {
+            $brand = Brand::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($id))])->first();
+        }
+        if (!$brand && is_numeric($id)) {
+            $brand = Brand::find((int) $id);
+        }
+        if (!$brand && $request->filled('name')) {
+            $brand = Brand::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($request->name))])->first();
+        }
         if (!$brand) {
             return response()->json(['success' => false, 'message' => 'Brand tidak ditemukan.'], 404);
         }
@@ -399,27 +485,78 @@ class ManagementController extends Controller
             $brand->discount_reseller = (float) ($request->discount_reseller ?? $request->discountReseller);
         }
 
-        if ($request->filled('supplier_id')) {
-            $brand->supplier_id = $this->resolveMasterRef(Supplier::class, $request->supplier_id, 'supplier_id');
-        } elseif ($request->filled('supplier')) {
+        if ($request->filled('supplier')) {
             $sup = Supplier::firstOrCreate(['name' => trim((string) $request->supplier)], ['city' => $request->address ?? 'Solo']);
             $brand->supplier_id = $sup->id;
+        } elseif ($request->filled('supplier_id')) {
+            try {
+                $brand->supplier_id = $this->resolveMasterRef(Supplier::class, $request->supplier_id, 'supplier_id');
+            } catch (\Throwable $e) {
+                // Jangan crash bila ID supplier belum terdaftar
+                $brand->supplier_id = null;
+            }
+        } elseif ($request->exists('supplier') && empty($request->supplier)) {
+            $brand->supplier_id = null;
+        }
+
+        if ($brand->supplier_id && $request->filled('address')) {
+            $sup = Supplier::find($brand->supplier_id);
+            if ($sup) {
+                $sup->city = trim((string) $request->address);
+                $sup->save();
+            }
         }
 
         $brand->save();
 
         $this->logActivity('brand.update', 'Master Data', "Brand {$brand->name} diperbarui");
 
+        $brand->load('supplier');
         return response()->json([
             'success' => true,
             'message' => "Brand {$brand->name} berhasil diperbarui.",
-            'data'    => $brand->load('supplier'),
+            'data'    => [
+                'id'                => $brand->id,
+                'name'              => $brand->name,
+                'supplier_id'       => $brand->supplier_id,
+                'supplier'          => $brand->supplier?->name ?? ($request->supplier ?? ''),
+                'address'           => $request->address ?? $brand->supplier?->city ?? 'Solo',
+                'logo'              => $brand->logo,
+                'description'       => $brand->description,
+                'discount_db_all'   => (float) ($brand->discount_db_all ?? 30),
+                'discount_sub_db'   => (float) ($brand->discount_sub_db ?? 25),
+                'discount_agen'     => (float) ($brand->discount_agen ?? 20),
+                'discount_reseller' => (float) ($brand->discount_reseller ?? 15),
+                'discountDBAll'     => (float) ($brand->discount_db_all ?? 30),
+                'discountSubDB'     => (float) ($brand->discount_sub_db ?? 25),
+                'discountAgen'      => (float) ($brand->discount_agen ?? 20),
+                'discountReseller'  => (float) ($brand->discount_reseller ?? 15),
+                'discount_type'     => $request->discountType ?? $request->discount_type ?? 'pct',
+                'discountType'      => $request->discountType ?? $request->discount_type ?? 'pct',
+                'discount_value'    => (float) ($request->discountValue ?? $request->discount_value ?? $brand->discount_db_all ?? 30),
+                'discountValue'     => (float) ($request->discountValue ?? $request->discount_value ?? $brand->discount_db_all ?? 30),
+                'fee_type'          => $request->feeType ?? $request->fee_type ?? 'pct',
+                'feeType'           => $request->feeType ?? $request->fee_type ?? 'pct',
+                'is_active'         => (bool) $brand->is_active,
+                'active'            => (bool) $brand->is_active,
+                'products_count'    => $brand->products()->count(),
+            ],
         ]);
     }
 
     public function destroyBrand($id): JsonResponse
     {
-        $brand = Brand::find($id);
+        $cleanId = is_string($id) && preg_match('/^[a-z]+-(\d+)$/i', trim($id), $matches)
+            ? (int) $matches[1]
+            : (is_numeric($id) ? (int) $id : null);
+
+        $brand = $cleanId ? Brand::find($cleanId) : null;
+        if (!$brand && is_string($id)) {
+            $brand = Brand::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($id))])->first();
+        }
+        if (!$brand && is_numeric($id)) {
+            $brand = Brand::find((int) $id);
+        }
         if (!$brand) {
             return response()->json(['success' => false, 'message' => 'Brand tidak ditemukan.'], 404);
         }
@@ -537,12 +674,59 @@ class ManagementController extends Controller
     }
 
     // Products
-    public function products(): JsonResponse
+    public function products(?Request $request = null): JsonResponse
     {
-        $products = Product::with(['brand.supplier', 'category', 'batch', 'variants', 'prices.level'])
-            ->orderBy('id')
-            ->get();
+        Product::autoSyncExpired();
 
+        $request = $request ?? request();
+        $query = Product::with(['brand.supplier', 'category', 'batch', 'variants', 'prices.level'])
+            ->orderBy('id');
+
+        if ($request->filled('brand_id')) {
+            $query->where('brand_id', $request->brand_id);
+        } elseif ($request->filled('brand')) {
+            $bVal = trim((string) $request->brand);
+            if (is_numeric($bVal)) {
+                $query->where('brand_id', (int) $bVal);
+            } else {
+                $query->whereHas('brand', fn ($q) => $q->whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($bVal)]));
+            }
+        }
+
+        if ($request->filled('category_id')) {
+            $query->where('category_id', $request->category_id);
+        } elseif ($request->filled('category')) {
+            $cVal = trim((string) $request->category);
+            if (is_numeric($cVal)) {
+                $query->where('category_id', (int) $cVal);
+            } else {
+                $query->whereHas('category', fn ($q) => $q->whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($cVal)]));
+            }
+        }
+
+        if ($request->filled('po_batch_id')) {
+            $query->where('po_batch_id', $request->po_batch_id);
+        }
+
+        if ($request->filled('status')) {
+            $sVal = trim((string) $request->status);
+            if (in_array($sVal, ['closed', 'closed_po'], true)) {
+                $query->whereIn('status', ['closed', 'closed_po']);
+            } else {
+                $query->where('status', $sVal);
+            }
+        }
+
+        if ($request->filled('search')) {
+            $s = mb_strtolower(trim((string) $request->search));
+            $query->where(function ($q) use ($s) {
+                $q->whereRaw('LOWER(name) LIKE ?', ["%{$s}%"])
+                    ->orWhereRaw('LOWER(article_code) LIKE ?', ["%{$s}%"])
+                    ->orWhereRaw('LOWER(series) LIKE ?', ["%{$s}%"]);
+            });
+        }
+
+        $products = $query->get();
         $data = $products->map(fn (Product $p) => $this->productPayload($p));
 
         return response()->json([
@@ -555,6 +739,8 @@ class ManagementController extends Controller
 
     public function batches(): JsonResponse
     {
+        Product::autoSyncExpired();
+
         $batches = PoBatch::query()->with(['brand', 'products'])->orderBy('id')->get();
 
         $data = $batches->map(fn (PoBatch $batch) => [
@@ -565,7 +751,7 @@ class ManagementController extends Controller
             'start_date'         => optional($batch->start_date)->toDateString(),
             'close_date'         => optional($batch->close_date)->toIso8601String(),
             'estimated_shipment' => optional($batch->estimated_shipment)->toDateString(),
-            'status'             => $batch->status,
+            'status'             => $batch->effective_status,
             'products_count'     => $batch->products->count(),
         ]);
 
@@ -687,6 +873,30 @@ class ManagementController extends Controller
             'message' => 'Notifikasi pengguna.',
             'total'   => $data->count(),
             'data'    => $data,
+        ]);
+    }
+
+    public function markNotificationsAsRead(Request $request): JsonResponse
+    {
+        $userId = auth('api')->id();
+        $query = Notification::query();
+        if ($userId) {
+            $query->where('user_id', $userId);
+        }
+        $query->where('is_read', false);
+
+        if ($request->filled('id')) {
+            $query->where('id', $request->id);
+        }
+
+        $query->update([
+            'is_read' => true,
+            'read_at' => now(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Notifikasi berhasil ditandai sudah dibaca.',
         ]);
     }
 
@@ -1079,6 +1289,8 @@ class ManagementController extends Controller
             'subtotal'         => (float) $order->subtotal,
             'shipping_cost'    => (float) $order->shipping_cost,
             'total_amount'     => (float) $order->total_amount,
+            'fee_mitra_total'  => (float) $order->items->sum('discount_nominal'),
+            'addon_total'      => (float) $order->items->sum('addon_nominal'),
             'ordered_at'       => optional($order->ordered_at)->toIso8601String(),
             'created_at'       => optional($order->created_at)->toIso8601String(),
             'user'             => $order->user ? [
@@ -1102,6 +1314,7 @@ class ManagementController extends Controller
 
                 return [
                 'id'                => $item->id,
+                'address_id'        => $item->address_id,
                 'product_variant_id' => $item->product_variant_id,
                 'quantity'          => $item->quantity,
                 'unit_price'        => (float) $item->unit_price,
@@ -1110,6 +1323,7 @@ class ManagementController extends Controller
                 'addon_nominal'     => $addon,
                 'subtotal'          => (float) $item->subtotal,
                 'net_subtotal'      => round((float) $item->subtotal - $discount + $addon, 2),
+                'splits'            => $item->splits,
                 'variant'           => $item->variant ? [
                     'id'        => $item->variant->id,
                     'model'     => $item->variant->model,
@@ -1158,6 +1372,9 @@ class ManagementController extends Controller
                     'amount'           => (float) $payment->amount,
                     'status'           => $payment->status,
                     'proof_url'        => $payment->proof_url,
+                    'method'           => (strtoupper((string) $payment->proof_url) === 'DEPOSIT' || empty($payment->proof_url)) ? 'deposit' : 'transfer',
+                    'bank_name'        => (strtoupper((string) $payment->proof_url) === 'DEPOSIT' || empty($payment->proof_url)) ? 'Deposit' : 'Transfer Bank',
+                    'account_number'   => (strtoupper((string) $payment->proof_url) === 'DEPOSIT' || empty($payment->proof_url)) ? 'Saldo Deposit' : '',
                     'rejection_reason' => $payment->rejection_reason,
                     'uploaded_at'      => optional($payment->uploaded_at)->toIso8601String(),
                     'verified_at'      => optional($payment->verified_at)->toIso8601String(),
@@ -1409,9 +1626,6 @@ class ManagementController extends Controller
         if (!$user) {
             return response()->json(['success' => false, 'message' => 'User tidak ditemukan.'], 404);
         }
-        if (!$user) {
-            return response()->json(['success' => false, 'message' => 'User tidak ditemukan.'], 404);
-        }
 
         if (auth('api')->id() == $user->id) {
             return response()->json([
@@ -1421,32 +1635,55 @@ class ManagementController extends Controller
         }
 
         $orderCount = $user->orders()->count();
-        if ($orderCount > 0) {
-            if (request()->boolean('force')) {
-                foreach ($user->orders as $order) {
-                    $order->items()->delete();
-                    $order->payments()->delete();
-                    $order->delete();
-                }
-            } else {
-                return $this->linkedResponse('pengguna', 'pesanan', $orderCount);
-            }
+        if ($orderCount > 0 && !request()->boolean('force')) {
+            return $this->linkedResponse('pengguna', 'pesanan', $orderCount);
         }
 
         $depositCount = DepositTransaction::where('user_id', $user->id)->count();
-        if ($depositCount > 0) {
-            if (request()->boolean('force')) {
-                DepositTransaction::where('user_id', $user->id)->delete();
-            } else {
-                return $this->linkedResponse('pengguna', 'riwayat deposit', $depositCount);
-            }
+        if ($depositCount > 0 && !request()->boolean('force')) {
+            return $this->linkedResponse('pengguna', 'riwayat deposit', $depositCount);
         }
 
-        $nama = $user->nama;
+        $nama = $user->nama ?? $user->name;
 
         DB::transaction(function () use ($user) {
-            $user->addresses()->delete();
+            // Hapus seluruh pesanan terkait beserta invoice dan pembayarannya
+            foreach ($user->orders as $order) {
+                $order->items()->delete();
+                $order->statusHistories()->delete();
+
+                if ($order->invoice) {
+                    $order->invoice->payments()->delete();
+                    $order->invoice->installments()->delete();
+                    $order->invoice->delete();
+                }
+
+                $order->delete();
+            }
+
+            // Hapus riwayat deposit
+            DepositTransaction::where('user_id', $user->id)->delete();
+
+            // Hapus keranjang belanja
+            if ($user->cart) {
+                $user->cart->items()->delete();
+                $user->cart->delete();
+            }
+
+            // Hapus wishlist, notifikasi, alamat, payment request, dan audit log
+            \App\Models\Wishlist::where('user_id', $user->id)->delete();
             Notification::where('user_id', $user->id)->delete();
+            $user->addresses()->delete();
+            PaymentRequest::where('created_by', $user->id)->delete();
+            PaymentRequest::where('marketing_by', $user->id)->update(['marketing_by' => null]);
+            PaymentRequest::where('owner_by', $user->id)->update(['owner_by' => null]);
+            PaymentRequest::where('transfer_by', $user->id)->update(['transfer_by' => null]);
+            ActivityLog::where('user_id', $user->id)->delete();
+
+            // Lepaskan relasi verifier jika user ini pernah memverifikasi transaksi
+            Payment::where('verified_by', $user->id)->update(['verified_by' => null]);
+            DepositTransaction::where('verified_by', $user->id)->update(['verified_by' => null]);
+
             $user->delete();
         });
 
@@ -1499,9 +1736,25 @@ class ManagementController extends Controller
         }
 
         $product = DB::transaction(function () use ($request, $name, $brandId, $categoryId, $batchId) {
+            $batchModel = $batchId ? PoBatch::find($batchId) : null;
+            $tutupPo = ($request->filled('tutup_po') && ($ts = strtotime($request->tutup_po)) && $ts > 0)
+                ? date('Y-m-d H:i:s', $ts)
+                : ($batchModel?->close_date ? $batchModel->close_date->format('Y-m-d H:i:s') : null);
+
+            $estShipment = ($request->filled('estimated_shipment') && ($ets = strtotime($request->estimated_shipment)) && $ets > 0)
+                ? date('Y-m-d', $ets)
+                : ($batchModel?->estimated_shipment ? $batchModel->estimated_shipment->toDateString() : null);
+
+            $status = $request->status ?? 'pre_order';
+            if ($batchModel && $batchModel->status === 'closed' && $status === 'pre_order') {
+                $status = 'closed_po';
+            }
+
+            $articleCode = $request->article_code ?: ($request->series ?: 'ART-' . strtoupper(Str::random(6)));
+
             $p = Product::create([
                 'name'               => $name,
-                'article_code'       => $request->article_code ?? 'ART-' . strtoupper(Str::random(6)),
+                'article_code'       => $articleCode,
                 'brand_id'           => $brandId,
                 'category_id'        => $categoryId,
                 'po_batch_id'        => $batchId,
@@ -1509,14 +1762,16 @@ class ManagementController extends Controller
                 'image2'             => $request->image2 ?? null,
                 'image3'             => $request->image3 ?? null,
                 'image4'             => $request->image4 ?? null,
+                'image5'             => $request->image5 ?? null,
+                'image6'             => $request->image6 ?? null,
                 'reel_url'           => $request->reel_url ?? $request->reelUrl ?? $request->video_url ?? null,
-                'thumbnails'         => $request->thumbnails ?? array_values(array_filter([$request->image, $request->image2, $request->image3, $request->image4])),
+                'thumbnails'         => $request->thumbnails ?? array_values(array_filter([$request->image, $request->image2, $request->image3, $request->image4, $request->image5, $request->image6])),
                 'series'             => $request->series ?? null,
-                'status'             => $request->status ?? 'pre_order',
-                'tutup_po'           => $request->tutup_po ? date('Y-m-d H:i:s', strtotime($request->tutup_po)) : null,
-                'estimated_shipment' => $request->estimated_shipment ? date('Y-m-d', strtotime($request->estimated_shipment)) : null,
+                'status'             => $status,
+                'tutup_po'           => $tutupPo,
+                'estimated_shipment' => $estShipment,
                 'min_dp_percent'     => (int) ($request->min_dp_percent ?: ($request->dpPct ?: TerminPlan::DEFAULT_DP_PERCENT)),
-                'payment_stages'     => $request->input('paymentStages') ?? $request->input('stages') ?? null,
+                'payment_stages'     => $request->input('payment_stages') ?? $request->input('paymentStages') ?? $request->input('stages') ?? null,
                 'termin_count'       => (int) ($request->input('terminCount') ?? $request->input('termin_count') ?? 2),
                 'stock_quota'        => (int) ($request->stock_quota ?? 50),
                 'description'        => $request->description ?? null,
@@ -1577,8 +1832,8 @@ class ManagementController extends Controller
         }
 
         $fields = [
-            'name', 'series', 'status', 'description', 'material_detail',
-            'image', 'image2', 'image3', 'image4', 'reel_url', 'thumbnails',
+            'name', 'series', 'article_code', 'status', 'description', 'material_detail',
+            'image', 'image2', 'image3', 'image4', 'image5', 'image6', 'reel_url', 'thumbnails',
             'is_active', 'is_sale', 'discount_percent', 'original_price',
             'min_dp_percent', 'payment_stages', 'termin_count', 'stock_quota'
         ];
@@ -1600,8 +1855,21 @@ class ManagementController extends Controller
             $product->min_dp_percent = (int) $request->input('dpPct');
         }
         if ($request->filled('title')) $product->name = trim((string) $request->title);
-        if ($request->filled('tutup_po')) $product->tutup_po = date('Y-m-d H:i:s', strtotime($request->tutup_po));
-        if ($request->filled('estimated_shipment')) $product->estimated_shipment = date('Y-m-d', strtotime($request->estimated_shipment));
+        if ($request->filled('tutup_po')) {
+            $ts = strtotime($request->tutup_po);
+            if ($ts && $ts > 0) {
+                $product->tutup_po = date('Y-m-d H:i:s', $ts);
+            }
+        } elseif ($product->po_batch_id && !$product->tutup_po) {
+            $b = PoBatch::find($product->po_batch_id);
+            if ($b?->close_date) {
+                $product->tutup_po = $b->close_date;
+            }
+        }
+        if ($request->has('estimated_shipment')) {
+            $ets = $request->filled('estimated_shipment') ? strtotime($request->estimated_shipment) : false;
+            $product->estimated_shipment = ($ets && $ets > 0) ? date('Y-m-d', $ets) : null;
+        }
 
         DB::transaction(function () use ($request, $product) {
             $product->save();
@@ -1795,6 +2063,21 @@ class ManagementController extends Controller
         }
 
         $batch->save();
+
+        // Sinkronisasi status batch dan jadwal ke produk yang terhubung
+        $productUpdates = [];
+        if ($request->has('status')) {
+            $productUpdates['status'] = $batch->status === 'closed' ? 'closed_po' : 'pre_order';
+        }
+        if ($request->filled('close_date')) {
+            $productUpdates['tutup_po'] = $batch->close_date;
+        }
+        if ($request->filled('estimated_shipment')) {
+            $productUpdates['estimated_shipment'] = $batch->estimated_shipment;
+        }
+        if (!empty($productUpdates)) {
+            Product::where('po_batch_id', $batch->id)->update($productUpdates);
+        }
 
         $this->logActivity('batch.update', 'Batch PO', "Batch {$batch->name} diperbarui");
 
@@ -2083,13 +2366,255 @@ class ManagementController extends Controller
     }
 
     // =========================================================================
-    // 4b. ORDER STATUS (Marketing ACC / Resi / Pengiriman)
+    // 4a. ORDER CREATE (Manual Order dari Marketing / Finance / Owner)
+    // =========================================================================
+    public function storeOrder(Request $request): JsonResponse
+    {
+        $rawItems = $request->input('items', []);
+        if (is_array($rawItems)) {
+            $rawItems = array_map(function ($item) {
+                if (empty($item['product_variant_id']) && !empty($item['variant_id'])) {
+                    $item['product_variant_id'] = $item['variant_id'];
+                }
+                if (!empty($item['product_variant_id'])) {
+                    $exists = ProductVariant::where('id', $item['product_variant_id'])->exists();
+                    if (!$exists) {
+                        $item['product_variant_id'] = null;
+                    }
+                }
+
+                $productId = $item['product_id'] ?? $item['produkId'] ?? $item['produk_id'] ?? null;
+                if (empty($item['product_variant_id']) && !empty($productId)) {
+                    $vQuery = ProductVariant::where('product_id', $productId);
+                    if (!empty($item['model'])) $vQuery->where('model', $item['model']);
+                    if (!empty($item['size'])) $vQuery->where('size', $item['size']);
+                    if (!empty($item['color'])) $vQuery->where('color', $item['color']);
+                    $item['product_variant_id'] = $vQuery->value('id') ?? ProductVariant::where('product_id', $productId)->value('id');
+
+                    if (empty($item['product_variant_id'])) {
+                        $prod = Product::find($productId);
+                        if ($prod) {
+                            $v = ProductVariant::create([
+                                'product_id' => $prod->id,
+                                'model'      => $item['model'] ?? 'Standar',
+                                'size'       => $item['size'] ?? 'ALL',
+                                'color'      => $item['color'] ?? 'Default',
+                                'sku'        => 'SKU-' . strtoupper(Str::random(6)),
+                                'stock'      => 100,
+                                'price'      => $prod->price,
+                                'is_active'  => true,
+                            ]);
+                            $item['product_variant_id'] = $v->id;
+                        }
+                    }
+                }
+
+                if (empty($item['product_variant_id'])) {
+                    $item['product_variant_id'] = ProductVariant::whereHas('product', fn ($q) => $q->where('is_active', true))->value('id');
+                }
+
+                if (!isset($item['quantity']) && isset($item['qty'])) {
+                    $item['quantity'] = $item['qty'];
+                }
+                if (!isset($item['unit_price']) && isset($item['price'])) {
+                    $item['unit_price'] = $item['price'];
+                }
+
+                return $item;
+            }, $rawItems);
+            $request->merge(['items' => $rawItems]);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'total_amount'               => 'nullable|numeric|min:0',
+            'subtotal'                   => 'nullable|numeric|min:0',
+            'shipping_cost'              => 'nullable|numeric|min:0',
+            'user_id'                    => 'nullable|integer',
+            'mitra_id'                   => 'nullable|integer',
+            'address_id'                 => 'nullable|integer',
+            'courier_name'               => 'nullable|string|max:100',
+            'notes'                      => 'nullable|string',
+            'items'                      => 'required|array|min:1',
+            'items.*.product_variant_id' => 'required|integer',
+            'items.*.quantity'           => 'required|integer|min:1',
+            'items.*.unit_price'         => 'required|numeric|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validasi pembuatan pesanan gagal.',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        $userId = $request->input('user_id') ?? $request->input('mitra_id');
+        $user = $userId ? User::find($userId) : null;
+        if (!$user) {
+            $user = auth('api')->user();
+        }
+
+        $variants = ProductVariant::with('product')
+            ->whereIn('id', collect($request->items)->pluck('product_variant_id'))
+            ->get()
+            ->keyBy('id');
+
+        $computedSubtotal = 0.0;
+        foreach ($request->items as $item) {
+            $addon = (float) ($item['addon_nominal'] ?? $item['addon'] ?? 0);
+            $computedSubtotal += ((float) $item['unit_price'] * (int) $item['quantity']) + $addon;
+        }
+
+        $subtotal = (float) ($request->subtotal ?? $computedSubtotal);
+        if ($computedSubtotal > 0 && abs($computedSubtotal - $subtotal) > 1) {
+            $subtotal = $computedSubtotal;
+        }
+
+        $shippingCost = (float) ($request->shipping_cost ?? $request->ongkir ?? 0);
+        $totalAmount = (float) ($request->total_amount ?? ($subtotal + $shippingCost));
+        if (abs(($subtotal + $shippingCost) - $totalAmount) > 1) {
+            $totalAmount = $subtotal + $shippingCost;
+        }
+
+        $status = $request->input('status', 'Menunggu DP');
+
+        $order = DB::transaction(function () use ($request, $user, $status, $totalAmount, $subtotal, $shippingCost, $variants) {
+            $requestedOrderNumber = trim((string) ($request->order_number ?? $request->orderNo ?? ''));
+            if ($requestedOrderNumber && !Order::where('order_number', $requestedOrderNumber)->exists()) {
+                $orderNumber = $requestedOrderNumber;
+            } else {
+                $orderNumber = 'PO-' . date('Ymd') . '-' . strtoupper(Str::random(5));
+            }
+
+            $order = Order::create([
+                'user_id'          => $user ? $user->id : auth('api')->id(),
+                'address_id'       => $request->address_id,
+                'order_number'     => $orderNumber,
+                'status'           => $status,
+                'production_status'=> $request->input('production_status', 'Antrean'),
+                'courier_name'     => $request->courier_name ?: $request->ekspedisi,
+                'tracking_number'  => $request->tracking_number ?: $request->resi,
+                'notes'            => $request->notes,
+                'is_split_address' => (bool) $request->input('is_split_address', false),
+                'subtotal'         => $subtotal,
+                'shipping_cost'    => $shippingCost,
+                'total_amount'     => $totalAmount,
+                'ordered_at'       => now(),
+            ]);
+
+            OrderStatusHistory::create([
+                'order_id'   => $order->id,
+                'status'     => $status,
+                'note'       => 'Pesanan manual dibuat oleh ' . (auth('api')->user()?->nama ?? 'Admin/Marketing'),
+                'changed_by' => auth('api')->id(),
+                'created_at' => now(),
+            ]);
+
+            foreach ($request->items as $item) {
+                $qty = (int) $item['quantity'];
+                $unitPrice = (float) $item['unit_price'];
+                $fee = (float) ($item['fee'] ?? $item['feeNominal'] ?? $item['feeMitraNominal'] ?? 0);
+                $discount = (float) ($item['discount_nominal'] ?? $item['discountNominal'] ?? $fee);
+                $addon = (float) ($item['addon_nominal'] ?? $item['addon'] ?? 0);
+
+                OrderItem::create([
+                    'order_id'           => $order->id,
+                    'product_variant_id' => $item['product_variant_id'],
+                    'quantity'           => $qty,
+                    'unit_price'         => $unitPrice,
+                    'fee'                => $fee,
+                    'discount_nominal'   => $discount,
+                    'addon_nominal'      => $addon,
+                    'subtotal'           => round(($unitPrice * $qty) + $addon, 2),
+                    'created_at'         => now(),
+                ]);
+            }
+
+            $requestedInvoiceNumber = trim((string) ($request->invoice ?? $request->invoice_number ?? ''));
+            if ($requestedInvoiceNumber && !Invoice::where('invoice_number', $requestedInvoiceNumber)->exists()) {
+                $invoiceNumber = $requestedInvoiceNumber;
+            } else {
+                $invoiceNumber = 'INV/' . date('Y/m') . '/' . str_pad((string) $order->id, 5, '0', STR_PAD_LEFT);
+                if (Invoice::where('invoice_number', $invoiceNumber)->exists()) {
+                    $invoiceNumber .= '-' . strtoupper(Str::random(3));
+                }
+            }
+
+            $invoice = Invoice::create([
+                'order_id'           => $order->id,
+                'invoice_number'     => $invoiceNumber,
+                'total_amount'       => $totalAmount,
+                'paid_amount'        => 0,
+                'outstanding_amount' => $totalAmount,
+                'status'             => 'belum_lunas',
+                'due_at'             => now()->addDays(3),
+            ]);
+
+            $product = $variants->first()?->product;
+            $plan = TerminPlan::split($subtotal, TerminPlan::forProduct($product, null, now()));
+
+            foreach ($plan as $stage) {
+                Installment::create([
+                    'invoice_id'      => $invoice->id,
+                    'type'            => $stage['type'],
+                    'sequence_number' => $stage['sequence'],
+                    'amount'          => $stage['amount'],
+                    'paid_amount'     => 0,
+                    'status'          => 'belum_bayar',
+                    'due_at'          => $stage['due_at'],
+                ]);
+            }
+
+            return $order->load(['items.variant.product.brand', 'invoice.installments', 'invoice.payments', 'address', 'user']);
+        });
+
+        $this->logActivity('order.create', 'Order', 'Pesanan ' . $order->order_number . ' dibuat manual oleh ' . (auth('api')->user()?->nama ?? 'Admin'));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Pesanan berhasil dibuat.',
+            'data'    => $this->orderPayload($order),
+        ], 201);
+    }
+
+    // =========================================================================
+    // 4b. ORDER UPDATE (Items, Split Alamat, Kurir, Catatan)
+    // =========================================================================
+    public function updateOrder(Request $request, $id): JsonResponse
+    {
+        $orderRes = app(OrderController::class)->update($request, (string) $id);
+        $orderData = $orderRes->getData(true);
+
+        if (!$orderRes->isSuccessful()) {
+            return response()->json($orderData, $orderRes->getStatusCode());
+        }
+
+        $order = Order::with([
+            'user',
+            'address',
+            'items.variant.product.brand',
+            'invoice.installments',
+            'invoice.payments',
+        ])->where('id', $id)->orWhere('order_number', $id)->first();
+
+        return response()->json([
+            'success' => true,
+            'message' => $orderData['message'] ?? 'Pesanan berhasil diperbarui.',
+            'data'    => $order ? $this->orderPayload($order) : ($orderData['data'] ?? null),
+        ], 200);
+    }
+
+    // =========================================================================
+    // 4c. ORDER STATUS (Marketing ACC / Resi / Pengiriman)
     // =========================================================================
     public function updateOrderStatus(Request $request, $id): JsonResponse
     {
-        $order = Order::where('id', $id)
-            ->orWhere('order_number', $id)
-            ->first();
+        $order = is_numeric($id)
+            ? Order::find($id)
+            : Order::where('order_number', $id)
+                ->orWhere('id', $id)
+                ->orWhereHas('invoice', fn ($q) => $q->where('invoice_number', $id))
+                ->first();
 
         if (!$order) {
             return response()->json(['success' => false, 'message' => 'Pesanan tidak ditemukan.'], 404);
@@ -2174,16 +2699,6 @@ class ManagementController extends Controller
                             'verified_at' => now(),
                         ]);
                 }
-
-                // Ongkir juga disetujui bersama pelunasan
-                Payment::where('invoice_id', $invoice->id)
-                    ->whereNull('installment_id')
-                    ->where('status', 'menunggu_verifikasi')
-                    ->update([
-                        'status'      => 'disetujui',
-                        'verified_by' => auth('api')->id(),
-                        'verified_at' => now(),
-                    ]);
             } elseif (in_array($pelunasanStatusReq, ['TOLAK', 'DITOLAK'], true)) {
                 $pelInstallment = $invoice->installments()->where('type', 'pelunasan')->first();
                 if ($pelInstallment) {
@@ -2251,7 +2766,12 @@ class ManagementController extends Controller
 
     public function destroyOrder($id): JsonResponse
     {
-        $order = is_numeric($id) ? Order::find($id) : Order::where('order_number', $id)->first();
+        $order = is_numeric($id)
+            ? Order::find($id)
+            : Order::where('order_number', $id)
+                ->orWhere('id', $id)
+                ->orWhereHas('invoice', fn ($q) => $q->where('invoice_number', $id))
+                ->first();
         if (!$order) {
             return response()->json([
                 'success' => false,
@@ -2324,6 +2844,9 @@ class ManagementController extends Controller
         }
 
         $installment = null;
+        $stageInput = strtolower(trim((string) $request->input('stage', '')));
+        $isOngkirPayment = ($stageInput === 'ongkir' || str_contains($stageInput, 'ongkir'));
+
         if ($request->filled('installment_id')) {
             $installment = Installment::where('invoice_id', $invoice->id)->find($request->installment_id);
             if (!$installment) {
@@ -2332,7 +2855,7 @@ class ManagementController extends Controller
                     'message' => 'Cicilan tidak ditemukan pada invoice ini.',
                 ], 422);
             }
-        } else {
+        } elseif (!$isOngkirPayment) {
             $type = $this->installmentType((string) $request->input('stage', ''));
             if ($type) {
                 $installment = Installment::where('invoice_id', $invoice->id)
@@ -2365,9 +2888,12 @@ class ManagementController extends Controller
             'uploaded_at'      => now(),
         ]);
 
-        $this->logActivity('payment.upload', 'Pembayaran', 'Bukti bayar Rp ' . number_format($payment->amount, 0, ',', '.') . " untuk invoice {$invoice->invoice_number}");
+        $paymentLabel = $isOngkirPayment
+            ? 'Ongkos Kirim'
+            : ($installment ? 'Cicilan ' . $installment->type : 'Pembayaran');
+        $this->logActivity('payment.upload', 'Pembayaran', "Bukti bayar {$paymentLabel} Rp " . number_format($payment->amount, 0, ',', '.') . " untuk invoice {$invoice->invoice_number}");
         foreach (User::query()->where('level', 'finance')->pluck('id') as $financeId) {
-            $this->notify((int) $financeId, 'Bukti bayar baru menunggu verifikasi', "{$invoice->invoice_number}: Rp " . number_format($payment->amount, 0, ',', '.'), 'payment');
+            $this->notify((int) $financeId, "Bukti bayar {$paymentLabel} baru menunggu verifikasi", "{$invoice->invoice_number}: Rp " . number_format($payment->amount, 0, ',', '.'), 'payment');
         }
 
         return response()->json([
@@ -2454,7 +2980,7 @@ class ManagementController extends Controller
                 'invoice_id'       => $invoice->id,
                 'installment_id'   => $installment?->id,
                 'amount'           => $amount,
-                'proof_url'        => '',
+                'proof_url'        => 'DEPOSIT',
                 'status'           => 'disetujui',
                 'rejection_reason' => null,
                 'uploaded_at'      => now(),
@@ -2556,7 +3082,7 @@ class ManagementController extends Controller
 
         $isApproved = in_array(strtolower(trim((string) ($request->status ?? 'disetujui'))), ['disetujui', 'acc', 'lunas', 'berhasil', 'setuju'], true);
         $payment->status = $isApproved ? 'disetujui' : 'ditolak';
-        $payment->rejection_reason = $isApproved ? null : ($request->rejection_reason ?? 'Ditolak Finance');
+        $payment->rejection_reason = $isApproved ? null : ($request->rejection_reason ?? $request->notes ?? $request->note ?? 'Ditolak Finance');
         $payment->verified_by = auth('api')->id();
         $payment->verified_at = now();
         $payment->save();
@@ -2702,8 +3228,9 @@ class ManagementController extends Controller
             }
         } else {
             $deposit->balance_after = $deposit->balance_before;
-            if ($request->filled('description')) {
-                $deposit->description = trim((string) $request->description);
+            $rejectionNote = $request->input('note') ?? $request->input('description') ?? $request->input('notes');
+            if (!empty($rejectionNote)) {
+                $deposit->description = trim((string) $rejectionNote);
             }
         }
         $deposit->save();
@@ -2977,13 +3504,8 @@ class ManagementController extends Controller
 
     private function historyStatus(string $status): ?string
     {
-        foreach (self::HISTORY_STATUSES as $allowed) {
-            if (strcasecmp($status, $allowed) === 0) {
-                return $allowed;
-            }
-        }
-
-        return null;
+        $clean = trim($status);
+        return $clean !== '' ? $clean : null;
     }
 
     /**
@@ -3086,6 +3608,23 @@ class ManagementController extends Controller
                 if ($foundByName) {
                     return (int) $foundByName->id;
                 }
+                if ($modelClass === Brand::class) {
+                    $newBrand = Brand::create(['name' => $trimmedName, 'is_active' => true]);
+                    return (int) $newBrand->id;
+                }
+                if ($modelClass === Category::class) {
+                    $newCat = Category::create(['name' => $trimmedName]);
+                    return (int) $newCat->id;
+                }
+                if ($modelClass === PoBatch::class) {
+                    $newBatch = PoBatch::create([
+                        'name' => $trimmedName,
+                        'status' => 'open',
+                        'start_date' => now(),
+                        'close_date' => now()->addDays(14),
+                    ]);
+                    return (int) $newBatch->id;
+                }
             }
             throw new \InvalidArgumentException("Ref {$label} tidak valid: " . $e->getMessage());
         }
@@ -3098,6 +3637,23 @@ class ManagementController extends Controller
         if (!is_numeric($name)) {
             $found = $modelClass::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($name)])->first();
             if (!$found) {
+                if ($modelClass === Brand::class) {
+                    $newBrand = Brand::create(['name' => $name, 'is_active' => true]);
+                    return (int) $newBrand->id;
+                }
+                if ($modelClass === Category::class) {
+                    $newCat = Category::create(['name' => $name]);
+                    return (int) $newCat->id;
+                }
+                if ($modelClass === PoBatch::class) {
+                    $newBatch = PoBatch::create([
+                        'name' => $name,
+                        'status' => 'open',
+                        'start_date' => now(),
+                        'close_date' => now()->addDays(14),
+                    ]);
+                    return (int) $newBatch->id;
+                }
                 throw new \InvalidArgumentException("{$label} \"{$name}\" belum terdaftar. Tambahkan {$label} lebih dulu di menu master data.");
             }
 
@@ -3105,6 +3661,29 @@ class ManagementController extends Controller
         }
 
         return $this->resolveMasterRef($modelClass, $name, $label);
+    }
+
+    private function ensureUniqueVariantSku(string $sku, ?int $ignoreVariantId = null, array $usedInBatch = []): string
+    {
+        $candidate = mb_substr(trim($sku), 0, 85);
+        if ($candidate === '') {
+            $candidate = 'SKU-' . strtoupper(Str::random(6));
+        }
+
+        $base = $candidate;
+        $counter = 1;
+
+        while (
+            in_array(strtoupper($candidate), array_map('strtoupper', $usedInBatch), true) ||
+            ProductVariant::where('sku', $candidate)
+                ->when($ignoreVariantId, fn ($q) => $q->where('id', '!=', $ignoreVariantId))
+                ->exists()
+        ) {
+            $counter++;
+            $candidate = mb_substr($base, 0, 80) . '-' . $counter;
+        }
+
+        return $candidate;
     }
 
     private function syncVariants(Product $product, $variants, int $defaultStock): void
@@ -3118,18 +3697,45 @@ class ManagementController extends Controller
         }
 
         $keep = [];
+        $usedSkusInBatch = [];
+
         foreach ($variants as $v) {
             if (!is_array($v)) {
                 continue;
             }
 
+            $rawSku = isset($v['sku']) && trim((string) $v['sku']) !== ''
+                ? mb_substr(trim((string) $v['sku']), 0, 85)
+                : '';
+
+            if ($rawSku === '') {
+                $bCode = '';
+                if ($product->brand_id) {
+                    $bName = \App\Models\Brand::where('id', $product->brand_id)->value('name');
+                    if ($bName) {
+                        $bCode = strtoupper(substr(preg_replace('/[^a-zA-Z0-9]/', '', $bName), 0, 3));
+                    }
+                }
+                $art = strtoupper(preg_replace('/[^a-zA-Z0-9]/', '', $product->article_code ?: $product->name ?: 'SKU'));
+                if ($bCode && str_starts_with($art, $bCode)) {
+                    $art = substr($art, strlen($bCode));
+                }
+                $pfx = strtoupper(substr($art ?: 'SKU', 0, 4));
+                $mCode = isset($v['model']) && trim((string) $v['model']) !== '' ? strtoupper(substr(preg_replace('/[^a-zA-Z0-9]/', '', (string) $v['model']), 0, 4)) : 'STD';
+                $cCode = isset($v['color']) && trim((string) $v['color']) !== '' ? strtoupper(substr(preg_replace('/[^a-zA-Z0-9]/', '', (string) $v['color']), 0, 3)) : 'DEF';
+                $sCode = isset($v['size']) && trim((string) $v['size']) !== '' ? strtoupper(substr(preg_replace('/[^a-zA-Z0-9]/', '', (string) $v['size']), 0, 4)) : 'ALL';
+                $rawSku = ($bCode ? "{$bCode}-" : '') . "{$pfx}-{$mCode}-{$cCode}-{$sCode}";
+            }
+
+            $existingId = (!empty($v['id']) && is_numeric($v['id'])) ? (int) $v['id'] : null;
+            $uniqueSku = $this->ensureUniqueVariantSku($rawSku, $existingId, $usedSkusInBatch);
+            $usedSkusInBatch[] = $uniqueSku;
+
             $payload = [
                 'model'     => isset($v['model']) ? mb_substr(trim((string) $v['model']), 0, 100) : null,
                 'size'      => isset($v['size']) ? mb_substr(trim((string) $v['size']), 0, 20) : null,
                 'color'     => isset($v['color']) ? mb_substr(trim((string) $v['color']), 0, 50) : null,
-                'sku'       => isset($v['sku']) && trim((string) $v['sku']) !== ''
-                    ? mb_substr(trim((string) $v['sku']), 0, 100)
-                    : 'SKU-' . strtoupper(Str::random(5)),
+                'sku'       => $uniqueSku,
                 'stock'     => (int) ($v['stock'] ?? $v['quota'] ?? $defaultStock),
                 'price'     => isset($v['price']) && $v['price'] !== '' ? (float) $v['price'] : null,
                 'addon'     => isset($v['addon']) && $v['addon'] !== '' ? (float) $v['addon'] : 0,
@@ -3137,8 +3743,8 @@ class ManagementController extends Controller
                 'is_active' => isset($v['is_active']) ? (bool) $v['is_active'] : true,
             ];
 
-            if (!empty($v['id']) && is_numeric($v['id'])) {
-                $existing = ProductVariant::where('product_id', $product->id)->find($v['id']);
+            if ($existingId) {
+                $existing = ProductVariant::where('product_id', $product->id)->find($existingId);
                 if ($existing) {
                     $existing->update($payload);
                     $keep[] = $existing->id;
@@ -3155,12 +3761,13 @@ class ManagementController extends Controller
         }
 
         if (!ProductVariant::where('product_id', $product->id)->exists()) {
+            $defaultSku = $this->ensureUniqueVariantSku('SKU-' . strtoupper(Str::random(6)), null, $usedSkusInBatch);
             ProductVariant::create([
                 'product_id' => $product->id,
                 'model'      => 'All Size',
                 'size'       => 'Standar',
                 'color'      => 'Default',
-                'sku'        => 'SKU-' . strtoupper(Str::random(5)),
+                'sku'        => $defaultSku,
                 'stock'      => $defaultStock ?: 50,
                 'is_active'  => true,
             ]);
@@ -3175,6 +3782,7 @@ class ManagementController extends Controller
         }
 
         $byLevel = [];
+        $byLevelFee = [];
         if (is_array($prices)) {
             foreach ($prices as $p) {
                 if (!is_array($p)) {
@@ -3186,35 +3794,59 @@ class ManagementController extends Controller
                 }
                 if ($levelId !== null) {
                     $byLevel[(int) $levelId] = (float) ($p['price'] ?? 0);
+                    if (isset($p['fee'])) {
+                        $byLevelFee[(int) $levelId] = (float) $p['fee'];
+                    }
                 }
             }
         }
 
         if ($basePrice <= 0) {
-            $basePrice = (float) ($product->prices->min('price') ?: 0);
+            $basePrice = (float) ($product->variants()->min('price') ?: ($product->prices()->min('price') ?: 0));
         }
 
+        $isSale = (bool) ($product->is_sale ?? false);
+        $discountPercent = (int) ($product->discount_percent ?? 0);
+        $salePrice = ($isSale && $discountPercent > 0)
+            ? round($basePrice * (1.0 - ($discountPercent / 100.0)))
+            : $basePrice;
+
+        $brand = $product->brand;
+
         foreach ($levels as $lvl) {
-            $price = $byLevel[$lvl->id] ?? round($basePrice * $this->levelMultiplier($lvl->name));
+            $mult = $this->levelMultiplier($lvl->name, $brand);
+            $price = $byLevel[$lvl->id] ?? round($salePrice * $mult);
+            $fee = $byLevelFee[$lvl->id] ?? max(0, round($basePrice - (float) $price));
 
             ProductPrice::updateOrCreate(
                 ['product_id' => $product->id, 'level_id' => $lvl->id],
-                ['price' => max(0, (float) $price), 'fee' => 0]
+                ['price' => max(0, (float) $price), 'fee' => (float) $fee]
             );
         }
     }
 
-    private function levelMultiplier(string $levelName): float
+    private function levelMultiplier(string $levelName, ?Brand $brand = null): float
     {
         $raw = strtolower(trim($levelName));
 
-        return match (true) {
-            str_contains($raw, 'db all'), str_contains($raw, 'db_all') => 0.70,
-            str_contains($raw, 'sub db'), str_contains($raw, 'sub_db') => 0.75,
-            str_contains($raw, 'agen') => 0.80,
-            str_contains($raw, 'reseller') => 0.85,
-            default => 1.0,
-        };
+        if (str_contains($raw, 'db all') || str_contains($raw, 'db_all')) {
+            $pct = $brand && $brand->discount_db_all !== null ? (float) $brand->discount_db_all : 30.0;
+            return max(0.0, 1.0 - ($pct / 100.0));
+        }
+        if (str_contains($raw, 'sub db') || str_contains($raw, 'sub_db')) {
+            $pct = $brand && $brand->discount_sub_db !== null ? (float) $brand->discount_sub_db : 25.0;
+            return max(0.0, 1.0 - ($pct / 100.0));
+        }
+        if (str_contains($raw, 'agen')) {
+            $pct = $brand && $brand->discount_agen !== null ? (float) $brand->discount_agen : 20.0;
+            return max(0.0, 1.0 - ($pct / 100.0));
+        }
+        if (str_contains($raw, 'reseller')) {
+            $pct = $brand && $brand->discount_reseller !== null ? (float) $brand->discount_reseller : 15.0;
+            return max(0.0, 1.0 - ($pct / 100.0));
+        }
+
+        return 1.0;
     }
 
     private function depositPayload(DepositTransaction $deposit): array
@@ -3239,8 +3871,28 @@ class ManagementController extends Controller
         ];
     }
 
+    private function formatIndonesianDate(?\DateTimeInterface $date, bool $withTime = false): ?string
+    {
+        if (!$date || (int) $date->format('Y') <= 1970) return null;
+        $months = [
+            1 => 'Januari', 2 => 'Februari', 3 => 'Maret', 4 => 'April',
+            5 => 'Mei', 6 => 'Juni', 7 => 'Juli', 8 => 'Agustus',
+            9 => 'September', 10 => 'Oktober', 11 => 'November', 12 => 'Desember'
+        ];
+        $m = (int) $date->format('n');
+        $formatted = $date->format('d') . ' ' . ($months[$m] ?? $date->format('F')) . ' ' . $date->format('Y');
+        if ($withTime) {
+            $formatted .= ' ' . $date->format('H:i');
+        }
+        return $formatted;
+    }
+
     private function productPayload(Product $product): array
     {
+        $effectiveTutupPo = $product->effective_tutup_po;
+        $effectiveEstShipment = $product->estimated_shipment ?? $product->batch?->estimated_shipment;
+        $effectiveStatus = $product->effective_status;
+
         return [
             'id'                 => $product->id,
             'title'              => $product->name,
@@ -3257,13 +3909,22 @@ class ManagementController extends Controller
             'image2'             => $product->image2,
             'image3'             => $product->image3,
             'image4'             => $product->image4,
+            'image5'             => $product->image5,
+            'image6'             => $product->image6,
             'reel_url'           => $product->reel_url,
             'reelUrl'            => $product->reel_url,
-            'thumbnails'         => $product->thumbnails ?: array_values(array_filter([$product->image, $product->image2, $product->image3, $product->image4])),
+            'thumbnails'         => $product->thumbnails ?: array_values(array_filter([$product->image, $product->image2, $product->image3, $product->image4, $product->image5, $product->image6])),
             'series'             => $product->series,
-            'status'             => $product->status,
-            'tutup_po'           => optional($product->tutup_po)->toIso8601String(),
-            'estimated_shipment' => optional($product->estimated_shipment)->toDateString(),
+            'status'             => $effectiveStatus,
+            'is_closed'          => $product->isClosedPo(),
+            'isClosedPO'         => $product->isClosedPo(),
+            'tutup_po'           => $this->formatIndonesianDate($effectiveTutupPo, true),
+            'tutup_po_iso'       => $effectiveTutupPo?->toIso8601String(),
+            'close_date'         => $effectiveTutupPo?->toDateString(),
+            'close_time'         => $effectiveTutupPo?->format('H:i') ?? '23:59',
+            'open_date'          => optional($product->batch?->start_date)->toDateString(),
+            'estimated_shipment' => $this->formatIndonesianDate($effectiveEstShipment, false),
+            'shipment_iso'       => $effectiveEstShipment && $effectiveEstShipment->year > 1970 ? $effectiveEstShipment->toDateString() : null,
             'min_dp_percent'     => (int) ($product->min_dp_percent ?: TerminPlan::DEFAULT_DP_PERCENT),
             'dp_percent'         => (int) ($product->min_dp_percent ?: TerminPlan::DEFAULT_DP_PERCENT),
             'payment_stages'     => $product->payment_stages,
@@ -3276,7 +3937,7 @@ class ManagementController extends Controller
             'discount_percent'   => (int) ($product->discount_percent ?? 0),
             'original_price'     => (float) ($product->original_price ?? 0),
             'is_active'          => (bool) $product->is_active,
-            'price'              => (float) ($product->prices->min('price') ?: $product->prices->first()?->price ?: 0),
+            'price'              => (float) ($product->variants->where('price', '>', 0)->min('price') ?: ($product->original_price ?: ($product->prices->min('price') ?: 0))),
             'variants'           => $product->variants->map(fn ($v) => [
                 'id'        => $v->id,
                 'model'     => $v->model,

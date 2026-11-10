@@ -1,6 +1,30 @@
 import React from 'react';
 
-export default function ProductCard({ product, onSelectProduct, onQuickAdd }) {
+const INDO_MONTH_NAMES = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+];
+
+const cleanOverlayText = (text) => {
+  if (!text) return '';
+  const str = String(text);
+  const match = str.match(/(\d{4})-(\d{2})-(\d{2})(?:[T\s]([\d:]+))?/);
+  if (match) {
+    const [, y, m, d] = match;
+    const mIdx = Number(m) - 1;
+    const dateFormatted = `${Number(d)} ${INDO_MONTH_NAMES[mIdx] || m} ${y}`;
+    return str.replace(/(\d{4})-(\d{2})-(\d{2})(?:[T\s][\d:+]+)?/, dateFormatted);
+  }
+  return str;
+};
+
+export default function ProductCard({
+  product,
+  onSelectProduct,
+  onQuickAdd,
+  isWishlisted = false,
+  onToggleWishlist
+}) {
   const formatRupiah = (val) => {
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
@@ -10,10 +34,13 @@ export default function ProductCard({ product, onSelectProduct, onQuickAdd }) {
     }).format(val).replace('IDR', 'Rp');
   };
 
+  const overlay = cleanOverlayText(product.overlayText);
+  const isClosed = product.status === 'closed_po' || product.status === 'closed' || product.isClosedPO === true;
+
   return (
     <div
       onClick={() => onSelectProduct(product)}
-      className="group bg-white rounded-xl overflow-hidden shadow-xs hover:shadow-lg border border-orange-100/60 transition-all duration-200 flex flex-col cursor-pointer hover:-translate-y-0.5"
+      className="group bg-white rounded-xl overflow-hidden shadow-xs hover:shadow-lg border border-orange-100/60 transition-all duration-200 flex flex-col cursor-pointer hover:-translate-y-0.5 relative"
     >
       {/* Product Image & Badges Container */}
       <div className="relative aspect-[3/4] w-full overflow-hidden bg-stone-100">
@@ -24,15 +51,32 @@ export default function ProductCard({ product, onSelectProduct, onQuickAdd }) {
           loading="lazy"
         />
 
+        {/* Wishlist Heart Toggle */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (onToggleWishlist) onToggleWishlist(product);
+          }}
+          className={`absolute top-2 right-2 z-20 w-7 h-7 rounded-full flex items-center justify-center transition shadow-xs cursor-pointer ${
+            isWishlisted
+              ? 'bg-rose-50 text-rose-600'
+              : 'bg-white/80 hover:bg-white text-stone-400 hover:text-stone-700'
+          }`}
+          title={isWishlisted ? 'Hapus dari Wishlist' : 'Simpan ke Wishlist'}
+        >
+          <span className="text-xs leading-none">{isWishlisted ? '♥' : '♡'}</span>
+        </button>
+
         {/* Top Badges */}
-        <div className="absolute top-2 left-2 right-2 flex items-center justify-between gap-1 pointer-events-none z-10">
+        <div className="absolute top-2 left-2 flex items-center gap-1 pointer-events-none z-10">
           {/* Status Badge */}
-          {product.status === 'pre_order' && (
+          {!isClosed && product.status === 'pre_order' && (
             <span className="bg-white/95 text-stone-800 text-[10px] font-semibold px-2 py-0.5 rounded shadow-xs border border-stone-200/50 backdrop-blur-xs">
               Pre Order
             </span>
           )}
-          {product.status === 'closed_po' && (
+          {isClosed && (
             <span className="bg-slate-700/95 text-white text-[10px] font-semibold px-2 py-0.5 rounded shadow-xs backdrop-blur-xs">
               Closed PO
             </span>
@@ -47,15 +91,15 @@ export default function ProductCard({ product, onSelectProduct, onQuickAdd }) {
         </div>
 
         {/* Bottom Image Overlay Banner */}
-        {product.overlayText && (
+        {overlay && (
           <div className="absolute bottom-0 inset-x-0 z-10">
-            {product.status === 'closed_po' ? (
+            {isClosed ? (
               <div className="bg-white/95 text-stone-700 border-t border-stone-200 text-[10px] font-bold py-1 px-2 text-center backdrop-blur-xs">
-                {product.overlayText}
+                {overlay}
               </div>
             ) : (
               <div className="bg-white/95 text-[#6B1416] border-t border-stone-200 text-[10px] font-semibold py-1 px-2 text-center backdrop-blur-xs shadow-xs">
-                {product.overlayText}
+                {overlay}
               </div>
             )}
           </div>
@@ -88,11 +132,17 @@ export default function ProductCard({ product, onSelectProduct, onQuickAdd }) {
           <span className="text-red-600 font-bold text-xs sm:text-sm">
             {formatRupiah(product.price)}
           </span>
-          {product.isSale && product.originalPrice > product.price && (
-            <span className="text-stone-400 line-through text-[10px] sm:text-[11px]">
-              {formatRupiah(product.originalPrice)}
-            </span>
-          )}
+          {(() => {
+            const strikethroughPrice = product.originalPrice && product.originalPrice > product.price
+              ? product.originalPrice
+              : (product.sellingPrice && product.sellingPrice > product.price ? product.sellingPrice : null);
+            if (!strikethroughPrice) return null;
+            return (
+              <span className="text-stone-400 line-through text-[10px] sm:text-[11px]">
+                {formatRupiah(strikethroughPrice)}
+              </span>
+            );
+          })()}
         </div>
       </div>
     </div>

@@ -15,7 +15,9 @@ export default function ProductDetailPage({
   onBuyNow,
   isLoggedIn,
   brands = [],
-  mitraLevel = 'DB All'
+  mitraLevel = '',
+  isWishlist: isWishlistProp,
+  onToggleWishlist
 }) {
   if (!product) return null;
 
@@ -35,6 +37,8 @@ export default function ProductDetailPage({
   );
   const [qty, setQty] = useState(1);
   const [isWishlist, setIsWishlist] = useState(false);
+
+  const isItemWishlisted = typeof isWishlistProp === 'boolean' ? isWishlistProp : isWishlist;
 
   const isProductClosedPO =
     product.status === 'closed_po' ||
@@ -60,13 +64,28 @@ export default function ProductDetailPage({
       String(v.size ?? '') === String(selectedSize) &&
       (!v.color || v.color === selectedColor)
   );
-  const variantPrice = activeVariant?.price;
-  const currentPrice =
-    variantPrice != null && variantPrice !== '' && Number.isFinite(Number(variantPrice))
-      ? Number(variantPrice)
+  const variantSellingPrice =
+    activeVariant?.sellingPrice ||
+    activeVariant?.selling_price ||
+    activeVariant?.originalPrice ||
+    activeVariant?.original_price ||
+    activeVariant?.price;
+  const sellingPrice =
+    variantSellingPrice != null && variantSellingPrice !== '' && Number.isFinite(Number(variantSellingPrice))
+      ? Number(variantSellingPrice)
       : activeModelObj
         ? activeModelObj.price
-        : product.price;
+        : (product.sellingPrice || product.originalPrice || product.price);
+  const currentPrice = sellingPrice;
+
+  // 1. Cek apakah ada Promo Sale (admin upload)
+  const isSaleActive = Boolean(product.isSale || (product.discountPercent && num(product.discountPercent) > 0));
+  const saleDiscountPct = isSaleActive ? num(product.discountPercent) : 0;
+  const saleDiscountNominal = saleDiscountPct > 0 ? Math.round((num(sellingPrice) * saleDiscountPct) / 100) : 0;
+  const priceAfterSale = Math.max(0, num(sellingPrice) - saleDiscountNominal);
+
+  // 2. Lalu dikurangi kembali Fee mitra per Level
+  // Gunakan userPrice dari server jika ada agar 100% sinkron dengan kartu etalase/katalog
   const currentAddon = activeVariant
     ? Number(activeVariant.addon || 0)
     : activeModelObj
@@ -76,10 +95,27 @@ export default function ProductDetailPage({
   const brand = (brands || []).find(
     (b) => String(b.name || '').toLowerCase() === String(product.brand || '').toLowerCase()
   );
-  const feeNominal = feeNominalFor(brand, mitraLevel, currentPrice);
-  const brandDiscountNominal = brandDiscountNominalFor(brand, currentPrice);
+
+  let netPrice = 0;
+  let feeNominal = 0;
+
+  if (!isLoggedIn) {
+    // Publik / sebelum login: harga normal, atau harga sale (jika promo aktif), TANPA potongan fee mitra
+    netPrice = priceAfterSale;
+    feeNominal = 0;
+  } else if (activeVariant?.userPrice != null && Number.isFinite(Number(activeVariant.userPrice))) {
+    netPrice = Number(activeVariant.userPrice);
+    feeNominal = Math.max(0, priceAfterSale - netPrice);
+  } else if (product.userPrice != null && Number.isFinite(Number(product.userPrice)) && !activeVariant) {
+    netPrice = Number(product.userPrice);
+    feeNominal = Math.max(0, priceAfterSale - netPrice);
+  } else {
+    feeNominal = feeNominalFor(brand, mitraLevel, priceAfterSale > 0 ? priceAfterSale : sellingPrice);
+    netPrice = Math.max(0, priceAfterSale - feeNominal);
+  }
+
+  const brandDiscountNominal = brandDiscountNominalFor(brand, priceAfterSale > 0 ? priceAfterSale : sellingPrice);
   const feeCompanyNominal = Math.max(0, brandDiscountNominal - feeNominal);
-  const netPrice = Math.max(0, num(currentPrice) - feeNominal);
 
   const handleActionClick = (actionType) => {
     const itemData = {
@@ -93,16 +129,16 @@ export default function ProductDetailPage({
       selectedColor,
       qty,
       price: netPrice,
-      basePrice: num(currentPrice),
-      discountPct: 0,
-      discountNominal: feeNominal,
+      basePrice: num(sellingPrice),
+      discountPct: saleDiscountPct,
+      discountNominal: (num(sellingPrice) - netPrice),
       feeNominal,
       feeMitraNominal: feeNominal * qty,
       brandDiscountNominal: brandDiscountNominal * qty,
       feeCompanyNominal: feeCompanyNominal * qty,
       addon: currentAddon,
       addonTotal: currentAddon * qty,
-      totalPrice: netPrice * qty,
+      totalPrice: (netPrice + currentAddon) * qty,
       dpPct,
       paymentStages: product.paymentStages || null,
       pelunasanDueDate: product.pelunasanDueDate || '',
@@ -131,7 +167,7 @@ export default function ProductDetailPage({
     <div className="w-full px-4 py-4 space-y-5">
       <div className="max-w-7xl mx-auto space-y-5">
         
-        {/* Breadcrumb Navigation (Matches Screenshot 1) */}
+        {/* Breadcrumb Navigation */}
         <div className="flex items-center gap-1.5 text-xs text-stone-500 flex-wrap">
           <button
             onClick={onNavigateHome}
@@ -290,40 +326,28 @@ export default function ProductDetailPage({
               <div className="space-y-1.5">
                 <div className="flex items-baseline gap-2.5 flex-wrap">
                   <span className="text-2xl sm:text-3xl font-bold text-red-600">{formatRupiah(netPrice)}</span>
-                  {/* Single strikethrough price to prevent double crossed-out */}
-                  {(() => {
-                    const strikethroughPrice =
-                      product.originalPrice && num(product.originalPrice) > netPrice
-                        ? num(product.originalPrice)
-                        : feeNominal > 0 && num(currentPrice) > netPrice
-                        ? num(currentPrice)
-                        : null;
+                  
+                  {/* Harga di coret seharusnya harga jual perproduk yang dipilih */}
+                  {num(sellingPrice) > netPrice && (
+                    <span className="text-sm text-stone-400 line-through">
+                      {formatRupiah(sellingPrice)}
+                    </span>
+                  )}
 
-                    if (!strikethroughPrice || strikethroughPrice <= netPrice) return null;
-
-                    return (
-                      <span className="text-sm text-stone-400 line-through">
-                        {formatRupiah(strikethroughPrice)}
-                      </span>
-                    );
-                  })()}
+                  {/* Jika ada sale, tampilkan hemat 5/10% tergantung yang admin upload */}
+                  {isSaleActive && saleDiscountPct > 0 && (
+                    <span className="bg-rose-100 text-rose-700 text-xs font-bold px-2 py-0.5 rounded-md">
+                      Hemat {saleDiscountPct}%
+                    </span>
+                  )}
 
                   {currentAddon > 0 && (
                     <span className="text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">
                       + Tambahan {formatRupiah(currentAddon)} / pcs
                     </span>
                   )}
-                  {product.discountPercent > 0 && (
-                    <span className="bg-rose-100 text-rose-700 text-xs font-bold px-2 py-0.5 rounded-md">
-                      Hemat s/d {product.discountPercent}%
-                    </span>
-                  )}
                 </div>
-                {feeNominal > 0 && (
-                  <p className="text-[11px] font-semibold text-emerald-700">
-                    Fee mitra {mitraLevel} −{formatRupiah(feeNominal)} / pcs sudah dipotong
-                  </p>
-                )}
+
                 <p className="text-[11px] text-stone-500">
                   Harga {activeVariant ? 'varian' : 'model'} terpilih
                   {qty > 1 && (
@@ -489,15 +513,22 @@ export default function ProductDetailPage({
                   </button>
 
                   <button
-                    onClick={() => setIsWishlist(!isWishlist)}
+                    type="button"
+                    onClick={() => {
+                      if (onToggleWishlist) {
+                        onToggleWishlist(product);
+                      } else {
+                        setIsWishlist(!isWishlist);
+                      }
+                    }}
                     className={`p-3 rounded-xl border transition cursor-pointer ${
-                      isWishlist
+                      isItemWishlisted
                         ? 'bg-rose-50 border-rose-300 text-rose-600'
                         : 'bg-white border-stone-300 text-stone-400 hover:text-stone-700'
                     }`}
-                    title="Simpan ke Wishlist"
+                    title={isItemWishlisted ? 'Hapus dari Wishlist' : 'Simpan ke Wishlist'}
                   >
-                    <span className="text-base">{isWishlist ? '♥' : '♡'}</span>
+                    <span className="text-base">{isItemWishlisted ? '♥' : '♡'}</span>
                   </button>
                 </div>
               )}

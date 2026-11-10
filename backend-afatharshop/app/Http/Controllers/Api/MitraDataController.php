@@ -116,6 +116,26 @@ class MitraDataController extends Controller
         ]);
     }
 
+    public function markNotificationsAsRead(Request $request): JsonResponse
+    {
+        $userId = auth('api')->id();
+        $query = Notification::query()->where('user_id', $userId)->where('is_read', false);
+
+        if ($request->filled('id')) {
+            $query->where('id', $request->id);
+        }
+
+        $query->update([
+            'is_read' => true,
+            'read_at' => now(),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Notifikasi berhasil ditandai sudah dibaca.',
+        ]);
+    }
+
     public function addresses(): JsonResponse
     {
         $user = auth('api')->user();

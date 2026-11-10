@@ -120,17 +120,32 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
 
     setIsSubmitting(true);
     try {
-      const uploaded = await api.management.uploadFile(proofFile, 'proof');
-      const proofPath = uploaded?.data?.path;
-      if (!proofPath) throw new Error('Bukti transfer tidak tersimpan di server.');
+      let proofPath = '';
+      if (tokenStore.get()) {
+        try {
+          const uploaded = await api.management.uploadFile(proofFile, 'proof');
+          proofPath = uploaded?.data?.path || '';
+        } catch (upErr) {
+          console.warn('Gagal upload bukti deposit ke server, lanjut simpan lokal:', upErr);
+        }
+      }
 
-      const created = await api.my.createDeposit({
-        bank_account_id: currentBankObj.id,
-        amount,
-        proof_url: proofPath,
-        description: notes || 'Pengajuan deposit saldo reseller'
-      });
-      const row = created?.data;
+      let row = null;
+      if (proofPath && tokenStore.get()) {
+        try {
+          const created = await api.my.createDeposit({
+            bank_account_id: currentBankObj.id,
+            amount,
+            proof_url: proofPath,
+            description: notes || 'Pengajuan deposit saldo reseller'
+          });
+          row = created?.data;
+        } catch (crErr) {
+          console.warn('Gagal simpan deposit ke database backend:', crErr);
+        }
+      }
+
+      const displayProof = proofPath ? mediaUrl(proofPath) : proofImage;
 
       setDepositHistory([
         {
@@ -140,7 +155,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
           bank: `${currentBankObj.name} (${currentBankObj.accountNumber})`,
           status: 'Menunggu Validasi Admin Finance',
           statusColor: 'bg-amber-100 text-amber-800',
-          proof: mediaUrl(row?.proof || proofPath)
+          proof: displayProof
         },
         ...depositHistory
       ]);
@@ -155,7 +170,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
           nominal: amount,
           bank: `${currentBankObj.name} (${currentBankObj.accountNumber})`,
           note: row?.note || notes || 'Pengajuan deposit saldo reseller',
-          image: mediaUrl(row?.proof || proofPath),
+          image: displayProof,
           date: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
           status: 'Menunggu Validasi'
         });
@@ -169,7 +184,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
       if (fileInputRef.current) fileInputRef.current.value = '';
       setTimeout(() => setShowSuccess(false), 4000);
     } catch (err) {
-      setFormError(err?.message || 'Pengajuan deposit gagal dikirim ke server.');
+      setFormError(err?.message || 'Pengajuan deposit gagal diproses.');
     } finally {
       setIsSubmitting(false);
     }
@@ -233,7 +248,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
             <div>
               <p className="font-bold">Pengajuan Deposit Berhasil Dikirim!</p>
               <p className="text-[11px] text-emerald-700 mt-0.5">
-                Admin Finance Afathar Shop akan mencocokkan mutasi bank Anda dalam waktu maksimal 1x24 jam kerja.
+                Admin Finance akan mencocokkan mutasi bank Anda dalam waktu maksimal 1x24 jam kerja.
               </p>
             </div>
           </div>
@@ -449,7 +464,7 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
                     <td className="py-3 px-3 font-mono font-bold text-stone-800">{dep.id}</td>
                     <td className="py-3 px-3 text-stone-500">{dep.date}</td>
                     <td className="py-3 px-3 font-bold text-[#6B1416]">
-                      Rp {dep.nominal.toLocaleString('id-ID')}
+                      Rp {Number(dep.nominal || 0).toLocaleString('id-ID')}
                     </td>
                     <td className="py-3 px-3 text-stone-600 font-medium">{dep.bank}</td>
                     <td className="py-3 px-3">

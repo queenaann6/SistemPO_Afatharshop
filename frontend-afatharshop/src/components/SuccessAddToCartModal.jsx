@@ -16,7 +16,7 @@ export default function SuccessAddToCartModal({ isOpen, onClose, onViewCart }) {
           <XIcon className="w-4 h-4" />
         </button>
 
-        {/* Green Checkmark Circle Icon (Matches Screenshot 3) */}
+        {/* Green Checkmark Circle Icon */}
         <div className="mx-auto w-14 h-14 rounded-full bg-emerald-600 flex items-center justify-center text-white mb-3 shadow-md">
           <CheckIcon className="w-7 h-7 stroke-[3]" />
         </div>

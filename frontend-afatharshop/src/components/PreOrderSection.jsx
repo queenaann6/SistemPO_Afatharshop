@@ -6,7 +6,9 @@ export default function PreOrderSection({
   selectedBrand,
   onSelectProduct,
   onViewAllPreOrder,
-  onLoadMore
+  onLoadMore,
+  wishlistProductIds = [],
+  onToggleWishlist
 }) {
   const isFiltered = selectedBrand !== 'all';
   const brandName = products[0]?.brand || 'Coverme Hijab';
@@ -44,6 +46,8 @@ export default function PreOrderSection({
               key={product.id}
               product={product}
               onSelectProduct={onSelectProduct}
+              isWishlisted={wishlistProductIds.includes(Number(product.id))}
+              onToggleWishlist={onToggleWishlist}
             />
           ))}
         </div>

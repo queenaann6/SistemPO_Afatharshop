@@ -97,24 +97,25 @@ export const BRAND_LABELS = {
 };
 
 export const prettyBrand = (raw, brandId) => {
-  if (brandId && BRAND_LABELS[brandId]) return BRAND_LABELS[brandId];
   const text = String(raw || '').trim();
-  if (!text) return 'Lainnya';
-  const byId = Object.entries(BRAND_LABELS).find(([id, name]) => id === text.toLowerCase() || name.toLowerCase() === text.toLowerCase());
-  return byId ? byId[1] : titleCase(text);
+  if (text) return text;
+  if (brandId && BRAND_LABELS[brandId]) return BRAND_LABELS[brandId];
+  return 'Lainnya';
 };
 
 const brandIdOf = (name) => {
-  const entry = Object.entries(BRAND_LABELS).find(([, label]) => label.toLowerCase() === String(name || '').toLowerCase());
-  return entry ? entry[0] : slug(name);
+  return slug(name);
 };
 
 export const normalizeLevel = (level) => {
-  const text = String(level || '').toLowerCase();
+  if (!level) return '';
+  const text = String(level).toLowerCase().trim();
+  if (!text || text === 'guest' || text === 'retail') return '';
   if (text.includes('sub')) return 'Sub DB';
   if (text.includes('agen')) return 'Agen';
   if (text.includes('reseller')) return 'Reseller';
-  return 'DB All';
+  if (text.includes('db') || text.includes('distributor')) return 'DB All';
+  return '';
 };
 
 const splitMitraName = (raw) => {
@@ -187,7 +188,10 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
     const flags = statusFlags(order.status);
     const date = parseProjectDate(order.date);
     const hasShipping = order.ongkir !== undefined && order.ongkir !== null && order.ongkir !== '';
-    const ongkir = hasShipping ? num(order.ongkir) : flags.paid ? Math.max(20000, Math.round(subtotal * 0.05)) : 0;
+    const aturSebelumKirim = order.aturSebelumKirim !== undefined
+      ? Boolean(order.aturSebelumKirim)
+      : (order.ongkir === 0 || !order.ongkir || String(order.courier || order.ekspedisi || '').includes('Sebelum'));
+    const ongkir = aturSebelumKirim ? 0 : (hasShipping ? num(order.ongkir) : 0);
     const address = flags.dpPaid
       ? order.mitraAddress ||
         order.recipientAddress ||
@@ -252,7 +256,6 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       // Rincian termin dari invoice backend (id installment, status, bukti) —
       // dipertahankan utuh supaya dashboard mitra terhubung ke invoice.
       stageDetails: Array.isArray(order.paymentStages) ? order.paymentStages : null,
-      installmentIds: order.installmentIds || {},
       invoiceOutstanding: order.invoiceOutstanding ?? null,
       dpStatus: order.dpStatus || (flags.rejected ? PAY.TOLAK : flags.dpPaid ? PAY.ACC : PAY.BELUM),
       dpProof: order.dpProof || '',
@@ -266,7 +269,8 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       pelunasanVerifiedAt: flags.paid ? date : '',
       ongkir,
       ongkirAt: flags.paid ? date : '',
-      ekspedisi: order.courier || '',
+      ekspedisi: order.courier || (aturSebelumKirim ? 'Ditentukan Sebelum Pengiriman' : ''),
+      aturSebelumKirim,
       weight: `${Math.max(1, Math.round(qty * 0.4))} kg`,
       shippingNote: '',
       ongkirStatus: order.ongkirStatus || (flags.paid ? PAY.ACC : PAY.BELUM),
@@ -450,8 +454,11 @@ export const coreOrdersToProject = (coreOrders) =>
         meta.invoiceOutstanding !== null && meta.invoiceOutstanding !== undefined
           ? num(meta.invoiceOutstanding)
           : orderOutstanding(order),
-      ongkir: num(order.ongkir),
-      courier: order.ekspedisi || '-',
+      ongkir: order.aturSebelumKirim ? 0 : num(order.ongkir),
+      courier: order.ekspedisi || (order.aturSebelumKirim ? 'Ditentukan Sebelum Pengiriman' : '-'),
+      aturSebelumKirim: order.aturSebelumKirim !== undefined
+        ? Boolean(order.aturSebelumKirim)
+        : (!num(order.ongkir) || num(order.ongkir) === 0 || String(order.ekspedisi || '').includes('Sebelum')),
       address: order.address || '',
       phone: order.phone || '',
       isClosedPO: !!meta.isClosedPO,
@@ -569,7 +576,7 @@ export const projectProductsToCore = (products) =>
       openDate: product.openDate ? parseProjectDate(product.openDate) : '',
       closeDate,
       closeTime: closeTimeMatch ? closeTimeMatch[1] : '',
-      status: product.status === 'closed' || product.status === 'closed_po' ? 'closed' : 'open',
+      status: product.status === 'closed' || product.status === 'closed_po' || product.isClosedPO === true ? 'closed' : 'open',
       readyEstimate: product.estimatedShipment || '-',
       terms: `DP ${dpPercentFor(product)}% saat checkout · pelunasan sebelum kirim`,
       dpPct: clampPercent(dpPercentFor(product)),
@@ -577,6 +584,14 @@ export const projectProductsToCore = (products) =>
       paymentStages: normalizePaymentStages(product.paymentStages),
       description: product.descriptionDetailed?.summary || product.sku || '',
       image: product.image || FALLBACK_IMAGE,
+      image2: product.image2 || product.thumbnails?.[1] || '',
+      image3: product.image3 || product.thumbnails?.[2] || '',
+      image4: product.image4 || product.thumbnails?.[3] || '',
+      image5: product.image5 || product.thumbnails?.[4] || '',
+      image6: product.image6 || product.thumbnails?.[5] || '',
+      thumbnails: Array.isArray(product.thumbnails) && product.thumbnails.length ? product.thumbnails : [product.image || FALLBACK_IMAGE],
+      reelUrl: product.reelUrl || product.reel_url || product.videoUrl || '',
+      videoUrl: product.videoUrl || product.reelUrl || product.reel_url || '',
       createdAt: todayISO(),
       options: {
         models: models.map((model) => ({ name: model.name || 'Reguler' })),
@@ -589,11 +604,21 @@ export const projectProductsToCore = (products) =>
 
 export const coreProductsToProject = (coreProducts, prevProducts) => {
   const byId = new Map((prevProducts || []).map((p) => [String(p.id), p]));
+  const byBackendId = new Map(
+    (prevProducts || [])
+      .filter((p) => p.backendId)
+      .map((p) => [String(p.backendId), p])
+  );
   return (coreProducts || []).map((product) => {
+    const pBackendId = product.backendId || (Number.isInteger(Number(product.id)) ? Number(product.id) : null);
     const baseId = product.projectId != null ? String(product.projectId) : `proj-${product.id}`;
-    const base = byId.get(baseId);
-    const brandName = String(product.brand || '').toUpperCase();
-    const brandId = brandIdOf(product.brand);
+    const base =
+      (pBackendId ? byBackendId.get(String(pBackendId)) : null) ||
+      (product.projectId ? byId.get(String(product.projectId)) : null) ||
+      byId.get(String(product.id)) ||
+      byId.get(baseId);
+    const brandName = String(product.brand || base?.brand || '').toUpperCase();
+    const brandId = brandIdOf(product.brand || base?.brand);
     const variants = product.variants || [];
     const colors = [...new Set(variants.map((v) => v.color).filter(Boolean))];
     const sizes = [...new Set(variants.map((v) => v.size).filter(Boolean))];
@@ -631,9 +656,11 @@ export const coreProductsToProject = (coreProducts, prevProducts) => {
       paymentStages: product.paymentStages || base?.paymentStages,
       dpPct: product.dpPct ?? base?.dpPct
     });
+    const finalId = pBackendId || base?.id || product.id || baseId;
     return {
       ...(base || {}),
-      id: base?.id || baseId,
+      id: finalId,
+      backendId: pBackendId || base?.backendId || null,
       title: product.title,
       series: base?.series || 'PRE-ORDER COLLECTION • 2027 SERIES',
       sku: base?.sku || product.title,
@@ -646,8 +673,9 @@ export const coreProductsToProject = (coreProducts, prevProducts) => {
       originalPrice: product.originalPrice ? num(product.originalPrice) : (base?.originalPrice || (product.isSale && product.discountPercent ? Math.round(basePrice / (1 - num(product.discountPercent) / 100)) : Math.round(basePrice * 1.2))),
       discountPercent: product.discountPercent != null ? num(product.discountPercent) : (base?.discountPercent || 0),
       isSale: product.isSale !== undefined ? !!product.isSale : (base?.isSale !== undefined ? !!base.isSale : false),
-      status: product.status === 'closed' ? 'closed' : 'pre_order',
-      statusLabel: product.status === 'closed' ? 'PO Ditutup' : 'Open Pre-Order',
+      status: product.status === 'closed' || product.status === 'closed_po' || product.isClosedPO === true ? 'closed_po' : 'pre_order',
+      isClosedPO: product.status === 'closed' || product.status === 'closed_po' || product.isClosedPO === true,
+      statusLabel: product.status === 'closed' || product.status === 'closed_po' || product.isClosedPO === true ? 'PO Ditutup' : 'Open Pre-Order',
       tutupPO: longDate(product.closeDate),
       tutupPODetail: product.closeTime
         ? `${longDate(product.closeDate)} pukul ${product.closeTime} WIB`
@@ -673,7 +701,14 @@ export const coreProductsToProject = (coreProducts, prevProducts) => {
         addon: addonOfVariant(v)
       })),
       image: product.image || base?.image || FALLBACK_IMAGE,
-      thumbnails: base?.thumbnails || [product.image || FALLBACK_IMAGE],
+      image2: product.image2 || base?.image2 || '',
+      image3: product.image3 || base?.image3 || '',
+      image4: product.image4 || base?.image4 || '',
+      image5: product.image5 || base?.image5 || '',
+      image6: product.image6 || base?.image6 || '',
+      thumbnails: Array.isArray(product.thumbnails) && product.thumbnails.length ? product.thumbnails : (base?.thumbnails || [product.image || FALLBACK_IMAGE]),
+      reelUrl: product.reelUrl || product.reel_url || base?.reelUrl || '',
+      videoUrl: product.videoUrl || product.reelUrl || base?.videoUrl || '',
       descriptionDetailed: base?.descriptionDetailed || { summary: product.description || '' },
       store: base?.store || DEFAULT_STORE
     };
@@ -713,11 +748,16 @@ export const projectBrandsToCore = (brands) =>
 export const coreBrandsToProject = (coreBrands, prevBrands) => {
   const prev = (prevBrands || []).filter((b) => b.id !== 'all');
   const byId = new Map(prev.map((b) => [String(b.id), b]));
-  const rows = (coreBrands || []).map((brand) => ({
-    id: brand.id,
-    name: brand.name,
-    count: byId.get(String(brand.id))?.count ?? 0
-  }));
+  const rows = (coreBrands || []).map((brand) => {
+    const slugId = slug(brand.name);
+    return {
+      id: slugId,
+      rawId: brand.id,
+      backendId: brand.backendId || brand.id,
+      name: brand.name,
+      count: byId.get(String(slugId))?.count ?? byId.get(String(brand.id))?.count ?? 0
+    };
+  });
   return [{ id: 'all', name: 'Semua Brand', count: rows.reduce((sum, b) => sum + b.count, 0) }, ...rows];
 };
 

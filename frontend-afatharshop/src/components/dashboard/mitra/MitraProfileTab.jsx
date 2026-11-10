@@ -9,9 +9,25 @@ export default function MitraProfileTab({
 }) {
   const fileInputRef = useRef(null);
   const [name, setName] = useState(currentUser?.name || 'Mitra');
-  const [mitraId] = useState(() => currentUser?.id ? `MTR-${currentUser.id}` : 'MTR-001');
+  const [mitraId, setMitraId] = useState(
+    () => currentUser?.mitraId || currentUser?.id_mitra || (currentUser?.id ? `MTR-${String(currentUser.id).padStart(3, '0')}` : 'MTR-001')
+  );
   const [email, setEmail] = useState(currentUser?.email || '');
   const [phone, setPhone] = useState(currentUser?.phone || '');
+
+  // Sinkronkan data form bila currentUser diperbarui oleh API sesi
+  React.useEffect(() => {
+    if (currentUser) {
+      if (currentUser.name) setName(currentUser.name);
+      if (currentUser.email) setEmail(currentUser.email);
+      if (currentUser.phone) setPhone(currentUser.phone);
+      const computedId =
+        currentUser.mitraId ||
+        currentUser.id_mitra ||
+        (currentUser.id ? `MTR-${String(currentUser.id).padStart(3, '0')}` : 'MTR-001');
+      setMitraId(computedId);
+    }
+  }, [currentUser]);
   const [gender, setGender] = useState('Perempuan');
   const [birthDay, setBirthDay] = useState('');
   const [birthMonth, setBirthMonth] = useState('');
@@ -133,7 +149,7 @@ export default function MitraProfileTab({
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6 max-w-2xl">
-        {/* Photo Upload Arch Section (Matches Screenshot 1) */}
+        {/* Photo Upload Arch Section */}
         <div>
           <div className="flex flex-col items-start gap-2">
             <div

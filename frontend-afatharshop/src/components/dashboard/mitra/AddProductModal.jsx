@@ -63,8 +63,8 @@ export default function AddProductModal({
       size: selectedSize,
       color: selectedColor,
       qty: qty,
-      price: activeVarObj.price,
-      subtotal: activeVarObj.price * qty,
+      price: activeVarObj?.price || 0,
+      subtotal: (activeVarObj?.price || 0) * qty,
       dueDate: '20 Jan 2027',
       image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=400&q=80'
     });
@@ -96,7 +96,7 @@ export default function AddProductModal({
         {/* Content */}
         <div className="p-6 space-y-5 text-xs text-stone-700">
           
-          {/* Product Summary Header Card (Matches Screenshot 4) */}
+          {/* Product Summary Header Card */}
           <div className="flex items-start gap-4 p-3 bg-stone-50 rounded-2xl border border-stone-200">
             <img
               src="https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=400&q=80"
@@ -108,7 +108,7 @@ export default function AddProductModal({
                 NARARYA SARIMBIT KARTIKA RAYA BATCH 2
               </h4>
               <p className="font-bold text-base text-[#6B1416]">
-                Rp {activeVarObj.price.toLocaleString('id-ID')}
+                Rp {Number(activeVarObj?.price || 0).toLocaleString('id-ID')}
               </p>
               
               <div className="mt-1.5 p-2 bg-amber-50/80 rounded-xl border border-amber-200/80 text-[11px] text-amber-900">
@@ -213,7 +213,7 @@ export default function AddProductModal({
                 </button>
               </div>
               <span className="text-stone-400 text-xs">
-                Subtotal: <strong className="text-stone-800">Rp {(activeVarObj.price * qty).toLocaleString('id-ID')}</strong>
+                Subtotal: <strong className="text-stone-800">Rp {Number((activeVarObj?.price || 0) * qty).toLocaleString('id-ID')}</strong>
               </span>
             </div>
           </div>

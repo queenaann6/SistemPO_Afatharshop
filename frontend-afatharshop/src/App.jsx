@@ -16,10 +16,12 @@ import LoginPromptModal from './components/LoginPromptModal';
 import SuccessAddToCartModal from './components/SuccessAddToCartModal';
 import ProfileModal from './components/ProfileModal';
 import OrdersModal from './components/OrdersModal';
+import WishlistModal from './components/WishlistModal';
+import ErrorBoundary from './components/ErrorBoundary';
 import MitraDashboard from './components/dashboard/mitra/MitraDashboard';
-import MarketingDashboard from './components/dashboard/MarketingDashboard';
-import FinanceDashboard from './components/dashboard/FinanceDashboard';
-import OwnerDashboard from './components/dashboard/OwnerFinanceDashboard';
+import PurchasingDashboard from './components/dashboard/purchasing/PurchasingDashboard';
+import FinanceDashboard from './components/dashboard/finance/FinanceDashboard';
+import OwnerDashboard from './components/dashboard/owner/OwnerDashboard';
 import { createSeedData, PAY } from './components/dashboard/poCore';
 import { openInvoicePrintTab } from './utils/printInvoice';
 import { dpPercentFor } from './utils/terminScheme';
@@ -42,6 +44,7 @@ import Toast from './components/Toast';
 import { BRANDS, CATEGORIES, PRODUCTS, ROLES } from './data/mockData';
 import { api, mediaUrl, tokenStore } from './services/api';
 import {
+  brandIdFor,
   buildOrderPayload,
   mapApiUser,
   mapBankAccount,
@@ -119,6 +122,9 @@ export default function App() {
     return 'dashboard';
   });
 
+  // Active Tab for Purchasing Dashboard
+  const [purchasingInitialTab, setPurchasingInitialTab] = useState('dashboard');
+
   // Selected Product for Detail Page
   const [selectedProduct, setSelectedProduct] = useState(PRODUCTS[0]);
 
@@ -195,6 +201,14 @@ export default function App() {
 
   // Cart Items State
   const [cartItems, setCartItems] = useState([]);
+
+  // Wishlist Items State
+  const [wishlistItems, setWishlistItems] = useState([]);
+  const [isWishlistModalOpen, setIsWishlistModalOpen] = useState(false);
+  const wishlistProductIds = useMemo(
+    () => wishlistItems.map((item) => Number(item.id || item.product_id)),
+    [wishlistItems]
+  );
 
   // Selected items for Checkout Page
   const [checkoutItems, setCheckoutItems] = useState([]);
@@ -279,10 +293,10 @@ export default function App() {
   // Global Bank Accounts (Rekening Publik Toko & Rekening Pengajuan ke Owner)
   const [adminBankAccounts, setAdminBankAccounts] = useState([
     // Rekening Publik (Resmi Distributor untuk Mitra / Checkout / Deposit / Invoice)
-    { id: 'bca', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
-    { id: 'mandiri', bank: 'MANDIRI', accountNo: '133-00-2998801', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
-    { id: 'bri', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
-    { id: 'bsi', bank: 'BSI Syariah', accountNo: '718-002-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bca', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHARSHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'mandiri', bank: 'MANDIRI', accountNo: '133-00-2998801', holder: 'CV AFATHARSHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bri', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHARSHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bsi', bank: 'BSI Syariah', accountNo: '718-002-9988', holder: 'CV AFATHARSHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
 
     // Rekening Pengajuan ke Owner (Tujuan Transfer Vendor / Supplier / Produksi / Operasional)
     { id: 'pr-1', bank: 'BCA', accountNo: '522-034-1100', holder: 'PT HANA TEXTILE NUSANTARA', active: true, type: 'pengajuan', purpose: 'Supplier Kain & Bahan Baku' },
@@ -413,6 +427,50 @@ export default function App() {
   const handleChangePoBrands = (nextBrands) => {
     setPoBrands(nextBrands);
     setBrands((prev) => coreBrandsToProject(nextBrands, prev));
+
+    // Sinkronkan pembaruan nama brand ke katalog produk dan poProducts
+    setProducts((prev) =>
+      prev.map((p) => {
+        const matchedBrand = nextBrands.find((b) => {
+          if (b.oldName && String(p.brand || '').trim().toLowerCase() === String(b.oldName).trim().toLowerCase()) {
+            return true;
+          }
+          if (b.backendId && (p.brand_id === b.backendId || p.backendMeta?.brandId === b.backendId)) {
+            return true;
+          }
+          return false;
+        });
+        if (matchedBrand) {
+          return {
+            ...p,
+            brand: String(matchedBrand.name || p.brand).toUpperCase(),
+            brandId: brandIdFor(matchedBrand.name)
+          };
+        }
+        return p;
+      })
+    );
+
+    setPoProducts((prev) =>
+      prev.map((p) => {
+        const matchedBrand = nextBrands.find((b) => {
+          if (b.oldName && String(p.brand || '').trim().toLowerCase() === String(b.oldName).trim().toLowerCase()) {
+            return true;
+          }
+          if (b.backendId && (p.brand_id === b.backendId || p.backendMeta?.brandId === b.backendId)) {
+            return true;
+          }
+          return false;
+        });
+        if (matchedBrand) {
+          return {
+            ...p,
+            brand: matchedBrand.name || p.brand
+          };
+        }
+        return p;
+      })
+    );
   };
 
   // Scroll to top on page change
@@ -448,6 +506,26 @@ export default function App() {
       setCurrentPage('home');
     }
   }, [isLoggedIn, currentPage]);
+
+  // If an internal admin tries to navigate to checkout, redirect to dashboard
+  useEffect(() => {
+    if (currentPage === 'checkout' && isLoggedIn) {
+      const r = String(currentUser?.roleId || currentUser?.role || activeRole?.id || '').toLowerCase();
+      if (['marketing', 'purchasing', 'finance', 'owner', 'admin', 'superadmin'].includes(r)) {
+        const targetDashboard =
+          r === 'finance'
+            ? 'finance_dashboard'
+            : r === 'owner'
+            ? 'owner_dashboard'
+            : 'marketing_dashboard';
+        setCurrentPage(targetDashboard);
+        setToast({
+          show: true,
+          message: 'Akun Admin/Staff internal tidak melakukan checkout di etalase toko. Silakan gunakan menu Input Pesanan Manual di Dashboard Purchasing.'
+        });
+      }
+    }
+  }, [currentPage, isLoggedIn, currentUser, activeRole]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -563,6 +641,20 @@ export default function App() {
 
         const remoteBanks = (snapshot.bank_accounts || []).map(mapBankAccount);
         if (remoteBanks.length) setAdminBankAccounts(remoteBanks);
+
+        const rawBatches = snapshot.batches || [];
+        if (Array.isArray(rawBatches) && rawBatches.length) {
+          setPoBatches(rawBatches.map(mapBatchToCore));
+        } else {
+          try {
+            const batchRes = await api.batches();
+            if (Array.isArray(batchRes?.data) && batchRes.data.length) {
+              setPoBatches(batchRes.data.map(mapBatchToCore));
+            }
+          } catch {
+            /* ignore batch load error */
+          }
+        }
       } catch (error) {
         if (!cancelled) {
           console.warn('Sinkronisasi katalog backend dilewati:', error?.message || error);
@@ -834,6 +926,55 @@ export default function App() {
     };
   }, [sessionToken]);
 
+  // Sinkronisasi keranjang belanja (Cart) dari database backend saat sesi login aktif
+  useEffect(() => {
+    if (!sessionToken) return undefined;
+
+    let cancelled = false;
+
+    api.cart
+      .get()
+      .then((res) => {
+        if (cancelled) return;
+        if (Array.isArray(res?.data)) {
+          setCartItems(res.data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Gagal sinkron keranjang belanja dari server:', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken]);
+
+  // Sinkronisasi Wishlist dari database backend saat sesi login aktif
+  useEffect(() => {
+    if (!sessionToken) {
+      setWishlistItems([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    api.wishlist
+      .get()
+      .then((res) => {
+        if (cancelled) return;
+        if (Array.isArray(res?.data)) {
+          setWishlistItems(res.data);
+        }
+      })
+      .catch((err) => {
+        console.warn('Gagal sinkron wishlist dari server:', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionToken]);
+
   // Filter Apply
   const handleApplyBrandSearch = () => {
     setActiveBrandKeyword(brandSearchInput.trim());
@@ -879,7 +1020,22 @@ export default function App() {
     let list = [...products];
 
     if (selectedBrand !== 'all') {
-      list = list.filter((p) => p.brandId === selectedBrand);
+      const targetBrandObj = (brands || []).find(
+        (b) =>
+          b.id === selectedBrand ||
+          String(b.backendId) === String(selectedBrand) ||
+          String(b.name || '').toLowerCase() === String(selectedBrand || '').toLowerCase()
+      );
+      const targetName = (targetBrandObj?.name || selectedBrand).trim().toLowerCase();
+      const targetSlug = brandIdFor(targetName);
+      const targetBackendId = targetBrandObj?.backendId;
+
+      list = list.filter((p) => {
+        if (p.brandId === selectedBrand || p.brandId === targetSlug) return true;
+        if (String(p.brand || '').trim().toLowerCase() === targetName) return true;
+        if (targetBackendId && (p.brand_id === targetBackendId || p.backendMeta?.brandId === targetBackendId)) return true;
+        return false;
+      });
     }
 
     if (searchQuery.trim()) {
@@ -930,13 +1086,38 @@ export default function App() {
     setCurrentPage('cart');
   };
 
-  const handleAddToCart = (item) => {
+  const handleAddToCart = async (item) => {
     if (!isLoggedIn || !tokenStore.get()) {
       setIsLoginPromptOpen(true);
       return;
     }
     setCartItems((prev) => [item, ...prev]);
     setIsSuccessCartOpen(true);
+
+    if (tokenStore.get()) {
+      try {
+        const payload = {
+          product_variant_id: item.variantId || null,
+          product_id: item.backendId || item.id || null,
+          quantity: item.qty || 1,
+          order_type: item.orderType || 'dp',
+          model: item.selectedModel,
+          size: item.selectedSize,
+          color: item.selectedColor
+        };
+        const res = await api.cart.add(payload);
+        if (res?.data && Array.isArray(res.data)) {
+          setCartItems(res.data);
+        }
+      } catch (err) {
+        console.warn('Gagal menyimpan cart ke server:', err);
+      }
+    }
+  };
+
+  const isAdminRole = (roleOrUser) => {
+    const r = String(roleOrUser?.roleId || roleOrUser?.role || roleOrUser?.id || roleOrUser || '').toLowerCase();
+    return ['marketing', 'purchasing', 'finance', 'owner', 'admin', 'superadmin'].includes(r);
   };
 
   const handleBuyNow = (item) => {
@@ -944,17 +1125,159 @@ export default function App() {
       setIsLoginPromptOpen(true);
       return;
     }
+    if (isAdminRole(currentUser) || isAdminRole(activeRole)) {
+      setToast({
+        show: true,
+        message: 'Akun Admin/Staff internal tidak melakukan checkout di etalase toko. Silakan gunakan menu Input Pesanan Manual di Dashboard Purchasing.',
+        actionLabel: 'Buka Dashboard',
+        onAction: () => handleNavigateDashboard('tambah_pesanan')
+      });
+      return;
+    }
     setCheckoutItems([item]);
     setCurrentPage('checkout');
   };
 
-  const handleRemoveCartItem = (index) => {
-    setCartItems((prev) => prev.filter((_, i) => i !== index));
+  const handleRemoveCartItem = async (indexOrItem) => {
+    const targetItem =
+      typeof indexOrItem === 'number'
+        ? cartItems[indexOrItem]
+        : indexOrItem;
+
+    setCartItems((prev) => {
+      if (typeof indexOrItem === 'number') {
+        return prev.filter((_, i) => i !== indexOrItem);
+      }
+      return prev.filter(
+        (ci) => ci.cart_item_id !== targetItem?.cart_item_id && ci.id !== targetItem?.id
+      );
+    });
+
+    if (tokenStore.get() && targetItem) {
+      const removeId = targetItem.cart_item_id || targetItem.id;
+      if (removeId) {
+        try {
+          await api.cart.remove(removeId);
+        } catch (err) {
+          console.warn('Gagal menghapus item keranjang dari server:', err);
+        }
+      }
+    }
+  };
+
+  const handleUpdateCartItemQty = async (indexOrItem, newQty) => {
+    if (newQty < 1) return;
+    const targetItem =
+      typeof indexOrItem === 'number'
+        ? cartItems[indexOrItem]
+        : indexOrItem;
+
+    if (!targetItem) return;
+
+    setCartItems((prev) =>
+      prev.map((item, idx) => {
+        const isMatch =
+          typeof indexOrItem === 'number'
+            ? idx === indexOrItem
+            : item.cart_item_id === targetItem.cart_item_id || item.id === targetItem.id;
+
+        if (!isMatch) return item;
+        const price = item.price || 0;
+        const total = price * newQty;
+        const dpPct = item.minDpPercent || 30;
+        const bookingAmount =
+          item.orderType === 'full' ? total : Math.round((total * dpPct) / 100);
+        const remainingAmount =
+          item.orderType === 'full' ? 0 : Math.max(0, total - bookingAmount);
+
+        return {
+          ...item,
+          qty: newQty,
+          bookingAmount,
+          remainingAmount,
+          subtotal: total
+        };
+      })
+    );
+
+    if (tokenStore.get()) {
+      const updateId = targetItem.cart_item_id || targetItem.id;
+      if (updateId) {
+        try {
+          await api.cart.update(updateId, { quantity: newQty });
+        } catch (err) {
+          console.warn('Gagal update quantity item keranjang di server:', err);
+        }
+      }
+    }
+  };
+
+  const handleToggleWishlist = async (product) => {
+    if (!isLoggedIn || !tokenStore.get()) {
+      setIsLoginPromptOpen(true);
+      return;
+    }
+
+    const pId = Number(product.id || product.backendId);
+    const isCurrentlyWishlisted = wishlistProductIds.includes(pId);
+
+    // Optimistic UI update
+    if (isCurrentlyWishlisted) {
+      setWishlistItems((prev) => prev.filter((it) => Number(it.id || it.product_id) !== pId));
+      setToast({
+        show: true,
+        message: `${product.title || product.name} dihapus dari Wishlist.`
+      });
+    } else {
+      const wishItem = {
+        id: pId,
+        product_id: pId,
+        title: product.title || product.name,
+        brand: product.brand,
+        price: product.price,
+        image: product.image,
+        category: product.category
+      };
+      setWishlistItems((prev) => [wishItem, ...prev]);
+      setToast({
+        show: true,
+        message: `${product.title || product.name} berhasil disimpan ke Wishlist!`
+      });
+    }
+
+    if (tokenStore.get()) {
+      try {
+        await api.wishlist.toggle(pId);
+      } catch (err) {
+        console.warn('Gagal sinkron status wishlist ke server:', err);
+      }
+    }
+  };
+
+  const handleRemoveWishlist = async (productId) => {
+    const pId = Number(productId);
+    setWishlistItems((prev) => prev.filter((it) => Number(it.id || it.product_id) !== pId));
+    if (tokenStore.get()) {
+      try {
+        await api.wishlist.remove(pId);
+      } catch (err) {
+        console.warn('Gagal hapus wishlist di server:', err);
+      }
+    }
   };
 
   const handleCheckout = (items) => {
     if (!isLoggedIn || !tokenStore.get()) {
       setIsLoginPromptOpen(true);
+      return;
+    }
+    if (isAdminRole(currentUser) || isAdminRole(activeRole)) {
+      setToast({
+        show: true,
+        message: 'Akun Admin/Staff internal tidak melakukan checkout di etalase toko. Silakan gunakan menu Input Pesanan Manual di Dashboard Purchasing.',
+        actionLabel: 'Buka Dashboard',
+        onAction: () => handleNavigateDashboard('tambah_pesanan')
+      });
       return;
     }
     const itemsToProcess = items && items.length > 0 ? items : cartItems;
@@ -991,6 +1314,20 @@ export default function App() {
       )
     );
 
+    // Hapus item dari database Cart backend bila checkout berhasil
+    if (tokenStore.get()) {
+      if (checkoutItems.length >= cartItems.length || checkoutItems.length === 0) {
+        api.cart.clear().catch(() => {});
+      } else {
+        checkoutItems.forEach((ci) => {
+          const id = ci.cart_item_id || ci.id;
+          if (id) {
+            api.cart.remove(id).catch(() => {});
+          }
+        });
+      }
+    }
+
     // Show celebration notification
     setToast({
       show: true,
@@ -1012,12 +1349,16 @@ export default function App() {
 
           setCoreOrders((prev) => [
             serverCore,
-            ...prev.filter((order) => order.id !== coreOrder.id)
+            ...prev.filter((order) => order.id !== coreOrder.id && order.invoice !== coreOrder.invoice)
           ]);
           setToast({
             show: true,
             message: `Pesanan ${serverOrder.order_number} tersimpan permanen di backend.`
           });
+          // Tarik ulang keranjang dari server untuk memastikan sinkronisasi database
+          api.cart.get().then((cRes) => {
+            if (Array.isArray(cRes?.data)) setCartItems(cRes.data);
+          }).catch(() => {});
         })
         .catch((error) => {
           setToast({
@@ -1066,6 +1407,72 @@ export default function App() {
         return updated;
       })
     );
+
+    // Kirim pembaruan pesanan (items, split alamat, kurir, catatan) secara permanen ke backend
+    if (tokenStore.get()) {
+      const targetOrder = coreOrders.find(
+        (o) =>
+          o.invoice === orderKey ||
+          o.orderNo === orderKey ||
+          String(o.id) === String(orderKey) ||
+          (o.invoice && String(orderKey).includes(o.invoice)) ||
+          (o.orderNo && String(orderKey).includes(o.orderNo))
+      );
+
+      const targetId =
+        targetOrder?.backendId ||
+        targetOrder?.id ||
+        orderKey;
+
+      const payload = {};
+      if (patch.items) {
+        payload.items = patch.items.map((it) => ({
+          product_variant_id: it.variantId || it.product_variant_id || null,
+          product_id: it.productId || it.product_id || null,
+          variation: it.variation || it.model || null,
+          size: it.size || null,
+          color: it.color || null,
+          quantity: Math.max(1, Number(it.qty) || 1),
+          unit_price: Number(it.price) || 0,
+          fee: Number(it.fee) || 0,
+          discount_nominal: Number(it.discountNominal) || 0,
+          addon_nominal: Number(it.addonNominal) || 0,
+          subtotal: Number(it.subtotal) || ((Number(it.price) || 0) * (Number(it.qty) || 1)),
+          address_id: it.addressId || it.address_id || null,
+          splits: Array.isArray(it.splits) ? it.splits : []
+        }));
+        payload.is_split_address = patch.items.some((it) => it.splits && it.splits.length > 0);
+      }
+      if (patch.addressId !== undefined) payload.address_id = patch.addressId;
+      if (patch.ekspedisi || patch.courier_name) payload.courier_name = patch.ekspedisi || patch.courier_name;
+      if (patch.notes || patch.note) payload.notes = patch.notes || patch.note;
+      if (patch.is_split_address !== undefined) payload.is_split_address = Boolean(patch.is_split_address);
+
+      const rawRole = String(currentUser?.roleId || activeRole?.id || currentUser?.role || '').toLowerCase();
+      const isAdmin = ['owner', 'finance', 'marketing'].some((r) => rawRole.includes(r));
+      const updateFn = isAdmin ? api.management.updateOrder : api.updateOrder;
+
+      updateFn(targetId, payload)
+        .then((response) => {
+          const serverOrder = response?.data;
+          if (serverOrder) {
+            const mappedCore = projectOrderToCore(
+              mapOrderToProjectOrder(serverOrder, currentUser || {}),
+              { currentUser, seedMitra: poSeed.mitra, products }
+            );
+            setCoreOrders((prev) =>
+              prev.map((o) =>
+                o.invoice === mappedCore.invoice || o.orderNo === mappedCore.orderNo || String(o.id) === String(mappedCore.id)
+                  ? mappedCore
+                  : o
+              )
+            );
+          }
+        })
+        .catch((err) => {
+          console.warn('Gagal menyimpan pembaruan pesanan ke server:', err);
+        });
+    }
   };
 
   const handleUpdateAvatar = async (newAvatar, fileObj = null) => {
@@ -1155,6 +1562,9 @@ export default function App() {
 
   const handleNavigateDashboard = (tab = 'dashboard') => {
     if (currentUser?.roleId === 'marketing') {
+      if (tab && tab !== 'dashboard') {
+        setPurchasingInitialTab(tab);
+      }
       setCurrentPage('marketing_dashboard');
     } else if (currentUser?.roleId === 'finance') {
       setCurrentPage('finance_dashboard');
@@ -1171,6 +1581,10 @@ export default function App() {
     setNotifications((prev) =>
       prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n))
     );
+    const markRead = currentUser?.roleId === 'mitra'
+      ? api.my.markNotificationsRead(notif.id)
+      : api.management.markNotificationsRead(notif.id);
+    markRead?.catch?.(() => {});
     if (notif.target === 'katalog') {
       setCurrentPage('catalog');
       return;
@@ -1184,6 +1598,10 @@ export default function App() {
 
   const handleMarkAllNotifRead = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    const markRead = currentUser?.roleId === 'mitra'
+      ? api.my.markNotificationsRead()
+      : api.management.markNotificationsRead();
+    markRead?.catch?.(() => {});
   };
 
   const handleLoginSuccess = (role, userData) => {
@@ -1236,11 +1654,30 @@ export default function App() {
       show: true,
       message: `Selamat datang kembali, ${userObj.name}!`
     });
+
+    // Sinkronkan item keranjang lokal dengan database backend
+    if (cartItems.length > 0) {
+      api.cart
+        .sync(cartItems)
+        .then((res) => {
+          if (Array.isArray(res?.data)) setCartItems(res.data);
+        })
+        .catch(() => {});
+    } else {
+      api.cart
+        .get()
+        .then((res) => {
+          if (Array.isArray(res?.data)) setCartItems(res.data);
+        })
+        .catch(() => {});
+    }
   };
 
   const handleLogout = () => {
     setIsLoggedIn(false);
     setCurrentUser(null);
+    setCartItems([]);
+    setCheckoutItems([]);
     setCurrentPage('logout_success');
     api.logout().catch(() => {});
     tokenStore.clear();
@@ -1253,10 +1690,7 @@ export default function App() {
   };
 
   // FULL-PAGE AUTH VIEWS (LOGIN, REGISTER, LOGOUT SUCCESS)
-  if (currentPage === 'logout_success') {
-    if (isLoggedIn) {
-      return null;
-    }
+  if (currentPage === 'logout_success' && !isLoggedIn) {
     return (
       <LogoutSuccessPage
         onNavigateLogin={() => setCurrentPage('login')}
@@ -1265,10 +1699,7 @@ export default function App() {
     );
   }
 
-  if (currentPage === 'login') {
-    if (isLoggedIn) {
-      return null;
-    }
+  if (currentPage === 'login' && !isLoggedIn) {
     return (
       <LoginPage
         onLoginSuccess={handleLoginSuccess}
@@ -1352,16 +1783,12 @@ export default function App() {
         notifications={notifications}
         onNotificationClick={handleNotificationClick}
         onMarkAllRead={handleMarkAllNotifRead}
-        onOpenWishlist={() => {
-          setToast({
-            show: true,
-            message: 'Daftar Wishlist: 2 produk pre-order telah tersimpan di daftar favorit Anda.'
-          });
-        }}
+        onOpenWishlist={() => setIsWishlistModalOpen(true)}
       />
 
       {/* Main Content Area */}
-      <main className={`flex-1 ${['marketing_dashboard', 'finance_dashboard', 'owner_dashboard'].includes(currentPage) ? '' : 'pb-8'}`}>
+      <ErrorBoundary key={currentPage} onReset={handleNavigateHome}>
+        <main className={`flex-1 ${['marketing_dashboard', 'finance_dashboard', 'owner_dashboard'].includes(currentPage) ? '' : 'pb-8'}`}>
         
         {/* VIEW 1: HOME PAGE (BERANDA) */}
         {currentPage === 'home' && (
@@ -1404,6 +1831,8 @@ export default function App() {
                 setOnlySaleFilter(true);
                 setCurrentPage('catalog');
               }}
+              wishlistProductIds={wishlistProductIds}
+              onToggleWishlist={handleToggleWishlist}
             />
 
             <PreOrderSection
@@ -1420,6 +1849,8 @@ export default function App() {
                 setOnlySaleFilter(false);
                 setCurrentPage('catalog');
               }}
+              wishlistProductIds={wishlistProductIds}
+              onToggleWishlist={handleToggleWishlist}
             />
           </div>
         )}
@@ -1457,11 +1888,13 @@ export default function App() {
               selectedCategory={selectedCategory}
               onSelectCategory={handleSelectCategory}
               categories={storeCategories}
+              wishlistProductIds={wishlistProductIds}
+              onToggleWishlist={handleToggleWishlist}
             />
           </div>
         )}
 
-        {/* VIEW 3: DEDICATED PRODUCT DETAIL PAGE (Matches Screenshot 1 & 2) */}
+        {/* VIEW 3: DEDICATED PRODUCT DETAIL PAGE */}
         {currentPage === 'product_detail' && (
           <ProductDetailPage
             product={selectedProduct}
@@ -1471,21 +1904,27 @@ export default function App() {
             isLoggedIn={isLoggedIn}
             brands={poBrands}
             mitraLevel={normalizeLevel(currentUser?.role || currentUser?.level)}
+            isWishlist={wishlistProductIds.includes(Number(selectedProduct?.id))}
+            onToggleWishlist={handleToggleWishlist}
           />
         )}
 
-        {/* VIEW 4: DEDICATED CART PAGE (Matches Screenshot 4) */}
+        {/* VIEW 4: DEDICATED CART PAGE */}
         {currentPage === 'cart' && (
           <CartPage
             cartItems={cartItems}
             onRemoveItem={handleRemoveCartItem}
+            onUpdateQty={handleUpdateCartItemQty}
             onNavigateHome={handleNavigateHome}
             onNavigateCatalog={handleNavigateCatalog}
             onCheckout={handleCheckout}
+            currentUser={synchronizedUser}
+            activeRole={activeRole}
+            onNavigateDashboard={handleNavigateDashboard}
           />
         )}
 
-        {/* VIEW 4.5: DEDICATED CHECKOUT PAGE (Matches User Uploaded Screenshots 2, 3, 4, 5) */}
+        {/* VIEW 4.5: DEDICATED CHECKOUT PAGE */}
         {currentPage === 'checkout' && (
           <CheckoutPage
             checkoutItems={checkoutItems.length > 0 ? checkoutItems : cartItems}
@@ -1498,7 +1937,7 @@ export default function App() {
           />
         )}
 
-        {/* VIEW 5: MITRA DASHBOARD (Matches User Screenshots 1 - 5) */}
+        {/* VIEW 5: MITRA DASHBOARD */}
         {currentPage === 'mitra_dashboard' && (
           <MitraDashboard
             activeTab={mitraActiveTab}
@@ -1527,10 +1966,11 @@ export default function App() {
           />
         )}
 
-        {/* VIEW 6: MARKETING DASHBOARD (ACC pesanan, katalog, brand, supplier, tim) */}
+        {/* VIEW 6: PURCHASING DASHBOARD (ACC pesanan, katalog, brand, supplier, tim) */}
         {currentPage === 'marketing_dashboard' && (
-          <MarketingDashboard
+          <PurchasingDashboard
             currentUser={{ ...synchronizedUser, role: 'marketing' }}
+            initialMenu={purchasingInitialTab}
             onUpdateUser={handleUpdateUser}
             onUpdateAvatar={handleUpdateAvatar}
             onNavigateStore={handleNavigateHome}
@@ -1625,12 +2065,13 @@ export default function App() {
           />
         )}
 
-      </main>
+        </main>
+      </ErrorBoundary>
 
       {/* Footer matching Maroon Design (hidden on dashboard portals) */}
       {!isPortalDashboard && <Footer />}
 
-      {/* Login Prompt Modal (Matches Screenshot 1) */}
+      {/* Login Prompt Modal */}
       <LoginPromptModal
         isOpen={isLoginPromptOpen}
         onClose={() => setIsLoginPromptOpen(false)}
@@ -1640,7 +2081,7 @@ export default function App() {
         }}
       />
 
-      {/* Success Add To Cart Modal (Matches Screenshot 3) */}
+      {/* Success Add To Cart Modal */}
       <SuccessAddToCartModal
         isOpen={isSuccessCartOpen}
         onClose={() => setIsSuccessCartOpen(false)}
@@ -1665,6 +2106,16 @@ export default function App() {
         onClose={() => setIsOrdersModalOpen(false)}
         onNavigateProduct={handleSelectProduct}
         orders={mitraOrders}
+      />
+
+      {/* Wishlist Favorit Modal */}
+      <WishlistModal
+        isOpen={isWishlistModalOpen}
+        onClose={() => setIsWishlistModalOpen(false)}
+        wishlistItems={wishlistItems}
+        onSelectProduct={handleSelectProduct}
+        onRemoveWishlist={handleRemoveWishlist}
+        onNavigateCatalog={handleNavigateCatalog}
       />
 
     </div>

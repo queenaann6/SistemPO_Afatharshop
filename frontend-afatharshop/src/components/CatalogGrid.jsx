@@ -11,12 +11,21 @@ export default function CatalogGrid({
   onNavigateHome,
   selectedCategory,
   onSelectCategory,
-  categories
+  categories,
+  wishlistProductIds = [],
+  onToggleWishlist
 }) {
   const brandName = selectedBrand !== 'all' ? (products[0]?.brand || 'Brand Pilihan') : 'Afathar Shop';
 
   const filteredProducts = products.filter((p) => {
     if (statusFilter === 'all') return true;
+    const isClosed = p.status === 'closed_po' || p.status === 'closed' || p.isClosedPO === true;
+    if (statusFilter === 'closed_po' || statusFilter === 'closed') {
+      return isClosed;
+    }
+    if (statusFilter === 'pre_order') {
+      return !isClosed && (p.status === 'pre_order' || p.status === 'open');
+    }
     return p.status === statusFilter;
   });
 
@@ -42,7 +51,7 @@ export default function CatalogGrid({
           )}
         </div>
 
-        {/* Catalog Header Bar (Matches Screenshot 4) */}
+        {/* Catalog Header Bar */}
         <div className="bg-white rounded-xl shadow-xs border border-orange-100/70 p-3 sm:p-4 flex flex-wrap items-center justify-between gap-3">
           
           {/* Title & Count Badge */}
@@ -96,6 +105,8 @@ export default function CatalogGrid({
                 key={product.id}
                 product={product}
                 onSelectProduct={onSelectProduct}
+                isWishlisted={wishlistProductIds.includes(Number(product.id))}
+                onToggleWishlist={onToggleWishlist}
               />
             ))}
           </div>

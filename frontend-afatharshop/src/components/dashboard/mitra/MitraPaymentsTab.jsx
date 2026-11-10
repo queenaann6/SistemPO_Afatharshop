@@ -119,12 +119,12 @@ export default function MitraPaymentsTab({ orders = [], payments: paymentsProp =
         <span className="text-xs text-stone-500 font-semibold">{totalCount} pembayaran</span>
       </div>
 
-      {/* Top Maroon Metric Card (Matches Screenshot 5) */}
+      {/* Top Maroon Metric Card */}
       <div className="bg-[#6B1416] text-white rounded-3xl p-5 sm:p-6 shadow-sm flex items-center justify-between">
         <div>
           <p className="text-xs text-rose-100 font-medium">✓ Total Sudah Dibayar</p>
           <h3 className="text-2xl sm:text-3xl font-extrabold mt-1 tracking-tight">
-            Rp {totalPaid.toLocaleString('id-ID')}
+            Rp {Number(totalPaid || 0).toLocaleString('id-ID')}
           </h3>
           <p className="text-xs text-rose-100/90 mt-1">{totalCount} pembayaran</p>
         </div>
@@ -222,7 +222,7 @@ export default function MitraPaymentsTab({ orders = [], payments: paymentsProp =
                     {/* Right: Amount & Detail */}
                     <div className="text-right sm:self-center">
                       <p className="font-bold text-stone-900 text-sm">
-                        Rp {item.amount.toLocaleString('id-ID')}
+                        Rp {Number(item.amount || 0).toLocaleString('id-ID')}
                       </p>
                       <button
                         onClick={() => setSelectedProof(item)}
@@ -299,7 +299,7 @@ export default function MitraPaymentsTab({ orders = [], payments: paymentsProp =
                 <p className="font-bold text-stone-800">{selectedProof.title}</p>
                 <p className="text-[11px] font-mono text-stone-500">{selectedProof.inv}</p>
                 <p className="text-emerald-700 font-bold text-sm">
-                  Nominal: Rp {selectedProof.amount.toLocaleString('id-ID')}
+                  Nominal: Rp {Number(selectedProof.amount || 0).toLocaleString('id-ID')}
                 </p>
                 <span className="inline-block mt-1 px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-full text-[10px] font-bold">
                   {selectedProof.status}

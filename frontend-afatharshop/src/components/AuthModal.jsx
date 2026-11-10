@@ -17,16 +17,9 @@ export default function AuthModal({
   const [selectedRoleId, setSelectedRoleId] = useState(activeRole?.id || 'mitra');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
-  const [storeName, setStoreName] = useState('');
-  const [ownerName, setOwnerName] = useState('');
-  const [whatsapp, setWhatsapp] = useState('');
-  const [city, setCity] = useState('');
-  const [email, setEmail] = useState('');
-  const [regPassword, setRegPassword] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [regSuccessMsg, setRegSuccessMsg] = useState('');
 
   const currentRole = ROLES.find((r) => r.id === selectedRoleId) || ROLES[0];
 
@@ -69,51 +62,6 @@ export default function AuthModal({
     }
   };
 
-  const handleRegisterSubmit = async (e) => {
-    e.preventDefault();
-    setErrorMsg('');
-    setRegSuccessMsg('');
-
-    const fullName = (ownerName || storeName).trim();
-    if (!fullName) {
-      setErrorMsg('Nama lengkap / nama pengelola wajib diisi.');
-      return;
-    }
-    if (!whatsapp.trim()) {
-      setErrorMsg('Nomor WhatsApp wajib diisi.');
-      return;
-    }
-    if (!email.trim()) {
-      setErrorMsg('Alamat email wajib diisi.');
-      return;
-    }
-    if (regPassword.length < 8) {
-      setErrorMsg('Password minimal 8 karakter.');
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const payload = {
-        name: fullName,
-        nama: fullName,
-        email: email.trim(),
-        phone: whatsapp.trim(),
-        password: regPassword,
-        password_confirmation: regPassword
-      };
-
-      const res = await api.register(payload);
-      setRegSuccessMsg(
-        res?.message || 'Pendaftaran kemitraan berhasil! Menunggu verifikasi admin.'
-      );
-    } catch (err) {
-      setErrorMsg(err?.message || 'Pendaftaran gagal. Periksa kembali isian formulir.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl border border-stone-200 overflow-hidden max-h-[92vh] flex flex-col">
@@ -121,7 +69,7 @@ export default function AuthModal({
         <div className="px-5 py-4 bg-[#6B1416] text-white flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-full border border-[#F0C973] overflow-hidden bg-white shadow-sm shrink-0">
-              <img src="/logo.jpg" alt="Afathar Shop Logo" className="w-full h-full object-cover" />
+              <img src="/logo.jpg" alt="Afatharshop Logo" className="w-full h-full object-cover" />
             </div>
             <div>
               <h3 className="font-display text-base font-bold text-[#F0C973] leading-none">
@@ -252,7 +200,7 @@ export default function AuthModal({
 
               <div className="bg-[#FFFBF7] border border-[#FBEAD6] rounded-xl p-3 text-left space-y-1.5 text-xs">
                 <p className="font-bold text-[#8B6A3E] text-[11px] uppercase tracking-wider">
-                  Keuntungan Mitra Afathar Shop:
+                  Keuntungan Mitra Afatharshop:
                 </p>
                 <ul className="space-y-1 text-stone-700 text-[11px]">
                   <li className="flex items-center gap-2">
@@ -273,7 +221,7 @@ export default function AuthModal({
               <div className="pt-1 space-y-2">
                 <a
                   href={`https://wa.me/6281219991888?text=${encodeURIComponent(
-                    'Halo Admin Afathar Shop, saya tertarik mendaftar sebagai Mitra / Reseller resmi Afathar Shop. Mohon informasi syarat & ketentuannya. Terima kasih! 🙏✨'
+                    'Halo Admin Afatharshop, saya tertarik mendaftar sebagai Mitra / Reseller resmi Afatharshop. Mohon informasi syarat & ketentuannya. Terima kasih! 🙏✨'
                   )}`}
                   target="_blank"
                   rel="noreferrer"
@@ -303,7 +251,7 @@ export default function AuthModal({
                     }}
                     className="text-[#6B1416] font-bold hover:underline cursor-pointer"
                   >
-                    Masuk ke akun
+                    Masuk di sini
                   </button>
                 </p>
               </div>

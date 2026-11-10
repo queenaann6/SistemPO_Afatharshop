@@ -6,7 +6,9 @@ export default function SaleSection({
   products,
   selectedBrand,
   onSelectProduct,
-  onViewAllSale
+  onViewAllSale,
+  wishlistProductIds = [],
+  onToggleWishlist
 }) {
   const saleProducts = products.filter((p) => p.isSale);
 
@@ -51,6 +53,8 @@ export default function SaleSection({
               key={product.id}
               product={product}
               onSelectProduct={onSelectProduct}
+              isWishlisted={wishlistProductIds.includes(Number(product.id))}
+              onToggleWishlist={onToggleWishlist}
             />
           ))}
         </div>

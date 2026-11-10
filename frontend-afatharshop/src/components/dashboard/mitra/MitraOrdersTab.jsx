@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import OrderDetailView from './OrderDetailView';
 import { SearchIcon, DocumentTextIcon } from '../../Icons';
+import { formatDisplayDate } from '../../../services/adapters';
 
 export default function MitraOrdersTab({
   onNavigateCatalog,
@@ -157,7 +158,7 @@ export default function MitraOrdersTab({
         ))}
       </div>
 
-      {/* Search & Sort Bar (Matches Screenshot 1) */}
+      {/* Search & Sort Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
         <div className="relative flex-1 max-w-md">
           <input
@@ -186,7 +187,7 @@ export default function MitraOrdersTab({
         </div>
       </div>
 
-      {/* Order Cards List (Matches Screenshot 1) */}
+      {/* Order Cards List */}
       <div className="space-y-4">
         {displayedOrders.map((ord) => {
           const closed = isOrderClosed(ord);
@@ -233,10 +234,10 @@ export default function MitraOrdersTab({
                     {ord.title}
                   </h4>
                   <p className="text-[11px] text-stone-400">
-                    {ord.date}
+                    {formatDisplayDate(ord.date) !== '—' ? formatDisplayDate(ord.date) : ord.date}
                   </p>
                   <p className="text-[10px] text-stone-500">
-                    Batas PO: {ord.closeDate || '-'}
+                    Batas PO: {formatDisplayDate(ord.closeDate) !== '—' ? formatDisplayDate(ord.closeDate) : (ord.closeDate || '-')}
                   </p>
                 </div>
               </div>

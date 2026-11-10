@@ -59,7 +59,7 @@ export default function ProductDetailModal({ product, onClose, onAddToCart }) {
             <div className="w-7 h-7 rounded-full overflow-hidden bg-white shrink-0 border border-[#F0C973]">
               <img src="/logo.jpg" alt="Logo" className="w-full h-full object-cover" />
             </div>
-            <span className="font-display font-bold text-[#F0C973]">AFATHAR SHOP</span>
+            <span className="font-display font-bold text-[#F0C973]">AFATHARSHOP</span>
             <span className="text-amber-200 text-xs hidden sm:inline">• Detail Katalog Distributor</span>
           </div>
           <button
@@ -123,11 +123,17 @@ export default function ProductDetailModal({ product, onClose, onAddToCart }) {
                   <span className="text-xl sm:text-2xl font-bold text-red-600">
                     {formatRupiah(product.price)}
                   </span>
-                  {product.isSale && product.originalPrice > product.price && (
-                    <span className="text-xs text-stone-400 line-through">
-                      {formatRupiah(product.originalPrice)}
-                    </span>
-                  )}
+                  {(() => {
+                    const strikethroughPrice = product.originalPrice && product.originalPrice > product.price
+                      ? product.originalPrice
+                      : (product.sellingPrice && product.sellingPrice > product.price ? product.sellingPrice : null);
+                    if (!strikethroughPrice) return null;
+                    return (
+                      <span className="text-xs text-stone-400 line-through">
+                        {formatRupiah(strikethroughPrice)}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <div className="mt-1 flex items-center gap-1.5 text-xs text-stone-600">
                   <ClockIcon className="w-3.5 h-3.5 text-amber-700" />
@@ -256,21 +262,26 @@ export default function ProductDetailModal({ product, onClose, onAddToCart }) {
               </div>
 
               {/* Submit CTA */}
-              <button
-                onClick={handleBooking}
-                disabled={product.status === 'closed_po'}
-                className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-2 ${
-                  product.status === 'closed_po'
-                    ? 'bg-stone-300 text-stone-500 cursor-not-allowed'
-                    : 'bg-[#6B1416] hover:bg-[#520C0E] text-white cursor-pointer hover:shadow-lg'
-                }`}
-              >
-                <span>
-                  {product.status === 'closed_po'
-                    ? 'PO Sudah Ditutup'
-                    : `Booking PO Sekarang (${formatRupiah(orderType === 'dp' ? minDp : totalPrice)})`}
-                </span>
-              </button>
+              {(() => {
+                const isClosed = product.status === 'closed_po' || product.status === 'closed' || product.isClosedPO === true;
+                return (
+                  <button
+                    onClick={handleBooking}
+                    disabled={isClosed}
+                    className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm shadow-md transition flex items-center justify-center gap-2 ${
+                      isClosed
+                        ? 'bg-stone-300 text-stone-500 cursor-not-allowed'
+                        : 'bg-[#6B1416] hover:bg-[#520C0E] text-white cursor-pointer hover:shadow-lg'
+                    }`}
+                  >
+                    <span>
+                      {isClosed
+                        ? 'PO Sudah Ditutup'
+                        : `Booking PO Sekarang (${formatRupiah(orderType === 'dp' ? minDp : totalPrice)})`}
+                    </span>
+                  </button>
+                );
+              })()}
 
             </div>
 

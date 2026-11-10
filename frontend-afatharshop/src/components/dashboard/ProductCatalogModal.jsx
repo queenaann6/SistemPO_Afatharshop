@@ -36,12 +36,12 @@ const seedStages = (count, dpPct, firstDate = '', lastDate = '') => {
   }));
 };
 
-// Tabs navigasi tanpa nomor halaman
+// Tabs navigasi: Timeline pertama, baru Foto & Video, Informasi Produk, Variasi
 const TABS = [
-  { id: 'media', label: 'Foto & Media Produk' },
+  { id: 'timeline', label: 'Timeline & PO' },
+  { id: 'media', label: 'Foto & Video' },
   { id: 'info', label: 'Informasi Produk' },
-  { id: 'variasi', label: 'Variasi' },
-  { id: 'timeline', label: 'Timeline' }
+  { id: 'variasi', label: 'Variasi' }
 ];
 
 // Helper pemformat ribuan angka
@@ -59,6 +59,7 @@ export default function ProductCatalogModal({
   brands = [],
   categories = [],
   poBatches = [],
+  onCreateBrand = null,
   onCreateBatch = null,
   onClose,
   onSave,
@@ -67,25 +68,29 @@ export default function ProductCatalogModal({
 }) {
   if (!isOpen) return null;
 
-  // Active Tab: Mulai dari Foto & Media Produk
-  const [activeTab, setActiveTab] = useState('media');
+  // Active Tab: Mulai dari Timeline & PO terlebih dahulu
+  const [activeTab, setActiveTab] = useState('timeline');
 
-  // File input refs untuk upload berkas internal
+  // File input refs untuk upload berkas internal (hingga 6 foto + 1 video)
   const fileInputMainRef = useRef(null);
   const fileInput2Ref = useRef(null);
   const fileInput3Ref = useRef(null);
   const fileInput4Ref = useRef(null);
+  const fileInput5Ref = useRef(null);
+  const fileInput6Ref = useRef(null);
   const fileInputVideoRef = useRef(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Tab: Foto & Media (Internal Upload)
+  // Tab: Foto & Media (Internal Upload: Cover + Foto 2 s/d 6 + Video)
   const [image, setImage] = useState('');
   const [image2, setImage2] = useState('');
   const [image3, setImage3] = useState('');
   const [image4, setImage4] = useState('');
+  const [image5, setImage5] = useState('');
+  const [image6, setImage6] = useState('');
   const [reelUrl, setReelUrl] = useState('');
-  const [uploadingSlot, setUploadingSlot] = useState(null); // 'main' | '2' | '3' | '4' | 'video'
+  const [uploadingSlot, setUploadingSlot] = useState(null); // 'main' | '2' | '3' | '4' | '5' | '6' | 'video'
 
   // Tab: Informasi Dasar
   const [title, setTitle] = useState('');
@@ -108,6 +113,12 @@ export default function ProductCatalogModal({
   const [bulkPrice, setBulkPrice] = useState('');
   const [bulkQuota, setBulkQuota] = useState('');
   const [bulkAddon, setBulkAddon] = useState('');
+
+  // Tab: Informasi Dasar - Brand Baru
+  const [showNewBrandModal, setShowNewBrandModal] = useState(false);
+  const [newBrandName, setNewBrandName] = useState('');
+  const [newBrandSupplier, setNewBrandSupplier] = useState('');
+  const [newBrandAddress, setNewBrandAddress] = useState('');
 
   // Tab: Timeline & PO
   const [batch, setBatch] = useState('');
@@ -147,12 +158,28 @@ export default function ProductCatalogModal({
     return brands.find((b) => b.name === brand || b.id === brandId || b.backendId === brandId);
   }, [brands, brand, brandId]);
 
+  const prevOpenRef = useRef(false);
+  const prevInitIdRef = useRef(null);
+
   // Inisialisasi Data
   useEffect(() => {
+    if (!isOpen) {
+      prevOpenRef.current = false;
+      return;
+    }
+    const currentInitId = initialData?.id || initialData?._id || (mode === 'create' ? 'new' : null);
+    const isFirstOpen = !prevOpenRef.current;
+    const initChanged = currentInitId && currentInitId !== prevInitIdRef.current;
+    if (!isFirstOpen && !initChanged) {
+      return;
+    }
+    prevOpenRef.current = true;
+    prevInitIdRef.current = currentInitId;
+
     const today = new Date().toISOString().split('T')[0];
     const defaultClose = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
 
-    setActiveTab('media');
+    setActiveTab('timeline');
 
     if (initialData) {
       setTitle(initialData.title || initialData.name || '');
@@ -170,20 +197,52 @@ export default function ProductCatalogModal({
       setMaterialDetail(initialData.material_detail || initialData.materialDetail || '');
       setDescription(initialData.description || '');
 
-      // Media
-      setImage(initialData.image || '');
-      setImage2(initialData.thumbnails?.[1] || initialData.image2 || '');
-      setImage3(initialData.thumbnails?.[2] || initialData.image3 || '');
-      setImage4(initialData.thumbnails?.[3] || initialData.image4 || '');
-      setReelUrl(initialData.reelUrl || '');
+      // Media (Cover + Galeri 2 s/d 6 + Video)
+      const mainImg = initialData.image || initialData.thumbnails?.[0] || '';
+      const allThumbs = Array.isArray(initialData.thumbnails) ? initialData.thumbnails.filter(Boolean) : [];
+      const otherThumbs = allThumbs.filter((t, idx) => idx > 0 || (t !== mainImg && allThumbs.indexOf(t) !== 0));
+
+      setImage(mainImg);
+      setImage2(initialData.image2 || otherThumbs[0] || allThumbs[1] || '');
+      setImage3(initialData.image3 || otherThumbs[1] || allThumbs[2] || '');
+      setImage4(initialData.image4 || otherThumbs[2] || allThumbs[3] || '');
+      setImage5(initialData.image5 || otherThumbs[3] || allThumbs[4] || '');
+      setImage6(initialData.image6 || otherThumbs[4] || allThumbs[5] || '');
+      setReelUrl(initialData.reelUrl || initialData.reel_url || initialData.videoUrl || initialData.video_url || '');
 
       // Timeline & PO
-      setBatch(initialData.batch || initialData.po_batch?.name || '');
-      setPoBatchId(initialData.po_batch_id || initialData.poBatchId || '');
-      setOpenDate(initialData.openDate || today);
-      setCloseDate(initialData.closeDate || defaultClose);
-      setCloseTime(initialData.closeTime || '23:59');
-      setReadyEstimate(initialData.readyEstimate || initialData.estimated_shipment || '14 Hari setelah PO Tutup');
+      const matchedBatch = poBatches.find(
+        (b) =>
+          (initialData.po_batch_id && (b.id === initialData.po_batch_id || b.backendId === initialData.po_batch_id)) ||
+          (b.name && (b.name === initialData.batch || b.name === initialData.po_batch?.name)) ||
+          (b.title && (b.title === initialData.batch || b.title === initialData.po_batch?.name))
+      );
+      const batchName = initialData.batch || initialData.po_batch?.name || matchedBatch?.name || matchedBatch?.title || '';
+      setBatch(batchName);
+      setPoBatchId(initialData.po_batch_id || initialData.poBatchId || matchedBatch?.id || '');
+
+      let rawClose = initialData.closeDate || initialData.tutup_po_iso || initialData.tutup_po || matchedBatch?.close_date || matchedBatch?.closeDateIso || '';
+      let cDate = defaultClose;
+      let cTime = '23:59';
+      if (rawClose) {
+        const cleanClose = String(rawClose).replace('T', ' ');
+        const [dPart, tPart] = cleanClose.split(' ');
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dPart)) {
+          cDate = dPart;
+        }
+        if (tPart && /^\d{2}:\d{2}/.test(tPart)) {
+          cTime = tPart.slice(0, 5);
+        } else if (initialData.closeTime) {
+          const m = String(initialData.closeTime).match(/\d{2}:\d{2}/);
+          if (m) cTime = m[0];
+        }
+      }
+      setCloseDate(cDate);
+      setCloseTime(cTime);
+      setOpenDate(initialData.openDate || matchedBatch?.start_date || today);
+      const estRaw = initialData.readyEstimate || initialData.estimated_shipment || matchedBatch?.estimated_shipment || '';
+      const cleanEst = (estRaw && !String(estRaw).startsWith('1970')) ? estRaw : '14 Hari setelah PO Tutup';
+      setReadyEstimate(cleanEst);
 
       const isSaleActive = initialData.is_sale !== undefined ? !!initialData.is_sale : !!initialData.isSale;
       setIsSale(isSaleActive);
@@ -211,10 +270,9 @@ export default function ProductCatalogModal({
       if (initialData.variants && initialData.variants.length > 0) {
         const mappedVariants = initialData.variants.map((v, i) => {
           if (v.color && !existingColors.some((c) => c.name.toLowerCase() === v.color.toLowerCase())) {
-            const matched = PRESET_COLORS.find((pc) => pc.name.toLowerCase() === v.color.toLowerCase());
             existingColors.push({
               name: v.color,
-              hex: matched ? matched.hex : '#059669'
+              hex: '#059669'
             });
           }
           if (v.size && !existingSizes.includes(v.size)) {
@@ -224,14 +282,10 @@ export default function ProductCatalogModal({
             existingModels.push(v.model);
           }
 
-          const matchedColor = PRESET_COLORS.find(
-            (c) => String(c.name).toLowerCase() === String(v.color || '').toLowerCase()
-          );
-
           return {
             id: v.id || `v-${Date.now()}-${i}`,
             color: v.color || 'Standard',
-            colorHex: matchedColor ? matchedColor.hex : '#059669',
+            colorHex: '#059669',
             size: v.size || 'All',
             model: v.model || 'Standard',
             sku: v.sku || `${v.color || 'VAR'}-${v.size || 'ALL'}`,
@@ -285,14 +339,32 @@ export default function ProductCatalogModal({
       setImage2('');
       setImage3('');
       setImage4('');
+      setImage5('');
+      setImage6('');
       setReelUrl('');
 
-      setBatch(poBatches[0]?.name || '');
-      setPoBatchId(poBatches[0]?.id || '');
-      setOpenDate(today);
-      setCloseDate(defaultClose);
-      setCloseTime('23:59');
-      setReadyEstimate('14 Hari setelah PO Tutup');
+      const firstBatch = poBatches[0];
+      setBatch(firstBatch ? (firstBatch.name || firstBatch.title || '') : '');
+      setPoBatchId(firstBatch ? firstBatch.id : '');
+      if (firstBatch) {
+        setOpenDate(firstBatch.start_date ? String(firstBatch.start_date).slice(0, 10) : today);
+        const rawClose = firstBatch.close_date || firstBatch.closeDateIso;
+        if (rawClose) {
+          const clean = String(rawClose).replace('T', ' ');
+          const [dPart, tPart] = clean.split(' ');
+          if (/^\d{4}-\d{2}-\d{2}$/.test(dPart)) setCloseDate(dPart);
+          if (tPart && /^\d{2}:\d{2}/.test(tPart)) setCloseTime(tPart.slice(0, 5));
+        } else {
+          setCloseDate(defaultClose);
+          setCloseTime('23:59');
+        }
+        setReadyEstimate(firstBatch.estimated_shipment ? String(firstBatch.estimated_shipment).slice(0, 10) : '14 Hari setelah PO Tutup');
+      } else {
+        setOpenDate(today);
+        setCloseDate(defaultClose);
+        setCloseTime('23:59');
+        setReadyEstimate('14 Hari setelah PO Tutup');
+      }
 
       setIsSale(false);
       setDiscountPercent(0);
@@ -321,14 +393,11 @@ export default function ProductCatalogModal({
   }, [variants]);
 
   const computedOriginalPrice = useMemo(() => {
-    if (manualOriginalPrice && Number(manualOriginalPrice) > 0) {
-      return Number(manualOriginalPrice);
-    }
     if (isSale && discountPercent > 0 && minActivePrice > 0) {
       return Math.round(minActivePrice / (1 - discountPercent / 100));
     }
-    return minActivePrice;
-  }, [manualOriginalPrice, isSale, discountPercent, minActivePrice]);
+    return null;
+  }, [isSale, discountPercent, minActivePrice]);
 
   const totalTerminPct = useMemo(() => {
     return stages.slice(0, terminCount).reduce((sum, s) => sum + (Number(s.pct) || 0), 0);
@@ -403,6 +472,8 @@ export default function ProductCatalogModal({
           if (slot === '2') setImage2(path);
           if (slot === '3') setImage3(path);
           if (slot === '4') setImage4(path);
+          if (slot === '5') setImage5(path);
+          if (slot === '6') setImage6(path);
           if (slot === 'video') setReelUrl(path);
         }
       } else {
@@ -411,6 +482,8 @@ export default function ProductCatalogModal({
         if (slot === '2') setImage2(localUrl);
         if (slot === '3') setImage3(localUrl);
         if (slot === '4') setImage4(localUrl);
+        if (slot === '5') setImage5(localUrl);
+        if (slot === '6') setImage6(localUrl);
         if (slot === 'video') setReelUrl(localUrl);
       }
     } catch (err) {
@@ -447,15 +520,64 @@ export default function ProductCatalogModal({
 
   const handleBatchChange = (batchName) => {
     setBatch(batchName);
-    const bObj = poBatches.find((b) => b.name === batchName);
+    const bObj = poBatches.find((b) => b.name === batchName || b.title === batchName);
     if (bObj) {
       setPoBatchId(bObj.id);
-      if (bObj.start_date) setOpenDate(bObj.start_date);
-      if (bObj.close_date) {
-        const parts = bObj.close_date.split('T');
-        setCloseDate(parts[0]);
+      if (bObj.start_date) setOpenDate(String(bObj.start_date).slice(0, 10));
+      const rawClose = bObj.close_date || bObj.closeDateIso || bObj.closeDate;
+      if (rawClose) {
+        const cleanClose = String(rawClose).replace('T', ' ');
+        const [dPart, tPart] = cleanClose.split(' ');
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dPart)) {
+          setCloseDate(dPart);
+        }
+        if (tPart && /^\d{2}:\d{2}/.test(tPart)) {
+          setCloseTime(tPart.slice(0, 5));
+        } else if (bObj.closeTime) {
+          const m = String(bObj.closeTime).match(/\d{2}:\d{2}/);
+          if (m) setCloseTime(m[0]);
+        }
       }
-      if (bObj.estimated_shipment) setReadyEstimate(bObj.estimated_shipment);
+      if (bObj.estimated_shipment) {
+        setReadyEstimate(String(bObj.estimated_shipment).slice(0, 10));
+      }
+    } else {
+      setPoBatchId('');
+    }
+  };
+
+  const handleQuickCreateBrand = async () => {
+    if (!newBrandName.trim()) {
+      alert('Nama brand wajib diisi.');
+      return;
+    }
+    const cleanName = newBrandName.trim();
+    try {
+      let created = null;
+      if (onCreateBrand) {
+        created = await onCreateBrand({
+          name: cleanName,
+          supplier: newBrandSupplier.trim() || undefined,
+          address: newBrandAddress.trim() || undefined,
+          is_active: true
+        });
+      }
+      setBrand(cleanName);
+      if (created?.id || created?.backendId) {
+        setBrandId(created.backendId || created.id);
+      }
+      setShowNewBrandModal(false);
+      setNewBrandName('');
+      setNewBrandSupplier('');
+      setNewBrandAddress('');
+    } catch (err) {
+      console.error('Gagal membuat brand baru:', err);
+      // Tetap set nama brand sehingga tersimpan secara otomatis
+      setBrand(cleanName);
+      setShowNewBrandModal(false);
+      setNewBrandName('');
+      setNewBrandSupplier('');
+      setNewBrandAddress('');
     }
   };
 
@@ -485,8 +607,17 @@ export default function ProductCatalogModal({
       if (onCreateBatch) {
         const created = await onCreateBatch(payload);
         if (created) {
-          setBatch(created.name);
+          const createdName = created.name || created.title || newBatchName.trim();
+          setBatch(createdName);
           setPoBatchId(created.id);
+          if (created.start_date) setOpenDate(String(created.start_date).slice(0, 10));
+          if (created.close_date) {
+            const clean = String(created.close_date).replace('T', ' ');
+            const [dPart, tPart] = clean.split(' ');
+            if (/^\d{4}-\d{2}-\d{2}$/.test(dPart)) setCloseDate(dPart);
+            if (tPart && /^\d{2}:\d{2}/.test(tPart)) setCloseTime(tPart.slice(0, 5));
+          }
+          if (created.estimated_shipment) setReadyEstimate(String(created.estimated_shipment).slice(0, 10));
         }
       } else {
         setBatch(newBatchName.trim());
@@ -498,20 +629,13 @@ export default function ProductCatalogModal({
     }
   };
 
-  // Color handling — hex diambil otomatis dari palet preset (tanpa input kode warna)
+  // Color handling — murni nama warna teks katalog (tanpa palet warna / preset hex)
   const handleAddColor = () => {
     if (!customColorName.trim()) return;
     const name = customColorName.trim();
     const exists = colors.some((c) => c.name.toLowerCase() === name.toLowerCase());
     if (!exists) {
-      const matched = PRESET_COLORS.find((pc) => pc.name.toLowerCase() === name.toLowerCase());
-      const usedHexes = new Set(colors.map((c) => c.hex));
-      const freePreset = PRESET_COLORS.find((pc) => !usedHexes.has(pc.hex));
-      const hex =
-        matched?.hex ||
-        freePreset?.hex ||
-        PRESET_COLORS[colors.length % PRESET_COLORS.length].hex;
-      setColors((prev) => [...prev, { name, hex }]);
+      setColors((prev) => [...prev, { name, hex: '#059669' }]);
     }
     setCustomColorName('');
     setShowAddColorModal(false);
@@ -562,6 +686,7 @@ export default function ProductCatalogModal({
     const activeSizes = sizes.length > 0 ? sizes : ['All Size'];
 
     const existingKeys = new Set(variants.map((v) => `${v.model}|${v.color}|${v.size}`));
+    const existingSkus = new Set(variants.map((v) => String(v.sku || '').toUpperCase()).filter(Boolean));
     const newItems = [];
 
     const basePrice = Number(bulkPrice) || (variants[0]?.price ? Number(variants[0].price) : 0);
@@ -573,9 +698,24 @@ export default function ProductCatalogModal({
         activeSizes.forEach((s) => {
           const key = `${m}|${c.name}|${s}`;
           if (!existingKeys.has(key)) {
-            const cleanPrefix = (series || title || 'ART').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase();
-            const colorCode = c.name.slice(0, 3).toUpperCase();
-            const autoSku = `${cleanPrefix}-${colorCode}-${s}`;
+            const brandCode = brand ? brand.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() : '';
+            let artPfx = (series || title || 'ART').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+            if (brandCode && artPfx.startsWith(brandCode)) {
+              artPfx = artPfx.slice(brandCode.length);
+            }
+            const cleanPrefix = artPfx.slice(0, 4) || 'ART';
+            const modelCode = (m && m !== 'Standard' && m !== 'All') ? m.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase() : '';
+            const colorCode = c.name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() || 'DEF';
+            const sizeCode = String(s).replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'ALL';
+
+            const baseSku = `${brandCode ? `${brandCode}-` : ''}${cleanPrefix}${modelCode ? `-${modelCode}` : ''}-${colorCode}-${sizeCode}`;
+            let autoSku = baseSku;
+            let counter = 1;
+            while (existingSkus.has(autoSku.toUpperCase())) {
+              counter++;
+              autoSku = `${baseSku}-${counter}`;
+            }
+            existingSkus.add(autoSku.toUpperCase());
 
             newItems.push({
               id: `v-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
@@ -607,8 +747,24 @@ export default function ProductCatalogModal({
     const defModel = models[0] || 'Standard';
     const defColor = colors[0] || { name: 'Default', hex: '#059669' };
     const defSize = sizes[0] || 'All Size';
-    const cleanPrefix = (series || title || 'ART').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase();
-    const autoSku = `${cleanPrefix}-${defColor.name.slice(0, 3).toUpperCase()}-${defSize}`;
+    const brandCode = brand ? brand.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() : '';
+    let artPfx = (series || title || 'ART').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    if (brandCode && artPfx.startsWith(brandCode)) {
+      artPfx = artPfx.slice(brandCode.length);
+    }
+    const cleanPrefix = artPfx.slice(0, 4) || 'ART';
+    const modelCode = (defModel && defModel !== 'Standard' && defModel !== 'All') ? defModel.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase() : '';
+    const colorCode = defColor.name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() || 'DEF';
+    const sizeCode = String(defSize).replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'ALL';
+
+    const existingSkus = new Set(variants.map((v) => String(v.sku || '').toUpperCase()).filter(Boolean));
+    const baseSku = `${brandCode ? `${brandCode}-` : ''}${cleanPrefix}${modelCode ? `-${modelCode}` : ''}-${colorCode}-${sizeCode}`;
+    let autoSku = baseSku;
+    let counter = 1;
+    while (existingSkus.has(autoSku.toUpperCase())) {
+      counter++;
+      autoSku = `${baseSku}-${counter}`;
+    }
 
     const newRow = {
       id: `v-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
@@ -753,7 +909,7 @@ export default function ProductCatalogModal({
       const productPayload = {
         title: title.trim(),
         name: title.trim(),
-        brand: brand || 'Afathar Exclusive',
+        brand: brand || 'Afatharshop',
         brand_id: numericBrandId,
         category: category,
         category_id: numericCatId,
@@ -767,8 +923,11 @@ export default function ProductCatalogModal({
         image2: image2,
         image3: image3,
         image4: image4,
-        thumbnails: [image, image2, image3, image4].filter(Boolean),
+        image5: image5,
+        image6: image6,
+        thumbnails: [image, image2, image3, image4, image5, image6].filter(Boolean),
         reelUrl: reelUrl,
+        reel_url: reelUrl,
         openDate: openDate,
         closeDate: closeDate,
         closeTime: closeTime,
@@ -779,8 +938,8 @@ export default function ProductCatalogModal({
         discount_percent: isSale ? Number(discountPercent) || 0 : 0,
         saleQuota: saleQuota,
         saleBadgeText: isSale ? `SALE ${discountPercent}%` : '',
-        originalPrice: isSale ? computedOriginalPrice : effectiveBasePrice,
-        original_price: isSale ? computedOriginalPrice : effectiveBasePrice,
+        originalPrice: (isSale && computedOriginalPrice) ? computedOriginalPrice : effectiveBasePrice,
+        original_price: (isSale && computedOriginalPrice) ? computedOriginalPrice : effectiveBasePrice,
         terminCount: terminCount,
         stages: activeStages,
         paymentStages: activeStages,
@@ -794,14 +953,42 @@ export default function ProductCatalogModal({
         modelsText: models.join(', '),
         colorsText: colors.map((c) => c.name).join(', '),
         sizesText: sizes.join(', '),
-        variants: variants.map((v) => ({
-          ...v,
-          price: Number(v.price) || 0,
-          addon: Number(v.addon) || 0,
-          quota: Number(v.quota) || 0,
-          stock: Number(v.quota) || 0,
-          is_active: v.is_active !== undefined ? !!v.is_active : true
-        })),
+        variants: (() => {
+          const seenSkus = new Set();
+          return variants.map((v) => {
+            const brandCode = brand ? brand.replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() : '';
+            let artPfx = (series || title || 'ART').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+            if (brandCode && artPfx.startsWith(brandCode)) {
+              artPfx = artPfx.slice(brandCode.length);
+            }
+            const cleanPfx = artPfx.slice(0, 4) || 'ART';
+            const mCode = (v.model && v.model !== 'Standard' && v.model !== 'All') ? String(v.model).replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase() : '';
+            const cCode = (v.color || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 3).toUpperCase() || 'DEF';
+            const sCode = String(v.size || 'ALL').replace(/[^a-zA-Z0-9]/g, '').toUpperCase() || 'ALL';
+
+            let sku = String(v.sku || '').trim();
+            if (!sku) {
+              sku = `${brandCode ? `${brandCode}-` : ''}${cleanPfx}${mCode ? `-${mCode}` : ''}-${cCode}-${sCode}`;
+            }
+            let candidate = sku;
+            let counter = 1;
+            while (seenSkus.has(candidate.toUpperCase())) {
+              counter++;
+              candidate = `${sku}-${counter}`;
+            }
+            seenSkus.add(candidate.toUpperCase());
+
+            return {
+              ...v,
+              sku: candidate,
+              price: Number(v.price) || 0,
+              addon: Number(v.addon) || 0,
+              quota: Number(v.quota) || 0,
+              stock: Number(v.quota) || 0,
+              is_active: v.is_active !== undefined ? !!v.is_active : true
+            };
+          });
+        })(),
         price: effectiveBasePrice,
         status: actionType === 'open' ? 'pre_order' : actionType === 'scheduled' ? 'upcoming' : 'draft'
       };
@@ -960,10 +1147,15 @@ export default function ProductCatalogModal({
 
               {/* Upload Foto Galeri Tambahan */}
               <div className="space-y-2 pt-2">
-                <label className="block text-xs font-medium text-gray-700">
-                  Foto Galeri Tambahan (Detail Produk, Tampak Belakang, Cutting)
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700">
+                    Foto Galeri Tambahan (Foto 2 s/d 6 & Video Produk)
+                  </label>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Unggah 5-6 foto produk (1 Foto Sampul Utama + hingga 5 Foto Galeri Detail) serta 1 video promosi/reel.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
                   {/* Slot Foto 2 */}
                   <div className="space-y-1">
                     <span className="text-[11px] text-gray-500 block">Foto 2</span>
@@ -1099,6 +1291,96 @@ export default function ProductCatalogModal({
                     />
                   </div>
 
+                  {/* Slot Foto 5 */}
+                  <div className="space-y-1">
+                    <span className="text-[11px] text-gray-500 block">Foto 5</span>
+                    <div
+                      onClick={() => {
+                        if (!uploadingSlot) fileInput5Ref.current?.click();
+                      }}
+                      className="aspect-square rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-500 overflow-hidden relative group bg-gray-50 flex flex-col items-center justify-center cursor-pointer transition text-gray-400"
+                    >
+                      {uploadingSlot === '5' ? (
+                        <span className="text-xs text-gray-500">Mengunggah...</span>
+                      ) : image5 ? (
+                        <>
+                          <img src={mediaUrl(image5)} alt="Foto 5" className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setImage5('');
+                            }}
+                            className="absolute top-1.5 right-1.5 bg-black/70 hover:bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs z-10"
+                          >
+                            ✕
+                          </button>
+                        </>
+                      ) : (
+                        <div className="text-center p-2">
+                          <span className="text-sm font-semibold text-gray-500 block">+ Upload</span>
+                          <span className="text-[10px] text-gray-400">Pilih Berkas</span>
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      ref={fileInput5Ref}
+                      type="file"
+                      accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleInternalFileUpload(f, '5');
+                        e.target.value = '';
+                      }}
+                    />
+                  </div>
+
+                  {/* Slot Foto 6 */}
+                  <div className="space-y-1">
+                    <span className="text-[11px] text-gray-500 block">Foto 6</span>
+                    <div
+                      onClick={() => {
+                        if (!uploadingSlot) fileInput6Ref.current?.click();
+                      }}
+                      className="aspect-square rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-500 overflow-hidden relative group bg-gray-50 flex flex-col items-center justify-center cursor-pointer transition text-gray-400"
+                    >
+                      {uploadingSlot === '6' ? (
+                        <span className="text-xs text-gray-500">Mengunggah...</span>
+                      ) : image6 ? (
+                        <>
+                          <img src={mediaUrl(image6)} alt="Foto 6" className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setImage6('');
+                            }}
+                            className="absolute top-1.5 right-1.5 bg-black/70 hover:bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs z-10"
+                          >
+                            ✕
+                          </button>
+                        </>
+                      ) : (
+                        <div className="text-center p-2">
+                          <span className="text-sm font-semibold text-gray-500 block">+ Upload</span>
+                          <span className="text-[10px] text-gray-400">Pilih Berkas</span>
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      ref={fileInput6Ref}
+                      type="file"
+                      accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleInternalFileUpload(f, '6');
+                        e.target.value = '';
+                      }}
+                    />
+                  </div>
+
                   {/* Slot Video Produk (Internal File Upload) */}
                   <div className="space-y-1">
                     <span className="text-[11px] text-gray-500 block">Video Produk (MP4/WebM)</span>
@@ -1182,9 +1464,18 @@ export default function ProductCatalogModal({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">
-                    Brand / Vendor <span className="text-red-500">*</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-medium text-gray-700">
+                      Brand / Vendor <span className="text-red-500">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewBrandModal(true)}
+                      className="text-[11px] font-semibold text-[#541221] hover:underline cursor-pointer"
+                    >
+                      + Brand Baru
+                    </button>
+                  </div>
                   <select
                     value={brand}
                     onChange={(e) => handleBrandChange(e.target.value)}
@@ -1363,17 +1654,13 @@ export default function ProductCatalogModal({
                       colors.map((c) => (
                         <span
                           key={c.name}
-                          className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-gray-300 bg-white text-gray-800 text-xs"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-gray-300 bg-white text-gray-800 text-xs font-medium"
                         >
-                          <span
-                            className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
-                            style={{ backgroundColor: c.hex }}
-                          />
                           {c.name}
                           <button
                             type="button"
                             onClick={() => handleRemoveColor(c.name)}
-                            className="text-gray-400 hover:text-red-600 ml-0.5 leading-none"
+                            className="text-gray-400 hover:text-red-600 ml-1 leading-none cursor-pointer"
                           >
                             ✕
                           </button>
@@ -1559,13 +1846,7 @@ export default function ProductCatalogModal({
                               </td>
 
                               <td className="px-3 py-1.5">
-                                <div className="flex items-center gap-1.5">
-                                  <span
-                                    className="w-2.5 h-2.5 rounded-full shrink-0 border border-black/10"
-                                    style={{ backgroundColor: v.colorHex || '#059669' }}
-                                  />
-                                  <span className="text-gray-800">{v.color}</span>
-                                </div>
+                                <span className="font-medium text-gray-800 text-xs">{v.color}</span>
                               </td>
 
                               <td className="px-3 py-1.5">
@@ -1661,12 +1942,15 @@ export default function ProductCatalogModal({
                     className="w-full text-sm px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#541221] bg-white text-gray-800"
                   >
                     <option value="">-- Tanpa Batch / Pilih Batch PO --</option>
-                    {poBatches.map((b) => (
-                      <option key={b.id} value={b.name}>
-                        {b.name} {b.brand ? `(${b.brand})` : ''}
-                      </option>
-                    ))}
-                    {batch && !poBatches.some((b) => b.name === batch) && (
+                    {poBatches.map((b) => {
+                      const bName = b.name || b.title;
+                      return (
+                        <option key={b.id} value={bName}>
+                          {bName} {b.brand ? `(${b.brand})` : ''}
+                        </option>
+                      );
+                    })}
+                    {batch && !poBatches.some((b) => (b.name === batch || b.title === batch)) && (
                       <option value={batch}>{batch}</option>
                     )}
                   </select>
@@ -1836,55 +2120,48 @@ export default function ProductCatalogModal({
                 </label>
 
                 {isSale && (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-3 p-3.5 bg-gray-50 border border-gray-200 rounded-lg">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
-                        Diskon
-                      </label>
-                      <div className="relative flex items-center">
+                  <div className="mt-3 p-3.5 bg-gray-50 border border-gray-200 rounded-lg space-y-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          Diskon
+                        </label>
+                        <div className="relative flex items-center">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={discountPercent || ''}
+                            onChange={(e) => {
+                              const val = Number(e.target.value.replace(/\D/g, '')) || 0;
+                              setDiscountPercent(Math.min(99, val));
+                            }}
+                            placeholder="0"
+                            className="w-full text-sm px-3 py-2 pr-7 rounded-lg border border-gray-300 bg-white"
+                          />
+                          <span className="absolute right-2.5 text-xs text-gray-400 pointer-events-none">%</span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          Batas Kuota Promo
+                        </label>
                         <input
                           type="text"
-                          inputMode="numeric"
-                          value={discountPercent || ''}
-                          onChange={(e) => {
-                            const val = Number(e.target.value.replace(/\D/g, '')) || 0;
-                            setDiscountPercent(Math.min(99, val));
-                          }}
-                          placeholder="0"
-                          className="w-full text-sm px-3 py-2 pr-7 rounded-lg border border-gray-300 bg-white"
+                          value={saleQuota}
+                          placeholder="Contoh: 100 pcs"
+                          onChange={(e) => setSaleQuota(e.target.value)}
+                          className="w-full text-sm px-3 py-2 rounded-lg border border-gray-300 bg-white"
                         />
-                        <span className="absolute right-2.5 text-xs text-gray-400 pointer-events-none">%</span>
                       </div>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
-                        Batas Kuota Promo
-                      </label>
-                      <input
-                        type="text"
-                        value={saleQuota}
-                        placeholder="Contoh: 100 pcs"
-                        onChange={(e) => setSaleQuota(e.target.value)}
-                        className="w-full text-sm px-3 py-2 rounded-lg border border-gray-300 bg-white"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
-                        Harga Normal / Coret
-                      </label>
-                      <div className="relative flex items-center">
-                        <span className="absolute left-2.5 text-xs text-gray-500 font-medium pointer-events-none">Rp</span>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={formatRupiah(manualOriginalPrice || computedOriginalPrice)}
-                          onChange={(e) => setManualOriginalPrice(e.target.value.replace(/\D/g, ''))}
-                          placeholder="Dihitung otomatis jika kosong"
-                          className="w-full text-sm pl-8 pr-3 py-2 rounded-lg border border-gray-300 bg-white"
-                        />
-                      </div>
+                    <div className="flex items-center gap-1.5 text-[11px] text-stone-600 bg-white px-3 py-2 rounded-md border border-stone-200">
+                      <span className="text-emerald-700 font-semibold">ℹ Info Promo:</span>
+                      <span>
+                        Harga promo &amp; harga coret otomatis dihitung dari harga satuan masing-masing varian produk
+                        {discountPercent > 0 ? ` (dipotong diskon ${discountPercent}%)` : ''}.
+                      </span>
                     </div>
                   </div>
                 )}
@@ -1944,46 +2221,37 @@ export default function ProductCatalogModal({
               </button>
             </div>
             <div>
-              <span className="text-[11px] text-gray-600 block mb-1.5">Pilih warna populer:</span>
-              <div className="flex flex-wrap gap-1.5 mb-3">
-                {PRESET_COLORS.map((pc) => (
-                  <button
-                    key={pc.name}
-                    type="button"
-                    onClick={() => {
-                      setCustomColorName(pc.name);
-                    }}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded border border-gray-200 hover:border-gray-400 bg-gray-50 text-xs"
-                  >
-                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: pc.hex }} />
-                    <span>{pc.name}</span>
-                  </button>
-                ))}
-              </div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Nama Warna</label>
               <input
                 type="text"
-                placeholder="Contoh: Dusty Rose"
+                placeholder="Contoh: Sage Green, Noir Matte, Terracotta, Denim"
                 value={customColorName}
                 onChange={(e) => setCustomColorName(e.target.value)}
-                className="w-full text-xs px-3 py-2 rounded border border-gray-300"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddColor();
+                  }
+                }}
+                className="w-full text-xs px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#541221]"
+                autoFocus
               />
               <p className="text-[11px] text-gray-500 mt-1.5">
-                Warna swatch dipilihkan otomatis dari palet. Cukup isi nama warnanya saja.
+                Ketik nama varian warna sesuai katalog pabrik/vendor, lalu tekan Enter atau Simpan.
               </p>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
               <button
                 type="button"
                 onClick={() => setShowAddColorModal(false)}
-                className="px-3 py-1.5 rounded border border-gray-300 text-xs font-medium text-gray-600"
+                className="px-3 py-1.5 rounded border border-gray-300 text-xs font-medium text-gray-600 hover:bg-gray-50"
               >
                 Batal
               </button>
               <button
                 type="button"
                 onClick={handleAddColor}
-                className="px-4 py-1.5 rounded bg-[#541221] text-white text-xs font-medium"
+                className="px-4 py-1.5 rounded bg-[#541221] text-white text-xs font-semibold hover:bg-[#68182a]"
               >
                 Simpan
               </button>
@@ -2159,6 +2427,69 @@ export default function ProductCatalogModal({
                 className="px-4 py-1.5 rounded bg-[#541221] text-white text-xs font-medium"
               >
                 Buat Batch
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Sub-Modal: Buat Brand Baru */}
+      {showNewBrandModal && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-xl p-5 max-w-sm w-full space-y-4 shadow-xl border border-gray-200">
+            <h4 className="text-sm font-bold text-gray-900">Tambah Brand Baru</h4>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Nama Brand <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newBrandName}
+                  onChange={(e) => setNewBrandName(e.target.value)}
+                  placeholder="Contoh: Seply, Mutif, Silmi, Aden"
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#541221]"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Pabrik / Supplier (Opsional)
+                </label>
+                <input
+                  type="text"
+                  value={newBrandSupplier}
+                  onChange={(e) => setNewBrandSupplier(e.target.value)}
+                  placeholder="Contoh: PT Seply Busana Mandiri"
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#541221]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Kota / Asal Pabrik (Opsional)
+                </label>
+                <input
+                  type="text"
+                  value={newBrandAddress}
+                  onChange={(e) => setNewBrandAddress(e.target.value)}
+                  placeholder="Contoh: Bandung, Solo, Jakarta"
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-1 focus:ring-[#541221]"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => setShowNewBrandModal(false)}
+                className="px-3 py-1.5 rounded border border-gray-300 text-xs font-medium text-gray-600 hover:bg-gray-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleQuickCreateBrand}
+                className="px-4 py-1.5 rounded bg-[#541221] text-white text-xs font-semibold hover:bg-[#68182a]"
+              >
+                Simpan Brand
               </button>
             </div>
           </div>

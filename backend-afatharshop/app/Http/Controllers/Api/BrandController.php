@@ -12,13 +12,24 @@ class BrandController extends Controller
     /**
      * Menampilkan daftar brand dari tabel `brands` di MySQL
      */
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $brands = Brand::with('supplier')
+        $query = Brand::with('supplier')
             ->withCount('products')
-            ->where('is_active', true)
-            ->orderBy('id')
-            ->get();
+            ->orderBy('id');
+
+        if ($request->has('active')) {
+            $query->where('is_active', $request->boolean('active'));
+        } else {
+            $query->where('is_active', true);
+        }
+
+        if ($request->filled('search')) {
+            $s = mb_strtolower(trim((string) $request->search));
+            $query->whereRaw('LOWER(name) LIKE ?', ["%{$s}%"]);
+        }
+
+        $brands = $query->get();
 
         $data = $brands->map(fn (Brand $b) => [
             'id'                => $b->id,

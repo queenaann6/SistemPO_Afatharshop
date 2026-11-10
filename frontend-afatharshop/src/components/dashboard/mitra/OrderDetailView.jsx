@@ -8,6 +8,13 @@ import InvoiceModal from '../../InvoiceModal';
 import { openInvoicePrintTab } from '../../../utils/printInvoice';
 import { dpPercentFor } from '../../../utils/terminScheme';
 import { getStoredAddresses, syncAddressBookFromApi, formatFullAddress, pushAddressBookItem } from './mitraAddressBook';
+import { formatDisplayDate } from '../../../services/adapters';
+
+const formatDateIndo = (val) => {
+  if (!val || val === '-' || val === '—') return '-';
+  const formatted = formatDisplayDate(val);
+  return formatted === '—' ? '-' : formatted;
+};
 import {
   PrinterIcon,
   CheckIcon,
@@ -118,7 +125,7 @@ export default function OrderDetailView({
   // Identitas pengirim pada label dropship (nama toko, telepon, catatan).
   // Hanya bisa disunting selama alamat belum terkunci oleh konfirmasi.
   const [senderIdentity, setSenderIdentity] = useState({
-    name: order?.senderName || currentUser?.name || 'Afathar Shop',
+    name: order?.senderName || currentUser?.name || 'Afatharshop',
     phone: order?.senderPhone || currentUser?.phone || '',
     notes: order?.senderNotes || ''
   });
@@ -327,10 +334,10 @@ export default function OrderDetailView({
   }, [items, extraAddresses]);
 
   // Penamaan termin untuk tampilan mitra: 2x => DP & Pelunasan + Ongkir,
-  // 3x => DP 1, DP 2 & Pelunasan + Ongkir (porsi % tetap dari admin).
+  // 3x => DP 1, DP 2 & Pelunasan (porsi % tetap dari admin). Ongkir dibayar terpisah di bagian Metode Pengiriman.
   const stageDisplayName = (stg, idx, total) => {
     const isLast = idx === total - 1 || String(stg?.type || '').includes('pelunasan');
-    if (isLast) return 'Pelunasan + Ongkir';
+    if (isLast) return 'Pelunasan';
     if (total <= 2) return 'DP';
     return `DP ${idx + 1}`;
   };
@@ -550,7 +557,7 @@ export default function OrderDetailView({
     primaryAddress?.name ||
     order?.mitraName ||
     currentUser?.name ||
-    'Mitra Afathar';
+    'Mitra Afatharshop';
 
   const billingPhone =
     primaryAddress?.phone ||
@@ -600,10 +607,13 @@ export default function OrderDetailView({
     return 'Alamat penagihan belum diatur';
   }, [primaryAddress, order?.address, order?.alamat, currentUser]);
   const dpDue =
-    order?.dpDueDate ||
-    (order?.closeDate && order.closeDate !== '-' ? order.closeDate : '27 Oktober 2026');
+    formatDateIndo(order?.dpDueDate) !== '-'
+      ? formatDateIndo(order?.dpDueDate)
+      : (order?.closeDate && order.closeDate !== '-' ? formatDateIndo(order.closeDate) : '27 Oktober 2026');
   const pelunasanDue =
-    order?.pelunasanDueDate || items[0]?.dueDate || '10 Januari 2027';
+    formatDateIndo(order?.pelunasanDueDate) !== '-'
+      ? formatDateIndo(order?.pelunasanDueDate)
+      : (items[0]?.dueDate && formatDateIndo(items[0]?.dueDate) !== '-' ? formatDateIndo(items[0]?.dueDate) : '10 Januari 2027');
 
   // Sinkronisasi status ACC DP dan Pelunasan untuk alur PO 6 Tahap
   const isDpAcc =
@@ -655,6 +665,28 @@ export default function OrderDetailView({
     order?.pelunasanStatus === 'lunas' ||
     order?.status === 'Selesai' ||
     localPayments?.pelunasan?.status === 'Lunas';
+
+  const isOngkirLunas =
+    order?.ongkirStatus === 'ACC' ||
+    order?.ongkirStatus === 'acc' ||
+    order?.ongkirStatus === 'Lunas' ||
+    order?.ongkirStatus === 'lunas' ||
+    order?.ongkirStatus === 'disetujui' ||
+    localPayments?.ongkir?.status === 'Lunas' ||
+    localPayments?.ongkir?.status === 'disetujui';
+
+  const hasOngkirProof = Boolean(
+    order?.ongkirProof ||
+    localPayments?.ongkir?.image ||
+    localPayments?.ongkir?.proof
+  );
+
+  const isOngkirWaiting =
+    !isOngkirLunas &&
+    (order?.ongkirStatus === 'Menunggu Verifikasi' ||
+     order?.ongkirStatus === 'menunggu_verifikasi' ||
+     localPayments?.ongkir?.status === 'Menunggu Validasi' ||
+     hasOngkirProof);
 
   const [isSubmittingAddress, setIsSubmittingAddress] = useState(false);
 
@@ -770,12 +802,14 @@ export default function OrderDetailView({
   };
 
   const dpPaid = isDpAcc ? (Number(localPayments?.dp?.nominal) || dpNominal) : 0;
-  const pelunasanPaid = isPelunasanAcc ? (Number(localPayments?.pelunasan?.nominal) || totalPelunasanWithOngkir) : 0;
-  const nominalTerbayar = dpPaid + pelunasanPaid;
+  const pelunasanPaid = isPelunasanAcc ? (Number(localPayments?.pelunasan?.nominal) || pelunasanNominal) : 0;
+  const ongkirPaid = isOngkirLunas ? (Number(localPayments?.ongkir?.nominal) || ongkirAmount) : 0;
+  const nominalTerbayar = dpPaid + pelunasanPaid + ongkirPaid;
   const sisaPembayaran = Math.max(0, (totalItemsPrice + ongkirAmount) - nominalTerbayar);
   const totalTagihanTahap =
     parseInt(proofAmount, 10) ||
-    ((proofTitle || '').toLowerCase().includes('pelunasan') ? totalPelunasanWithOngkir : dpNominal) ||
+    ((proofTitle || '').toLowerCase().includes('ongkir') ? ongkirAmount :
+     (proofTitle || '').toLowerCase().includes('pelunasan') ? pelunasanNominal : dpNominal) ||
     sisaPembayaran;
 
   // Copy Rekening to clipboard handler
@@ -789,12 +823,18 @@ export default function OrderDetailView({
 
   // Add or Edit Product Handler
   const handleSaveProduct = (newProduct) => {
+    const fallbackProductId = items[0]?.productId || order?.produkId || order?.productId || null;
+    const enriched = {
+      ...newProduct,
+      productId: newProduct.productId || fallbackProductId,
+      variantId: newProduct.variantId || items.find((i) => i.variant === newProduct.variant)?.variantId || null
+    };
     if (editingItem) {
-      persistItems(items.map((item) => (item.id === newProduct.id ? newProduct : item)));
-      setNotification(`Produk "${newProduct.variant}" berhasil diperbarui.`);
+      persistItems(items.map((item) => (item.id === enriched.id ? enriched : item)));
+      setNotification(`Produk "${enriched.variant}" berhasil diperbarui.`);
     } else {
-      persistItems([...items, newProduct]);
-      setNotification(`Produk "${newProduct.variant}" berhasil ditambahkan ke pesanan PO.`);
+      persistItems([...items, enriched]);
+      setNotification(`Produk "${enriched.variant}" berhasil ditambahkan ke pesanan PO.`);
     }
     setTimeout(() => setNotification(''), 3500);
   };
@@ -839,27 +879,30 @@ export default function OrderDetailView({
   const handlePayWithDepositSubmit = async () => {
     const amountToPay = parseInt(proofAmount || '0', 10) || totalTagihanTahap;
     if (userBalance < amountToPay) {
-      alert(`Saldo deposit Anda (${userBalanceFormatted}) tidak mencukupi untuk tagihan ini (Rp ${amountToPay.toLocaleString('id-ID')}).`);
+      alert(`Saldo deposit Anda (${userBalanceFormatted}) tidak mencukupi untuk tagihan ini (Rp ${Number(amountToPay || 0).toLocaleString('id-ID')}).`);
       return;
     }
     const orderNum = order?.orderNo || order?.invoice || orderInvoice || order?.id || 'PO-ORDER';
     const stageFromTitle = (t) => {
       const s = String(t || '').toLowerCase();
       if (s.includes('dp')) return 'dp';
+      if (s.includes('ongkir')) return 'ongkir';
       if (s.includes('cicilan')) return 'cicilan';
       return 'pelunasan';
     };
     const stageKey = proofStage?.type || stageFromTitle(proofTitle);
     const isDp = stageKey === 'dp';
     const isPelunasan = stageKey === 'pelunasan';
-    const instId =
-      proofStage?.id ??
-      order?.installmentIds?.[stageKey] ??
-      (isDp
-        ? order?.dpInstallmentId
-        : isPelunasan
-        ? order?.pelunasanInstallmentId
-        : undefined);
+    const isOngkir = stageKey === 'ongkir' || proofStage?.isOngkir;
+    const instId = isOngkir
+      ? undefined
+      : (proofStage?.id ??
+        order?.installmentIds?.[stageKey] ??
+        (isDp
+          ? order?.dpInstallmentId
+          : isPelunasan
+          ? order?.pelunasanInstallmentId
+          : undefined));
     const todayDate = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 
     // Potong saldo deposit di server terlebih dahulu agar saldo tidak double-spend
@@ -881,7 +924,7 @@ export default function OrderDetailView({
     if (onPayWithDeposit) {
       onPayWithDeposit({
         orderNo: orderNum,
-        billTitle: proofStage?.displayName || proofStage?.label || proofTitle || (isDp ? 'DP PO' : isPelunasan ? 'Pelunasan PO' : 'Cicilan PO'),
+        billTitle: proofStage?.displayName || proofStage?.label || proofTitle || (isOngkir ? 'Ongkos Kirim' : isDp ? 'DP PO' : isPelunasan ? 'Pelunasan PO' : 'Cicilan PO'),
         amount: amountToPay,
         billType: stageKey,
         installmentId: instId
@@ -891,7 +934,7 @@ export default function OrderDetailView({
     setLocalPayments((prev) => ({
       ...prev,
       [stageKey]: {
-        title: proofStage?.displayName || proofStage?.label || (isDp ? 'DP' : isPelunasan ? 'Pelunasan + Ongkir' : 'Cicilan'),
+        title: proofStage?.displayName || proofStage?.label || (isOngkir ? 'Ongkos Kirim' : isDp ? 'DP' : isPelunasan ? 'Pelunasan' : 'Cicilan'),
         nominal: amountToPay,
         bank: 'Saldo Deposit Mitra',
         status: 'Lunas',
@@ -901,12 +944,54 @@ export default function OrderDetailView({
     }));
 
     if (onUpdateOrder) {
-      if (isDp) {
-        onUpdateOrder({ dpStatus: 'ACC', dpBank: 'Saldo Deposit Mitra', dpNote: 'Lunas via Saldo Deposit' });
+      if (isOngkir) {
+        onUpdateOrder({
+          ongkirStatus: 'ACC',
+          ongkirBank: 'Deposit',
+          ongkirBankAccount: 'Saldo Deposit',
+          ongkirNote: 'Lunas via Saldo Deposit',
+          ongkirSubmittedNominal: amountToPay,
+          ongkirSubmittedAt: todayDate,
+          ongkirVerifiedAt: todayDate,
+          ongkirPaidAt: todayDate,
+          ongkirDate: todayDate,
+          isOngkirDeposit: true
+        });
+      } else if (isDp) {
+        onUpdateOrder({
+          dpStatus: 'ACC',
+          dpBank: 'Deposit',
+          dpBankAccount: 'Saldo Deposit',
+          dpNote: 'Lunas via Saldo Deposit',
+          dpSubmittedAt: todayDate,
+          dpVerifiedAt: todayDate,
+          dpPaidAt: todayDate,
+          dpDate: todayDate,
+          isDpDeposit: true
+        });
       } else if (isPelunasan) {
-        onUpdateOrder({ pelunasanStatus: 'ACC', pelunasanBank: 'Saldo Deposit Mitra', pelunasanNote: 'Lunas via Saldo Deposit' });
+        onUpdateOrder({
+          pelunasanStatus: 'ACC',
+          pelunasanBank: 'Deposit',
+          pelunasanBankAccount: 'Saldo Deposit',
+          pelunasanNote: 'Lunas via Saldo Deposit',
+          pelunasanSubmittedAt: todayDate,
+          pelunasanVerifiedAt: todayDate,
+          pelunasanPaidAt: todayDate,
+          pelunasanDate: todayDate,
+          isPelunasanDeposit: true
+        });
       } else {
-        onUpdateOrder({ stageProofPatch: { stageKey, status: 'Lunas', bank: 'Saldo Deposit Mitra' } });
+        onUpdateOrder({
+          stageProofPatch: {
+            stageKey,
+            status: 'Lunas',
+            bank: 'Deposit',
+            account: 'Saldo Deposit',
+            date: todayDate,
+            isDeposit: true
+          }
+        });
       }
     }
 
@@ -933,21 +1018,24 @@ export default function OrderDetailView({
     const stageFromTitle = (t) => {
       const s = String(t || '').toLowerCase();
       if (s.includes('dp')) return 'dp';
+      if (s.includes('ongkir')) return 'ongkir';
       if (s.includes('cicilan')) return 'cicilan';
       return 'pelunasan';
     };
     const stageKey = proofStage?.type || stageFromTitle(proofTitle);
     const isDp = stageKey === 'dp';
     const isPelunasan = stageKey === 'pelunasan';
-    const instId =
-      proofStage?.id ??
-      order?.installmentIds?.[stageKey] ??
-      order?.installmentIds?.[`stage-${proofStage?.sequence}`] ??
-      (isDp
-        ? order?.dpInstallmentId
-        : isPelunasan
-        ? order?.pelunasanInstallmentId
-        : undefined);
+    const isOngkir = stageKey === 'ongkir' || proofStage?.isOngkir;
+    const instId = isOngkir
+      ? undefined
+      : (proofStage?.id ??
+        order?.installmentIds?.[stageKey] ??
+        order?.installmentIds?.[`stage-${proofStage?.sequence}`] ??
+        (isDp
+          ? order?.dpInstallmentId
+          : isPelunasan
+          ? order?.pelunasanInstallmentId
+          : undefined));
 
     // Unggah bukti transfer ke API backend jika token aktif
     if (proofFileObj && tokenStore.get()) {
@@ -976,7 +1064,7 @@ export default function OrderDetailView({
         id: Date.now(),
         orderNo: order?.orderNo || order?.invoice || (order?.id ? String(order.id) : '-'),
         mitraName: currentUser?.name || buyerName || 'Mitra',
-        title: proofTitle || 'Pembayaran Termin PO',
+        title: proofTitle || (isOngkir ? 'Ongkos Kirim' : 'Pembayaran Termin PO'),
         nominal: parseInt(proofAmount || '0', 10),
         bank: proofBank,
         note: proofNote,
@@ -988,9 +1076,9 @@ export default function OrderDetailView({
       });
     }
 
-    const key = isDp ? 'dp' : isPelunasan ? 'pelunasan' : stageKey;
+    const key = isOngkir ? 'ongkir' : isDp ? 'dp' : isPelunasan ? 'pelunasan' : stageKey;
     const paymentEntry = {
-      title: proofStage?.displayName || proofStage?.label || proofTitle || (isDp ? 'DP' : isPelunasan ? 'Pelunasan + Ongkir' : 'Cicilan'),
+      title: proofStage?.displayName || proofStage?.label || proofTitle || (isOngkir ? 'Ongkos Kirim' : isDp ? 'DP' : isPelunasan ? 'Pelunasan' : 'Cicilan'),
       nominal: parseInt(proofAmount || '0', 10),
       bank: proofBank,
       note: proofNote,
@@ -1005,7 +1093,16 @@ export default function OrderDetailView({
     }));
 
     if (onUpdateOrder) {
-      if (isDp) {
+      if (isOngkir) {
+        onUpdateOrder({
+          ongkirProof: finalProofUrl,
+          ongkirStatus: 'Menunggu Verifikasi',
+          ongkirBank: proofBank,
+          ongkirNote: proofNote,
+          ongkirSubmittedNominal: parseInt(proofAmount || '0', 10),
+          ongkirSubmittedAt: new Date().toISOString().slice(0, 10)
+        });
+      } else if (isDp) {
         onUpdateOrder({
           dpProof: finalProofUrl,
           dpStatus: 'Menunggu Verifikasi',
@@ -1056,7 +1153,7 @@ export default function OrderDetailView({
         <div className="flex items-center gap-2 bg-stone-50 px-3.5 py-1.5 rounded-2xl border border-stone-200 text-xs">
           {order?.closeDate && order.closeDate !== '-' && (
             <span className="text-stone-600 font-semibold">
-              Batas PO: {order.closeDate}
+              Batas PO: {formatDateIndo(order.closeDate)}
             </span>
           )}
           <span className="text-stone-500 font-medium">Status Batch Pre-Order:</span>
@@ -1085,7 +1182,7 @@ export default function OrderDetailView({
         </div>
       )}
 
-      {/* Top 2-Column Order Header (Matches Screenshot 2 & 5) */}
+      {/* Top 2-Column Order Header */}
       <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-xs border border-stone-200/80 grid grid-cols-1 md:grid-cols-2 gap-8">
         
         {/* Left Col: Order Identifiers */}
@@ -1100,7 +1197,7 @@ export default function OrderDetailView({
           <div>
             <p className="text-[11px] text-stone-500 font-medium">Tanggal Pembelian</p>
             <p className="text-xs font-semibold text-stone-800 mt-0.5">
-              {order?.date || new Date().toLocaleDateString('id-ID')}
+              {formatDateIndo(order?.date) !== '-' ? formatDateIndo(order?.date) : new Date().toLocaleDateString('id-ID')}
             </p>
           </div>
 
@@ -1133,7 +1230,7 @@ export default function OrderDetailView({
           </div>
         </div>
 
-        {/* Right Col: Stepper & Payment Stages (Matches Screenshot 2 & 5) */}
+        {/* Right Col: Stepper & Payment Stages */}
         <div className="space-y-4 text-xs text-stone-700">
           
           {/* Status Step 1 */}
@@ -1194,13 +1291,23 @@ export default function OrderDetailView({
               </div>
             </div>
           ) : !isPelunasanAcc ? (
-            <div className="bg-emerald-50/80 border border-emerald-200/90 rounded-2xl p-3.5 text-xs text-emerald-950 flex items-start gap-3">
-              <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 mt-0.5">
+            <div className="bg-sky-50/80 border border-sky-200/90 rounded-2xl p-3.5 text-xs text-sky-950 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center shrink-0 mt-0.5">
                 <CreditCardIcon className="w-4 h-4" />
               </div>
               <div className="leading-snug space-y-0.5">
-                <span className="font-bold text-emerald-950">Pembayaran Pelunasan & Ongkir</span>
-                <p className="text-[11px] text-emerald-800">Ongkir Rp {ongkirAmount.toLocaleString('id-ID')} telah diinput. Total tagihan: <strong>Rp {totalPelunasanWithOngkir.toLocaleString('id-ID')}</strong>.</p>
+                <span className="font-bold text-sky-950">Menunggu Pembayaran Pelunasan</span>
+                <p className="text-[11px] text-sky-800">Silakan selesaikan pembayaran pelunasan produk sebesar <strong>Rp {Number(pelunasanNominal || 0).toLocaleString('id-ID')}</strong>.</p>
+              </div>
+            </div>
+          ) : !isOngkirLunas ? (
+            <div className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-3.5 text-xs text-amber-950 flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                <CreditCardIcon className="w-4 h-4" />
+              </div>
+              <div className="leading-snug space-y-0.5">
+                <span className="font-bold text-amber-950">Menunggu Pembayaran Ongkos Kirim</span>
+                <p className="text-[11px] text-amber-800">Pelunasan produk selesai. Silakan upload bukti pembayaran ongkos kirim sebesar <strong>Rp {Number(ongkirAmount || 0).toLocaleString('id-ID')}</strong>.</p>
               </div>
             </div>
           ) : order?.resi ? (
@@ -1231,29 +1338,96 @@ export default function OrderDetailView({
             <p className="font-bold text-stone-900">Rp 0</p>
           </div>
 
-          {/* Metode Pengiriman (Tanpa Jumlah Ongkir Tetap Sesuai Arahan) */}
+          {/* Metode Pengiriman */}
           <div className="space-y-1">
             <p className="text-[11px] text-stone-500 font-medium">Metode Pengiriman</p>
             <p className="text-[11px] text-sky-600 font-medium">
               Estimasi Total Berat Produk: <strong>{(totalQty * 0.3).toFixed(1)} Kg</strong>
             </p>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-stone-800 font-semibold">{selectedCourier || order?.courier || 'Pilih Ekspedisi'}</p>
+                <p className="text-stone-800 font-semibold">{selectedCourier || order?.courier || (order?.aturSebelumKirim ? 'Ditentukan Sebelum Pengiriman' : 'Pilih Ekspedisi')}</p>
                 <p className="text-[11px] text-amber-700 font-semibold italic">
                   {hasOngkir
-                    ? `Ongkos Kirim: Rp ${ongkirAmount.toLocaleString('id-ID')}`
-                    : '(Ongkos kirim di-update Admin setelah barang Ready & ditimbang)'}
+                    ? `Ongkos Kirim: Rp ${Number(ongkirAmount || 0).toLocaleString('id-ID')}`
+                    : (order?.aturSebelumKirim || !hasOngkir)
+                      ? 'Ongkos Kirim: Rp 0 (Ditagih Menyusul saat barang siap dikirim)'
+                      : '(Ongkos kirim di-update Admin setelah barang Ready & ditimbang)'}
                 </p>
               </div>
-              {isReady && !hasOngkir && (
-                <button
-                  onClick={() => setIsCourierModalOpen(true)}
-                  className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[11px] px-3.5 py-1.5 rounded-lg transition cursor-pointer"
-                >
-                  Pilih Jasa Pengiriman
-                </button>
-              )}
+
+              <div className="flex items-center gap-2 shrink-0">
+                {isReady && !selectedCourier && !order?.courier && (
+                  <button
+                    type="button"
+                    onClick={() => setIsCourierModalOpen(true)}
+                    className="bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold text-[10px] px-3 py-1.5 rounded-lg transition cursor-pointer"
+                  >
+                    Pilih Ekspedisi
+                  </button>
+                )}
+
+                {!hasOngkir ? (
+                  <span
+                    className="bg-stone-100 border border-stone-200 text-stone-400 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 flex items-center gap-1 cursor-not-allowed shadow-2xs select-none"
+                    title="Pembayaran ongkos kirim terkunci sampai Admin Finance menginput nominal ongkir resmi setelah paket selesai ditimbang di gudang."
+                  >
+                    <span>🔒 Upload Bukti TF</span>
+                  </span>
+                ) : isOngkirLunas ? (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                      <CheckIcon className="w-3 h-3" /> Lunas / Terverifikasi
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewProof(localPayments.ongkir || {
+                        title: 'Ongkos Kirim',
+                        nominal: ongkirAmount,
+                        bank: order?.ongkirBank || 'BCA (PT Afathar Niaga Indonesia)',
+                        status: 'Lunas',
+                        image: order?.ongkirProof || '',
+                        date: order?.ongkirSubmittedAt || order?.date || '',
+                        note: order?.ongkirNote || ''
+                      })}
+                      className="border border-stone-300 hover:bg-stone-100 text-stone-700 font-bold text-[10px] px-2.5 py-1 rounded-md transition cursor-pointer flex items-center gap-1"
+                    >
+                      <EyeIcon className="w-3 h-3" />
+                      <span>Lihat Bukti</span>
+                    </button>
+                  </div>
+                ) : isOngkirWaiting ? (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                      Menunggu ACC Admin
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewProof(localPayments.ongkir || {
+                        title: 'Ongkos Kirim',
+                        nominal: ongkirAmount,
+                        bank: order?.ongkirBank || 'BCA (PT Afathar Niaga Indonesia)',
+                        status: 'Menunggu Validasi',
+                        image: order?.ongkirProof || '',
+                        date: order?.ongkirSubmittedAt || order?.date || '',
+                        note: order?.ongkirNote || ''
+                      })}
+                      className="border border-stone-300 hover:bg-stone-100 text-stone-700 font-bold text-[10px] px-2.5 py-1 rounded-md transition cursor-pointer flex items-center gap-1"
+                    >
+                      <EyeIcon className="w-3 h-3" />
+                      <span>Lihat Bukti</span>
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenProof(`Ongkos Kirim ${summaryTitle}`, ongkirAmount, { type: 'ongkir', isOngkir: true })}
+                    className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3.5 py-1.5 rounded-lg transition shrink-0 cursor-pointer shadow-xs flex items-center gap-1"
+                  >
+                    <span>Upload Bukti TF</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1271,7 +1445,7 @@ export default function OrderDetailView({
               const stageName = stageDisplayName(stg, sIdx, order.paymentStages.length);
               const stageTitle = `${stageName} ${summaryTitle}`;
               const nominal = isLast
-                ? (Number(stg.amount || pelunasanNominal) + ongkirAmount)
+                ? Number(stg.amount || pelunasanNominal)
                 : Number(stg.amount || Math.round(totalItemsPrice * (stg.pct || 30) / 100));
 
               const prevStage = sIdx > 0 ? order.paymentStages[sIdx - 1] : null;
@@ -1293,21 +1467,10 @@ export default function OrderDetailView({
                       ) : null}
                     </div>
                     <p className="text-[#2563EB] font-bold text-xs mt-0.5">
-                      Rp {nominal.toLocaleString('id-ID')} ({stg.pct}%)
-                      {isLast && (
-                        hasOngkir ? (
-                          <span className="text-[10px] font-normal text-stone-500 ml-1">
-                            (Produk: Rp {Number(stg.amount || pelunasanNominal).toLocaleString('id-ID')} + Ongkir: Rp {ongkirAmount.toLocaleString('id-ID')})
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-normal text-amber-700 ml-1">
-                            (Belum termasuk ongkir)
-                          </span>
-                        )
-                      )}
+                      Rp {Number(nominal || 0).toLocaleString('id-ID')} ({stg.pct}%)
                     </p>
                     <p className="text-[10px] text-stone-500 mt-0.5">
-                      {stg.date ? `Bayar sebelum ${stg.date}` : (isFirst ? `Bayar sebelum ${dpDue}` : `Bayar sebelum ${pelunasanDue}`)}
+                      Bayar sebelum {formatDateIndo(stg.date || (isFirst ? dpDue : pelunasanDue))}
                     </p>
                   </div>
 
@@ -1342,12 +1505,12 @@ export default function OrderDetailView({
                     >
                       <span>Menunggu Tahap {sIdx}</span>
                     </span>
-                  ) : isLast && (!isReady || !hasOngkir) ? (
+                  ) : isLast && !isReady ? (
                     <span
                       className="bg-stone-100 border border-stone-200 text-stone-400 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
-                      title="Pelunasan dibuka setelah barang Ready dan ongkir diinput Admin"
+                      title="Pelunasan dibuka setelah barang selesai diproduksi"
                     >
-                      <span>Menunggu Ready &amp; Ongkir</span>
+                      <span>Menunggu Ready</span>
                     </span>
                   ) : (
                     <button
@@ -1378,9 +1541,9 @@ export default function OrderDetailView({
                     ) : null}
                   </div>
                   <p className="text-[#2563EB] font-bold text-xs mt-0.5">
-                    Rp {dpNominal.toLocaleString('id-ID')} ({dpPct}%)
+                    Rp {Number(dpNominal || 0).toLocaleString('id-ID')} ({dpPct}%)
                   </p>
-                  <p className="text-[10px] text-stone-500 mt-0.5">Bayar sebelum {dpDue}</p>
+                  <p className="text-[10px] text-stone-500 mt-0.5">Bayar sebelum {formatDateIndo(dpDue)}</p>
                 </div>
                 {localPayments.dp || isDpAcc || order?.dpProof ? (
                   <button
@@ -1425,7 +1588,9 @@ export default function OrderDetailView({
               <div className="pt-2 border-t border-stone-100 flex items-start justify-between gap-2">
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="font-bold text-stone-800">Pelunasan + Ongkir {summaryTitle}</p>
+                    <p className="font-bold text-stone-800">
+                      Pelunasan {summaryTitle}
+                    </p>
                     {localPayments.pelunasan?.status === 'Lunas' || isPelunasanAcc ? (
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
                         <CheckIcon className="w-3 h-3" /> Lunas / Terverifikasi
@@ -1437,24 +1602,15 @@ export default function OrderDetailView({
                     ) : null}
                   </div>
                   <p className="text-[#2563EB] font-bold text-xs mt-0.5">
-                    Rp {totalPelunasanWithOngkir.toLocaleString('id-ID')}
-                    {hasOngkir ? (
-                      <span className="text-[10px] font-normal text-stone-500 ml-1">
-                        (Produk: Rp {pelunasanNominal.toLocaleString('id-ID')} + Ongkir: Rp {ongkirAmount.toLocaleString('id-ID')})
-                      </span>
-                    ) : (
-                      <span className="text-[10px] font-normal text-amber-700 ml-1">
-                        (Belum termasuk ongkir)
-                      </span>
-                    )}
+                    Rp {Number(pelunasanNominal || 0).toLocaleString('id-ID')}
                   </p>
-                  <p className="text-[10px] text-stone-500 mt-0.5">Bayar sebelum {pelunasanDue}</p>
+                  <p className="text-[10px] text-stone-500 mt-0.5">Bayar sebelum {formatDateIndo(pelunasanDue)}</p>
                 </div>
                 {localPayments.pelunasan || isPelunasanAcc || order?.pelunasanProof ? (
                   <button
                     onClick={() => setPreviewProof(localPayments.pelunasan || {
-                      title: 'Pelunasan + Ongkir',
-                      nominal: totalPelunasanWithOngkir,
+                      title: 'Pelunasan',
+                      nominal: pelunasanNominal,
                       bank: order?.pelunasanBank || 'BCA (PT Afathar Niaga Indonesia)',
                       status: isPelunasanAcc ? 'Lunas' : 'Menunggu Validasi',
                       image: order?.pelunasanProof || '',
@@ -1474,33 +1630,12 @@ export default function OrderDetailView({
                   >
                     <span>⏳ Menunggu DP</span>
                   </span>
-                ) : !isReady ? (
-                  <span
-                    className="bg-purple-50 border border-purple-200 text-purple-700 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
-                    title="Menunggu barang selesai diproduksi dan ditandai Ready oleh Admin"
-                  >
-                    <span>⏳ Dalam Produksi</span>
-                  </span>
-                ) : !isAddressConfirmed ? (
-                  <span
-                    className="bg-cyan-50 border border-cyan-200 text-cyan-800 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
-                    title="Konfirmasi alamat pengiriman terlebih dahulu"
-                  >
-                    <span>⏳ Isi Alamat Dulu</span>
-                  </span>
-                ) : !hasOngkir ? (
-                  <span
-                    className="bg-amber-50 border border-amber-200 text-amber-800 font-bold text-[10px] px-3 py-1.5 rounded-lg shrink-0 cursor-not-allowed shadow-2xs"
-                    title="Menunggu Admin Finance menimbang paket dan menginput ongkos kirim"
-                  >
-                    <span>⏳ Menunggu Ongkir</span>
-                  </span>
                 ) : (
                   <button
                     onClick={() =>
                       handleOpenProof(
-                        `Pelunasan + Ongkir (${order?.courier || selectedCourier || 'Ekspedisi'})`,
-                        totalPelunasanWithOngkir
+                        `Pelunasan ${summaryTitle}`,
+                        pelunasanNominal
                       )
                     }
                     className="bg-[#6B1416] hover:bg-[#520C0E] text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition shrink-0 cursor-pointer"
@@ -1522,7 +1657,7 @@ export default function OrderDetailView({
 
       </div>
 
-      {/* Product List Card (Matches Screenshot 2 & 5) */}
+      {/* Product List Card */}
       <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-xs border border-stone-200/80 space-y-6">
         
         {/* Store Title Bar */}
@@ -1531,7 +1666,7 @@ export default function OrderDetailView({
             <div className="w-8 h-8 rounded-full overflow-hidden border border-[#6B1416]/20 bg-stone-100 shrink-0 shadow-2xs">
               <img
                 src="/logo.jpg"
-                alt="AfatharShop Official"
+                alt="Afatharshop Official"
                 className="w-full h-full object-cover"
                 onError={(e) => {
                   e.target.onerror = null;
@@ -1541,7 +1676,7 @@ export default function OrderDetailView({
             </div>
             <div className="flex items-center gap-2">
               <h4 className="font-bold text-sm sm:text-base text-stone-900 tracking-tight">
-                afatharshop
+                Afatharshop
               </h4>
               <span className="text-[10px] font-semibold text-[#6B1416] bg-rose-50 border border-rose-200/80 px-2 py-0.5 rounded-full">
                 Official Store
@@ -1575,11 +1710,11 @@ export default function OrderDetailView({
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {items.map((item) => {
+              {items.map((item, itemIdx) => {
                 const allocated = (item.splits || []).reduce((s, sp) => s + (Number(sp.qty) || 0), 0);
                 const addon = Number(item.addon) || 0;
                 return (
-                <tr key={item.id} className="hover:bg-stone-50/50 transition">
+                <tr key={item.id || item.variantId || item.title || itemIdx} className="hover:bg-stone-50/50 transition">
                   {/* Product Info */}
                   <td className="py-4 px-3">
                     <div className="flex gap-3">
@@ -1593,15 +1728,15 @@ export default function OrderDetailView({
                         <p className="text-[11px] text-stone-600 font-medium">Varian: {item.variant}</p>
                         <p className="text-[10px] text-stone-500 flex items-center gap-1">
                           <ClockIcon className="w-3 h-3 text-stone-400 shrink-0" />
-                          <span>Jatuh tempo: {item.dueDate || order?.pelunasanDueDate || order?.readyEstimate || order?.closeDate || 'Sesuai jadwal PO'}</span>
+                          <span>Jatuh tempo: {formatDateIndo(item.dueDate || order?.pelunasanDueDate || order?.readyEstimate || order?.closeDate) !== '-' ? formatDateIndo(item.dueDate || order?.pelunasanDueDate || order?.readyEstimate || order?.closeDate) : 'Sesuai jadwal PO'}</span>
                         </p>
                         {addon > 0 && (
                           <p className="text-[10px] font-semibold text-amber-700">
-                            + Tambahan Rp {addon.toLocaleString('id-ID')}/pcs (di luar diskon)
+                            + Tambahan Rp {Number(addon || 0).toLocaleString('id-ID')}/pcs (di luar diskon)
                           </p>
                         )}
                         <p className="text-xs font-bold text-[#6B1416]">
-                          Sub total: Rp {item.subtotal.toLocaleString('id-ID')}
+                          Sub total: Rp {Number(item.subtotal || ((Number(item.price) || 0) * (Number(item.qty) || 1))).toLocaleString('id-ID')}
                         </p>
                       </div>
                     </div>
@@ -1633,10 +1768,10 @@ export default function OrderDetailView({
 
                   {/* Price */}
                   <td className="py-4 px-3 text-right">
-                    <p className="font-bold text-stone-900 text-xs sm:text-sm">Rp {item.price.toLocaleString('id-ID')}</p>
+                    <p className="font-bold text-stone-900 text-xs sm:text-sm">Rp {Number(item.price || 0).toLocaleString('id-ID')}</p>
                     <p className="text-[10px] text-stone-400 font-medium">
                       {addon > 0
-                        ? `Mitra: Rp ${item.price.toLocaleString('id-ID')} + Rp ${addon.toLocaleString('id-ID')}`
+                        ? `Mitra: Rp ${Number(item.price || 0).toLocaleString('id-ID')} + Rp ${Number(addon || 0).toLocaleString('id-ID')}`
                         : 'Normal'}
                     </p>
                   </td>
@@ -1795,7 +1930,7 @@ export default function OrderDetailView({
                 </div>
                 <p className="text-stone-600 text-xs mt-0.5 leading-relaxed">
                   {hasOngkir
-                    ? `Biaya pengiriman Rp ${ongkirAmount.toLocaleString('id-ID')} (${order?.courier || selectedCourier || 'Ekspedisi'}) telah ditambahkan ke rincian tagihan.`
+                    ? `Biaya pengiriman Rp ${Number(ongkirAmount || 0).toLocaleString('id-ID')} (${order?.courier || selectedCourier || 'Ekspedisi'}) telah ditambahkan ke rincian tagihan.`
                     : 'Data alamat telah diterima Admin Finance untuk proses penimbangan paket dan kalkulasi ongkir.'}
                 </p>
               </div>
@@ -2058,174 +2193,128 @@ export default function OrderDetailView({
 
       </div>
 
-      {/* Bottom Section: Informasi Pre-Order & Rincian Pembayaran */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
-        
-        {/* Left: Alamat Penagihan */}
-        <div className="md:col-span-6 bg-white rounded-3xl p-6 sm:p-7 shadow-xs border border-stone-200/80 space-y-4 text-xs text-stone-700">
-          <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-            <div className="flex items-center gap-2">
-              <MapPinIcon className="w-4 h-4 text-[#6B1416]" />
-              <h4 className="font-bold text-stone-900 text-xs sm:text-sm">
-                Alamat Penagihan
-              </h4>
-            </div>
-            {canManageAddress && (
-              <button
-                type="button"
-                onClick={() => {
-                  setPickingAddressFor('primary');
-                  setIsAddressPickerOpen(true);
-                }}
-                className="text-[10px] font-bold text-[#6B1416] hover:text-[#520C0E] px-2.5 py-1 rounded-md border border-stone-200 bg-white hover:bg-stone-50 transition cursor-pointer shadow-2xs flex items-center gap-1"
-              >
-                <PencilIcon className="w-3 h-3" />
-                <span>Ubah Alamat</span>
-              </button>
-            )}
-          </div>
+      {/* Bottom Section: Alamat Penagihan & Rincian Pembayaran */}
+      <div className="bg-white rounded-xl border border-stone-200 shadow-xs overflow-hidden">
+        <div className="grid grid-cols-1 md:grid-cols-2">
+          
+          {/* Left: Alamat Penagihan (Nama, Kontak, Alamat - Bersih langsung pada background putih) */}
+          <div className="p-5 sm:p-6 space-y-4 flex flex-col justify-between">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-sm sm:text-base text-stone-900">
+                  Alamat Penagihan
+                </h4>
+                <span className="text-[10px] text-stone-400 font-medium">
+                  Sinkron Alamat Utama
+                </span>
+              </div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200/70 space-y-2 flex flex-col justify-between">
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Ditagihkan Kepada</p>
-                  {canManageAddress && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPickingAddressFor('primary');
-                        setIsAddressPickerOpen(true);
-                      }}
-                      className="text-[10px] font-bold text-[#6B1416] hover:text-[#520C0E] px-2 py-0.5 rounded-md border border-stone-200 bg-white hover:bg-stone-50 transition cursor-pointer"
-                    >
-                      Ubah
-                    </button>
-                  )}
-                </div>
-
-                <p className="font-bold text-stone-800 text-xs flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+              <div className="space-y-1.5 text-xs text-stone-600 leading-relaxed">
+                <p className="font-bold text-stone-900 text-sm">
                   {billingName}
                 </p>
                 {billingPhone && (
-                  <p className="text-[11px] text-stone-600 font-medium">Telp: {billingPhone}</p>
+                  <p className="text-stone-700">
+                    {billingPhone.startsWith('0')
+                      ? `(+62) ${billingPhone.slice(1)}`
+                      : billingPhone.startsWith('+')
+                        ? billingPhone
+                        : `(+62) ${billingPhone}`}
+                  </p>
                 )}
                 {billingEmail && (
-                  <p className="text-[11px] text-stone-500 font-mono">{billingEmail}</p>
+                  <p className="text-stone-500 font-mono text-[11px]">
+                    {billingEmail}
+                  </p>
                 )}
                 {billingLevel && (
-                  <span className="inline-block px-2 py-0.5 rounded bg-stone-200/70 text-stone-700 text-[9px] font-semibold">
-                    {billingLevel}
-                  </span>
+                  <div className="pt-0.5">
+                    <span className="inline-block px-2 py-0.5 rounded bg-stone-100 border border-stone-200 text-stone-700 text-[9.5px] font-semibold">
+                      {billingLevel}
+                    </span>
+                  </div>
                 )}
-              </div>
-
-              <p className="text-[10px] text-stone-500 pt-1">
-                {canManageAddress
-                  ? 'Identitas resmi mitra yang ditagihkan pada faktur pemesanan ini.'
-                  : 'Identitas penagihan terkunci bersama pesanan.'}
-              </p>
-            </div>
-
-            <div className="bg-stone-50 rounded-2xl p-3.5 border border-stone-200/70 space-y-2 flex flex-col justify-between">
-              <div className="space-y-1.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-400">Alamat Penagihan</p>
-                <p className="font-semibold text-stone-800 text-xs leading-relaxed">
+                <p className="text-stone-700 pt-1 leading-relaxed">
                   {billingFullAddress}
                 </p>
               </div>
-
-              <p className="text-[10px] text-stone-500 pt-1">
-                Alamat domisili / kantor penagihan mitra yang terdaftar.
-              </p>
             </div>
+
+            <p className="text-[10.5px] text-stone-400 italic pt-2 border-t border-stone-100">
+              * Alamat penagihan otomatis tersinkronisasi dari Alamat Utama Akun Mitra.
+            </p>
           </div>
 
-          {hasOngkir ? (
-            <div className="bg-emerald-50/70 rounded-2xl p-3.5 border border-emerald-200/70 text-[11px] text-emerald-900 flex items-start gap-2.5">
-              <CheckIcon className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              <div className="leading-relaxed">
-                <strong className="font-semibold text-emerald-950">Ongkir Sudah Diinput:</strong> Biaya kirim Rp {ongkirAmount.toLocaleString('id-ID')} telah ditetapkan Admin Finance dan ditagihkan bersama termin Pelunasan.
-              </div>
-            </div>
-          ) : (
-            <div className="bg-amber-50/70 rounded-2xl p-3.5 border border-amber-200/70 text-[11px] text-amber-900 flex items-start gap-2.5">
-              <InfoIcon className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div className="leading-relaxed">
-                <strong className="font-semibold text-amber-950">Catatan Ongkir:</strong> Biaya ongkos kirim belum termasuk pada total tagihan di samping. Admin Finance akan menginput nominal ongkir resmi setelah paket selesai produksi, ditimbang di gudang, dan siap dikirim.
-              </div>
-            </div>
-          )}
-        </div>
+          {/* Right: Rincian Pembayaran (Menyatu dalam card dengan border-l pemisah) */}
+          <div className="p-5 sm:p-6 border-t md:border-t-0 md:border-l border-stone-200 space-y-4 flex flex-col justify-between">
+            <div className="space-y-3">
+              <h4 className="font-bold text-sm sm:text-base text-stone-900">
+                Rincian Pembayaran
+              </h4>
 
-        {/* Right: Rincian Pembayaran */}
-        <div className="md:col-span-6 bg-white rounded-3xl p-6 sm:p-7 shadow-xs border border-stone-200/80 space-y-3.5 text-xs text-stone-700">
-          <h4 className="font-bold text-xs sm:text-sm text-stone-900 pb-2.5 border-b border-stone-100">
-            Rincian Pembayaran
-          </h4>
-          
-          <div className="space-y-2.5">
-            <div className="flex justify-between items-center">
-              <span className="text-stone-500">Total harga produk ({totalQty} pcs)</span>
-              <span className="font-semibold text-stone-900">Rp {totalItemsPrice.toLocaleString('id-ID')}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-stone-500">Biaya Platform</span>
-              <span className="font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full text-[10px]">Gratis (Rp 0)</span>
-            </div>
-            <div className="flex justify-between items-start gap-2">
-              <span className="text-stone-500 whitespace-nowrap">Ongkos kirim</span>
-              {hasOngkir ? (
-                <span className="font-semibold text-emerald-700">Rp {ongkirAmount.toLocaleString('id-ID')}</span>
-              ) : (
-                <span className="font-semibold text-amber-700 text-right text-[11px]">
-                  Dihitung setelah penimbangan koli di gudang
-                </span>
-              )}
-            </div>
+              <div className="space-y-2.5 text-xs text-stone-600">
+                <div className="flex justify-between items-center">
+                  <span>Total harga</span>
+                  <span className="font-semibold text-stone-900">
+                    Rp {Number(totalItemsPrice || 0).toLocaleString('id-ID')}
+                  </span>
+                </div>
 
-            <div className="pt-2.5 border-t border-dashed border-stone-200 space-y-1.5 text-[11px]">
-              {order?.paymentStages && order.paymentStages.length >= 2 ? (
-                order.paymentStages.map((stg, sIdx) => {
-                  const sNominal = Number(stg.amount || Math.round(totalItemsPrice * (stg.pct || 0) / 100));
-                  return (
-                    <div key={sIdx} className="flex justify-between text-stone-600">
-                      <span>Termin {stageDisplayName(stg, sIdx, order.paymentStages.length)} ({stg.pct}%)</span>
-                      <span className="font-semibold text-stone-800">Rp {sNominal.toLocaleString('id-ID')}</span>
+                <div className="flex justify-between items-center">
+                  <span>Biaya Platform</span>
+                  <span className="font-semibold text-stone-900">Rp 0</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span>Ongkos kirim</span>
+                  <span className="font-semibold text-stone-900">
+                    {hasOngkir ? `Rp ${Number(ongkirAmount || 0).toLocaleString('id-ID')}` : 'Rp 0'}
+                  </span>
+                </div>
+
+                {order?.paymentStages && order.paymentStages.length >= 2 ? (
+                  <div className="pt-2 border-t border-dashed border-stone-200 space-y-1.5 text-[11px]">
+                    {order.paymentStages.map((stg, sIdx) => {
+                      const sNominal = Number(stg.amount || Math.round(totalItemsPrice * (stg.pct || 0) / 100));
+                      return (
+                        <div key={sIdx} className="flex justify-between text-stone-500">
+                          <span>Termin {stageDisplayName(stg, sIdx, order.paymentStages.length)} ({stg.pct}%)</span>
+                          <span className="font-medium text-stone-800">Rp {Number(sNominal || 0).toLocaleString('id-ID')}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="pt-2 border-t border-dashed border-stone-200 space-y-1.5 text-[11px]">
+                    <div className="flex justify-between text-stone-500">
+                      <span>Termin DP ({dpPct}%)</span>
+                      <span className="font-medium text-stone-800">Rp {Number(dpNominal || 0).toLocaleString('id-ID')}</span>
                     </div>
-                  );
-                })
-              ) : (
-                <>
-                  <div className="flex justify-between text-stone-600">
-                    <span>Termin DP ({dpPct}%)</span>
-                    <span className="font-semibold text-stone-800">Rp {dpNominal.toLocaleString('id-ID')}</span>
+                    <div className="flex justify-between text-stone-500">
+                      <span>Termin Pelunasan ({100 - dpPct}%)</span>
+                      <span className="font-medium text-stone-800">Rp {Number(pelunasanNominal || 0).toLocaleString('id-ID')}</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between text-stone-600">
-                    <span>Termin Pelunasan + Ongkir ({pelunasanPct}%)</span>
-                    <span className="font-semibold text-stone-800">Rp {pelunasanNominal.toLocaleString('id-ID')}</span>
-                  </div>
-                </>
-              )}
+                )}
+              </div>
             </div>
 
             <div className="pt-3 border-t border-stone-200 flex justify-between items-center">
               <div>
-                <p className="font-bold text-stone-900 text-xs sm:text-sm">Total Tagihan Produk</p>
-                <p className="text-[10px] text-stone-400">
-                  {hasOngkir
-                    ? `Ditagihkan bersama ongkir Rp ${ongkirAmount.toLocaleString('id-ID')} pada pelunasan`
-                    : 'Belum termasuk ongkir'}
-                </p>
+                <p className="font-bold text-stone-900 text-xs sm:text-sm">Total Pembayaran</p>
+                {!hasOngkir && (
+                  <p className="text-[10px] text-stone-400">
+                    (Ongkir dihitung sebelum pengiriman)
+                  </p>
+                )}
               </div>
-              <span className="font-extrabold text-base sm:text-lg text-[#6B1416]">
-                Rp {totalItemsPrice.toLocaleString('id-ID')}
+              <span className="font-bold text-sm sm:text-base text-stone-900">
+                Rp {Number((totalItemsPrice || 0) + (hasOngkir ? (Number(ongkirAmount) || 0) : 0)).toLocaleString('id-ID')}
               </span>
             </div>
           </div>
-        </div>
 
+        </div>
       </div>
 
       {/* MODAL 1: Tambah / Edit Produk (Image 4) */}
@@ -2580,7 +2669,7 @@ export default function OrderDetailView({
                   <p className="text-xs text-stone-600 max-w-xs mx-auto leading-relaxed">
                     {payMethod === 'deposit'
                       ? 'Tagihan telah dipotong dari saldo deposit dan pesanan otomatis berstatus Lunas.'
-                      : 'Data bukti transfer telah dikirim ke Admin Finance AfatharShop untuk verifikasi mutasi rekening.'}
+                      : 'Data bukti transfer telah dikirim ke Admin Finance untuk verifikasi mutasi rekening.'}
                   </p>
                   <div className="pt-2">
                     <button
@@ -2605,7 +2694,7 @@ export default function OrderDetailView({
                           Tagihan Tahap Ini
                         </span>
                         <span className="text-lg font-extrabold text-[#6B1416]">
-                          Rp {totalTagihanTahap.toLocaleString('id-ID')}
+                          Rp {Number(totalTagihanTahap || 0).toLocaleString('id-ID')}
                         </span>
                       </div>
                       <div className="text-right">
@@ -2622,19 +2711,19 @@ export default function OrderDetailView({
                       <div className="flex justify-between">
                         <span>Total Pesanan:</span>
                         <span className="font-semibold text-stone-800">
-                          Rp {totalItemsPrice.toLocaleString('id-ID')}
+                          Rp {Number(totalItemsPrice || 0).toLocaleString('id-ID')}
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span>Nominal Terbayar:</span>
                         <span className="font-semibold text-emerald-700">
-                          Rp {nominalTerbayar.toLocaleString('id-ID')}
+                          Rp {Number(nominalTerbayar || 0).toLocaleString('id-ID')}
                         </span>
                       </div>
                       <div className="flex justify-between">
                         <span>Sisa Tagihan PO:</span>
                         <span className="font-semibold text-stone-800">
-                          Rp {sisaPembayaran.toLocaleString('id-ID')}
+                          Rp {Number(sisaPembayaran || 0).toLocaleString('id-ID')}
                         </span>
                       </div>
                       <div className="flex justify-between">
@@ -2735,7 +2824,7 @@ export default function OrderDetailView({
                         <div className="flex justify-between items-center text-stone-600">
                           <span>Tagihan yang dibayar:</span>
                           <span className="font-bold text-[#6B1416]">
-                            Rp {totalTagihanTahap.toLocaleString('id-ID')}
+                            Rp {Number(totalTagihanTahap || 0).toLocaleString('id-ID')}
                           </span>
                         </div>
                         <div className="flex justify-between items-center text-stone-600">
@@ -2751,7 +2840,7 @@ export default function OrderDetailView({
                               userBalance >= totalTagihanTahap ? 'text-stone-900' : 'text-rose-600'
                             }`}
                           >
-                            Rp {Math.max(0, userBalance - totalTagihanTahap).toLocaleString('id-ID')}
+                            Rp {Number(Math.max(0, userBalance - totalTagihanTahap) || 0).toLocaleString('id-ID')}
                           </span>
                         </div>
                       </div>
@@ -2763,7 +2852,7 @@ export default function OrderDetailView({
                             <div>
                               <span className="font-bold block">Saldo Deposit Tidak Mencukupi</span>
                               <span className="text-[11px] text-rose-700">
-                                Kurang Rp {(totalTagihanTahap - userBalance).toLocaleString('id-ID')} untuk menyelesaikan tagihan ini. Anda dapat melakukan Top Up deposit atau membayar lewat transfer bank manual.
+                                Kurang Rp {Number(totalTagihanTahap - userBalance || 0).toLocaleString('id-ID')} untuk menyelesaikan tagihan ini. Anda dapat melakukan Top Up deposit atau membayar lewat transfer bank manual.
                               </span>
                             </div>
                           </div>
@@ -2815,7 +2904,7 @@ export default function OrderDetailView({
                             onClick={handlePayWithDepositSubmit}
                             className="px-5 py-2 text-xs font-bold text-white bg-[#6B1416] hover:bg-[#520C0E] rounded-lg transition cursor-pointer shadow-2xs flex items-center gap-1.5"
                           >
-                            <span>Bayar Sekarang (Rp {totalTagihanTahap.toLocaleString('id-ID')})</span>
+                            <span>Bayar Sekarang (Rp {Number(totalTagihanTahap || 0).toLocaleString('id-ID')})</span>
                           </button>
                         </div>
                       )}
@@ -2828,10 +2917,10 @@ export default function OrderDetailView({
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5">
                             <CreditCardIcon className="w-3.5 h-3.5 text-stone-600" />
-                            <span className="font-bold text-stone-800 text-xs">Rekening Resmi AfatharShop</span>
+                            <span className="font-bold text-stone-800 text-xs">Rekening Resmi Afatharshop</span>
                           </div>
                           <span className="text-[10px] text-stone-500 font-medium bg-white px-2 py-0.5 rounded border border-stone-200">
-                            a.n {bankAccountsList[0]?.holder || 'CV AFATHAR SHOP DISTRIBUTOR'}
+                            a.n {bankAccountsList[0]?.holder || 'CV AFATHARSHOP DISTRIBUTOR'}
                           </span>
                         </div>
 

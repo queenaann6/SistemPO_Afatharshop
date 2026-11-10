@@ -11,25 +11,55 @@
 
 import { DEFAULT_DP_PCT, defaultStagePcts, stageRowsOf } from './terminScheme';
 
-export function openInvoicePrintTab(order, bankAccounts = []) {
-  if (!order) return;
+export function buildInvoiceHTML(order, bankAccounts = [], options = {}) {
+  if (!order) return '';
 
+  const { insideModal = false } = options;
   const clean = (v) => String(v == null ? '' : v).trim();
   const esc = (v) =>
     clean(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const withoutSuffix = (s) => clean(s).replace(/\s*\(.*\)\s*$/, '');
   const formatOrderDate = (raw) => {
     const val = clean(raw);
+    if (!val || val === '-' || val === '—') return '';
+    if (/^\d{2}-\d{2}-\d{4}$/.test(val)) {
+      return val;
+    }
+    // If ISO datetime with time component (contains 'T' or ':')
+    if (val.includes('T') || (val.includes(':') && /\d{4}/.test(val))) {
+      const parsed = new Date(val);
+      if (!Number.isNaN(parsed.getTime())) {
+        try {
+          const parts = new Intl.DateTimeFormat('id-ID', {
+            timeZone: 'Asia/Jakarta',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric'
+          }).formatToParts(parsed);
+          const d = parts.find((p) => p.type === 'day')?.value || '';
+          const m = parts.find((p) => p.type === 'month')?.value || '';
+          const y = parts.find((p) => p.type === 'year')?.value || '';
+          if (d && m && y) return `${d}-${m}-${y}`;
+        } catch {
+          const d = String(parsed.getDate()).padStart(2, '0');
+          const m = String(parsed.getMonth() + 1).padStart(2, '0');
+          const y = parsed.getFullYear();
+          return `${d}-${m}-${y}`;
+        }
+      }
+    }
     if (/^\d{4}-\d{2}-\d{2}/.test(val)) {
       const [y, m, d] = val.slice(0, 10).split('-');
       return `${d}-${m}-${y}`;
     }
     const parsed = new Date(val);
-    if (val && !Number.isNaN(parsed.getTime())) {
-      return parsed.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
+    if (!Number.isNaN(parsed.getTime())) {
+      const d = String(parsed.getDate()).padStart(2, '0');
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const y = parsed.getFullYear();
+      return `${d}-${m}-${y}`;
     }
-    const now = new Date();
-    return `${String(now.getDate()).padStart(2, '0')}-${String(now.getMonth() + 1).padStart(2, '0')}-${now.getFullYear()}`;
+    return val;
   };
 
   const formatRupiah = (val) => {
@@ -236,48 +266,147 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
     Number(order.dpPct) ||
     (totalDue > 0 && dpNominal > 0 ? Math.round((dpNominal / totalDue) * 100) : 0);
 
+  const normalizeStageLabel = (label, index, total) => {
+    const raw = String(label || '').trim();
+    if (!raw) {
+      if (total <= 2) return index === 0 ? 'DP' : 'Pelunasan';
+      return index === 0 ? 'DP 1' : index === total - 1 ? 'Pelunasan' : `DP ${index + 1}`;
+    }
+    if (/^cicilan/i.test(raw)) {
+      if (total <= 2) return 'Pelunasan';
+      const numMatch = raw.match(/\d+/);
+      const num = numMatch ? Number(numMatch[0]) + 1 : index + 1;
+      return `DP ${num}`;
+    }
+    if (/^termin\s*\d*\s*[·-]\s*cicilan/i.test(raw)) {
+      if (total <= 2) return 'Pelunasan';
+      return `DP ${index + 1}`;
+    }
+    return raw;
+  };
+
   const schemeStages = (() => {
     const rows = stageRowsOf(order);
     if (rows) {
       return rows.map((s, i, arr) => ({
-        label: clean(s.label) || (i === 0 ? 'DP' : i === arr.length - 1 ? 'Pelunasan' : `Termin ${i + 1}`),
+        label: normalizeStageLabel(s.label, i, arr.length),
         pct: Number(s.pct) || 0,
         date: clean(s.date)
       }));
     }
     const pcts = defaultStagePcts(order.terminCount, dpPctInvoice || DEFAULT_DP_PCT);
-    return pcts.map((pct, index) => ({
-      label: index === 0 ? 'DP' : index === pcts.length - 1 ? 'Pelunasan' : `Termin ${index + 1}`,
+    return pcts.map((pct, index, arr) => ({
+      label: normalizeStageLabel('', index, arr.length),
       pct,
-      date: index === pcts.length - 1 ? clean(order.pelunasanDueDate) : ''
+      date: index === arr.length - 1 ? clean(order.pelunasanDueDate) : ''
     }));
   })();
 
   const isWaitingStatus = (value) => String(value || '').toLowerCase().includes('menunggu');
-  const bankOf = (bankField, accountField) => ({
-    bank: clean(order[bankField]) || (defaultBank ? clean(defaultBank.bank) : ''),
-    account: clean(order[accountField]) || (defaultBank ? clean(defaultBank.accountNo) : '')
-  });
+  const isDepositStr = (val) => String(val || '').toLowerCase().includes('deposit');
+
+  const isDepositStage = (bankField, noteField, isDepFlag, paymentObj) => {
+    if (isDepFlag) return true;
+    if (paymentObj) {
+      const proof = String(paymentObj.proof_url || '').toUpperCase();
+      const method = String(paymentObj.method || '').toLowerCase();
+      const bName = String(paymentObj.bank_name || paymentObj.bank || '').toLowerCase();
+      if (proof === 'DEPOSIT' || method === 'deposit' || bName.includes('deposit')) return true;
+    }
+    return isDepositStr(order[bankField]) || isDepositStr(order[noteField]);
+  };
+
+  const bankForStage = (bankField, accountField, noteField, isDepFlag, paymentObj) => {
+    if (isDepositStage(bankField, noteField, isDepFlag, paymentObj)) {
+      return {
+        bank: 'Deposit',
+        account: 'Saldo Deposit',
+        isDeposit: true
+      };
+    }
+    return {
+      bank: clean(order[bankField]) || (defaultBank ? clean(defaultBank.bank) : ''),
+      account: clean(order[accountField]) || (defaultBank ? clean(defaultBank.accountNo) : ''),
+      isDeposit: false
+    };
+  };
 
   const paymentRows = [];
 
-  const dpRowDate = clean(order.dpVerifiedAt) || clean(order.dpSubmittedAt);
-  if (dpNominal > 0 || dpRowDate) {
-    const bank = bankOf('dpBank', 'dpBankAccount');
+  const allPayments = (Array.isArray(order.payments) && order.payments.length ? order.payments : null) ||
+    (Array.isArray(order.invoice?.payments) && order.invoice.payments.length ? order.invoice.payments : null) ||
+    [];
+
+  const findPaymentForStage = (instId, typeHint) => {
+    if (instId && allPayments.length) {
+      const matched = allPayments.find((p) => Number(p.installment_id) === Number(instId));
+      if (matched) return matched;
+    }
+    if (typeHint && allPayments.length) {
+      const matched = allPayments.find((p) => String(p.type || p.stage || '').toLowerCase().includes(typeHint));
+      if (matched) return matched;
+    }
+    return null;
+  };
+
+  // 1. DP
+  const dpPaymentObj = order.dpPayment || findPaymentForStage(order.dpInstallmentId, 'dp');
+  const dpIsDep = isDepositStage('dpBank', 'dpNote', order.isDpDeposit, dpPaymentObj);
+  const dpRowDate = clean(order.dpPaidAt) || clean(order.dpDate) || clean(dpPaymentObj?.verified_at) || clean(dpPaymentObj?.uploaded_at) || clean(order.dpVerifiedAt) || clean(order.dpSubmittedAt);
+  const dpLabel = order.paymentStages && order.paymentStages.length > 2 ? 'DP 1' : 'DP';
+  if (dpVerified || isWaitingStatus(order.dpStatus) || Boolean(order.dpProof) || (dpPaymentObj && Number(dpPaymentObj.amount) > 0) || dpRowDate) {
+    const bank = dpIsDep
+      ? { bank: 'Deposit', account: 'Saldo Deposit' }
+      : bankForStage('dpBank', 'dpBankAccount', 'dpNote', dpIsDep, dpPaymentObj);
     paymentRows.push({
       date: dpRowDate,
       ...bank,
-      label: `DP${dpPctInvoice ? ` ${dpPctInvoice}%` : ''}`,
+      label: `${dpLabel}${dpPctInvoice ? ` ${dpPctInvoice}%` : ''}`,
       amount: dpNominal,
       verified: dpVerified,
       waiting: isWaitingStatus(order.dpStatus) || Boolean(order.dpProof)
     });
   }
 
+  // 2. Tahap DP 2 / cicilan lanjutan (hanya tampil jika sudah ada transaksi / pembayaran)
+  if (Array.isArray(order.paymentStages)) {
+    order.paymentStages.forEach((stg, sIdx) => {
+      if (stg.type === 'dp' || stg.type === 'pelunasan') return;
+      const stgPay = stg.payment || findPaymentForStage(stg.id, 'cicilan');
+      const stgIsDep = isDepositStage('', '', false, stgPay) || isDepositStr(stg.bank);
+      const isAcc = String(stg.status || '').toLowerCase() === 'acc' || String(stg.status || '').toLowerCase() === 'lunas';
+      const hasProof = Boolean(stg.proof || stgPay?.image || stgPay?.proof_url);
+      const hasPayRecord = Boolean(stgPay && (Number(stgPay.nominal) > 0 || Number(stgPay.amount) > 0));
+
+      // HANYA tampilkan di Riwayat Pembayaran jika sudah dibayar / diajukan
+      if (!isAcc && !hasProof && !hasPayRecord && !isWaitingStatus(stg.status)) {
+        return;
+      }
+
+      const stgDate = clean(stgPay?.verified_at) || clean(stgPay?.uploaded_at) || clean(stgPay?.date) || clean(order.date);
+      const label = normalizeStageLabel(stg.label || `DP ${sIdx + 1}`, sIdx, order.paymentStages.length);
+
+      paymentRows.push({
+        date: stgDate,
+        bank: stgIsDep ? 'Deposit' : (clean(stgPay?.bank) || clean(stg.bank) || (defaultBank ? clean(defaultBank.bank) : '')),
+        account: stgIsDep ? 'Saldo Deposit' : (clean(stgPay?.account) || clean(stg.account) || (defaultBank ? clean(defaultBank.accountNo) : '')),
+        label,
+        amount: Number(stgPay?.nominal) || Number(stg.amount) || 0,
+        verified: isAcc,
+        waiting: isWaitingStatus(stg.status) || hasProof
+      });
+    });
+  }
+
+  // 3. Pelunasan
+  const pelunasanPaymentObj = order.pelunasanPayment || findPaymentForStage(order.pelunasanInstallmentId, 'pelunasan');
+  const pelunasanIsDep = isDepositStage('pelunasanBank', 'pelunasanNote', order.isPelunasanDeposit, pelunasanPaymentObj);
   const pelunasanAmount = Number(order.pelunasanSubmittedNominal) || pelunasanDue || 0;
-  const pelunasanDate = clean(order.pelunasanVerifiedAt) || clean(order.pelunasanSubmittedAt);
+  const pelunasanDate = clean(order.pelunasanPaidAt) || clean(order.pelunasanDate) || clean(pelunasanPaymentObj?.verified_at) || clean(pelunasanPaymentObj?.uploaded_at) || clean(order.pelunasanVerifiedAt) || clean(order.pelunasanSubmittedAt);
   if (pelunasanAmount > 0 && (pelunasanVerified || pelunasanDate || order.pelunasanProof)) {
-    const bank = bankOf('pelunasanBank', 'pelunasanBankAccount');
+    const bank = pelunasanIsDep
+      ? { bank: 'Deposit', account: 'Saldo Deposit' }
+      : bankForStage('pelunasanBank', 'pelunasanBankAccount', 'pelunasanNote', pelunasanIsDep, pelunasanPaymentObj);
     paymentRows.push({
       date: pelunasanDate,
       ...bank,
@@ -288,10 +417,15 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
     });
   }
 
+  // 4. Ongkir
+  const ongkirPaymentObj = order.ongkirPayment || allPayments.find((p) => !p.installment_id);
+  const ongkirIsDep = isDepositStage('ongkirBank', 'ongkirNote', order.isOngkirDeposit, ongkirPaymentObj);
   const ongkirAmount = Number(order.ongkirSubmittedNominal) || ongkir || 0;
-  const ongkirDate = clean(order.ongkirVerifiedAt) || clean(order.ongkirSubmittedAt);
+  const ongkirDate = clean(order.ongkirPaidAt) || clean(order.ongkirDate) || clean(ongkirPaymentObj?.verified_at) || clean(ongkirPaymentObj?.uploaded_at) || clean(order.ongkirVerifiedAt) || clean(order.ongkirSubmittedAt);
   if (ongkirAmount > 0 && (ongkirVerified || ongkirDate || order.ongkirProof)) {
-    const bank = bankOf('ongkirBank', 'ongkirBankAccount');
+    const bank = ongkirIsDep
+      ? { bank: 'Deposit', account: 'Saldo Deposit' }
+      : bankForStage('ongkirBank', 'ongkirBankAccount', 'ongkirNote', ongkirIsDep, ongkirPaymentObj);
     paymentRows.push({
       date: ongkirDate,
       ...bank,
@@ -303,10 +437,11 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
   }
 
   if (!paymentRows.length && paidAmount > 0) {
-    const bank = bankOf('bank', 'bankAccount');
+    const isDep = order.isDpDeposit || isDepositStr(order.bank) || isDepositStr(order.note);
     paymentRows.push({
       date: clean(order.date),
-      ...bank,
+      bank: isDep ? 'Deposit' : (clean(order.bank) || (defaultBank ? clean(defaultBank.bank) : '')),
+      account: isDep ? 'Saldo Deposit' : (clean(order.bankAccount) || (defaultBank ? clean(defaultBank.accountNo) : '')),
       label: 'Pembayaran diterima',
       amount: paidAmount,
       verified: true,
@@ -831,7 +966,10 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
 <body>
 
   <!-- Screen Toolbar (Only visible on browser screen) -->
-  <div class="screen-toolbar no-print">
+  ${
+    insideModal
+      ? ''
+      : `<div class="screen-toolbar no-print">
     <div class="toolbar-info">
       Pratinjau invoice <strong>${esc(orderNo)}</strong>
     </div>
@@ -848,7 +986,8 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
         Tutup
       </button>
     </div>
-  </div>
+  </div>`
+  }
 
   <!-- Printable Invoice Document -->
   <div class="invoice-card">
@@ -860,9 +999,9 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
         
         <!-- Official Afatharshop Logo from Index (Transparent Background) -->
         <div class="brand-logo-wrap">
-          <img src="/logo-nobg.png" alt="Afathar Shop" class="brand-logo-img" />
+          <img src="/logo-nobg.png" alt="Afatharshop" class="brand-logo-img" />
           <div class="brand-text">
-            <div class="brand-name">AFATHAR SHOP</div>
+            <div class="brand-name">AFATHARSHOP</div>
             <div class="brand-sub">MOSLEM WOMENS NEEDS</div>
           </div>
         </div>
@@ -876,7 +1015,7 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
     <!-- Diterbitkan Oleh -->
     <div class="publisher-section">
       <div class="publisher-label">DITERBITKAN OLEH :</div>
-      <div class="publisher-name">Afathar Shop Official</div>
+      <div class="publisher-name">Afatharshop Official</div>
     </div>
 
     <!-- Nomor Invoice & Tanggal Order -->
@@ -1095,7 +1234,13 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
                     return `<tr>
             <td style="text-align: center;">${index + 1}</td>
             <td>${row.date ? formatOrderDate(row.date) : '&mdash;'}</td>
-            <td class="pay-rek">${row.bank ? `${esc(row.bank)}<div>${esc(row.account)}</div>` : '&mdash;'}</td>
+            <td class="pay-rek">${
+              row.bank
+                ? String(row.bank).toLowerCase() === 'deposit'
+                  ? `<strong>Deposit</strong><div>Saldo Deposit</div>`
+                  : `<strong>${esc(row.bank)}</strong>${row.account ? `<div>${esc(row.account)}</div>` : ''}`
+                : '&mdash;'
+            }</td>
             <td><span class="pay-label">${esc(row.label)}</span><span class="pay-state ${stateClass}">${state}</span></td>
             <td class="num-rp" style="font-weight: 700;">${formatRupiah(row.amount)}</td>
           </tr>`;
@@ -1132,6 +1277,12 @@ export function openInvoicePrintTab(order, bankAccounts = []) {
 </body>
 </html>`;
 
+  return html;
+}
+
+export function openInvoicePrintTab(order, bankAccounts = []) {
+  if (!order) return;
+  const html = buildInvoiceHTML(order, bankAccounts, { insideModal: false });
   const newWindow = window.open('', '_blank');
   if (newWindow) {
     newWindow.document.open();

@@ -65,6 +65,15 @@ class TerminPlan
             $percent = self::DEFAULT_DP_PERCENT;
         }
         $percent = max(10, min(90, $percent));
+
+        $terminCount = (int) ($product?->termin_count ?? 2);
+        if ($terminCount <= 2) {
+            return [
+                ['type' => 'dp', 'sequence' => 1, 'percent' => $percent / 100, 'due_at' => $anchor->copy()->addDays(3)],
+                ['type' => 'pelunasan', 'sequence' => 2, 'percent' => (100 - $percent) / 100, 'due_at' => $anchor->copy()->addDays(30)],
+            ];
+        }
+
         $cicilan = max(0, 100 - $percent - self::DEFAULT_LAST_STAGE_PERCENT);
 
         if ($cicilan > 0) {

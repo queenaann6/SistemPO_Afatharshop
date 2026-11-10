@@ -7,7 +7,7 @@ export default function LoginPromptModal({ isOpen, onClose, onLogin }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-200">
       <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 text-center border border-stone-200">
         
-        {/* Yellow Exclamation Circle Icon (Matches Screenshot) */}
+        {/* Yellow Exclamation Circle Icon */}
         <div className="mx-auto w-16 h-16 rounded-full border-2 border-amber-400 bg-amber-50 flex items-center justify-center mb-4">
           <span className="text-2xl font-bold text-amber-500">!</span>
         </div>

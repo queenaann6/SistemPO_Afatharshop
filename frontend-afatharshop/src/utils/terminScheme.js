@@ -23,10 +23,10 @@ const percentOf = (stage) => toNumber(stage?.pct ?? stage?.percent);
 
 export const stageLabelFor = (index, total) =>
   index === 0
-    ? 'Termin 1 · DP'
+    ? (total <= 2 ? 'DP' : 'DP 1')
     : index === total - 1
-      ? `Termin ${index + 1} · Pelunasan`
-      : `Termin ${index + 1} · Cicilan`;
+      ? 'Pelunasan'
+      : `DP ${index + 1}`;
 
 const rowsOf = (...sources) => {
   const found = sources.find((rows) => Array.isArray(rows) && rows.length) || [];

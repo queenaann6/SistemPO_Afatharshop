@@ -26,6 +26,31 @@ class Payment extends Model
         'verified_at' => 'datetime',
     ];
 
+    protected $appends = [
+        'method',
+        'bank_name',
+        'account_number',
+    ];
+
+    public function getMethodAttribute(): string
+    {
+        $proof = strtoupper((string) ($this->proof_url ?? ''));
+        if ($proof === 'DEPOSIT' || empty($this->proof_url)) {
+            return 'deposit';
+        }
+        return 'transfer';
+    }
+
+    public function getBankNameAttribute(): string
+    {
+        return $this->getMethodAttribute() === 'deposit' ? 'Deposit' : 'Transfer Bank';
+    }
+
+    public function getAccountNumberAttribute(): string
+    {
+        return $this->getMethodAttribute() === 'deposit' ? 'Saldo Deposit' : '';
+    }
+
     public function invoice()
     {
         return $this->belongsTo(Invoice::class, 'invoice_id');

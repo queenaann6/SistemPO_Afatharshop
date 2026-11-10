@@ -154,8 +154,19 @@ export const api = {
     return data;
   },
 
-  register: (payload) =>
-    request('/auth/register', { method: 'POST', auth: false, body: payload }),
+  async register(payload) {
+    const data = await request('/auth/register', {
+      method: 'POST',
+      auth: false,
+      body: payload
+    });
+
+    if (data?.access_token) {
+      tokenStore.set(data.access_token);
+    }
+
+    return data;
+  },
 
   me: () => request('/auth/me'),
 
@@ -189,14 +200,38 @@ export const api = {
   categories: () => request('/categories', { auth: false }),
   couriers: () => request('/couriers', { auth: false }),
   bankAccounts: () => request('/bank-accounts', { auth: false }),
+  batches: (params) => request(`/batches${buildQuery(params)}`, { auth: false }),
   levels: () => request('/levels', { auth: false }),
 
   // --- Transaksi ---
   orders: () => request('/orders'),
   order: (id) => request(`/orders/${id}`),
+  orderInvoice: (id) => request(`/orders/${id}/invoice`),
+  invoice: (id) => request(`/invoices/${id}`),
   createOrder: (payload) => request('/orders', { method: 'POST', body: payload }),
+  updateOrder: (id, payload) =>
+    request(`/orders/${id}`, { method: 'PUT', body: payload }),
   updateOrderAddress: (id, payload) =>
     request(`/orders/${id}/address`, { method: 'PATCH', body: payload }),
+
+  // --- Keranjang Belanja (Cart) ---
+  cart: {
+    get: () => request('/cart'),
+    add: (payload) => request('/cart/items', { method: 'POST', body: payload }),
+    update: (id, payload) =>
+      request(`/cart/items/${id}`, { method: 'PUT', body: payload }),
+    remove: (id) => request(`/cart/items/${id}`, { method: 'DELETE' }),
+    clear: () => request('/cart', { method: 'DELETE' }),
+    sync: (items) => request('/cart/sync', { method: 'POST', body: { items } })
+  },
+
+  // --- Wishlist Produk Favorit ---
+  wishlist: {
+    get: () => request('/wishlist'),
+    toggle: (productId) =>
+      request('/wishlist/toggle', { method: 'POST', body: { product_id: productId } }),
+    remove: (productId) => request(`/wishlist/${productId}`, { method: 'DELETE' })
+  },
 
   // --- Data mitra yang sedang login ---
   my: {
@@ -211,6 +246,8 @@ export const api = {
     uploadPayment: (payload) => request('/my/payments', { method: 'POST', body: payload }),
     payWithDeposit: (payload) => request('/my/payments/deposit', { method: 'POST', body: payload }),
     notifications: () => request('/my/notifications'),
+    markNotificationsRead: (id) =>
+      request('/my/notifications/read', { method: 'PATCH', body: id ? { id } : {} }),
     addresses: () => request('/my/addresses'),
     createAddress: (payload) => request('/my/addresses', { method: 'POST', body: payload }),
     updateAddress: (id, payload) =>
@@ -223,6 +260,9 @@ export const api = {
     bootstrap: (options) => request('/management/bootstrap', options),
 
     orders: (options) => request('/management/orders', options),
+    orderInvoice: (id, options) => request(`/management/orders/${id}/invoice`, options),
+    invoice: (id, options) => request(`/management/invoices/${id}`, options),
+    createOrder: (payload) => request('/management/orders', { method: 'POST', body: payload }),
     updateOrderStatus: (id, payload) =>
       request(`/management/orders/${id}/status`, { method: 'PATCH', body: payload }),
     updateOrderInvoice: (id, payload) =>
@@ -334,6 +374,8 @@ export const api = {
     clearActivityLogs: () =>
       request('/management/activity-logs', { method: 'DELETE' }),
     notifications: (options) => request('/management/notifications', options),
+    markNotificationsRead: (id) =>
+      request('/management/notifications/read', { method: 'PATCH', body: id ? { id } : {} }),
     settings: (options) => request('/management/settings', options)
   }
 };

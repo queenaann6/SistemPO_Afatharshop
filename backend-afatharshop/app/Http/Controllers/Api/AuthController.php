@@ -11,50 +11,6 @@ use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
-    public function register(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'name'     => 'nullable|string|max:100',
-            'nama'     => 'nullable|string|max:100',
-            'email'    => 'required|email|max:100|unique:users,email',
-            'phone'    => 'required|string|max:20',
-            'password' => 'required|string|min:8|confirmed',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validasi gagal.',
-                'errors'  => $validator->errors(),
-            ], 422);
-        }
-
-        $nama = trim((string) ($request->input('nama') ?? $request->input('name')));
-
-        if ($nama === '') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Nama wajib diisi.',
-                'errors'  => ['nama' => ['Nama wajib diisi.']],
-            ], 422);
-        }
-
-        $user = User::create([
-            'nama'     => $nama,
-            'email'    => Str::lower($request->email),
-            'phone'    => $request->phone,
-            'password' => $request->password,
-            'level'    => 'Reseller',
-            'is_active' => false,
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Registrasi berhasil. Menunggu aktivasi admin.',
-            'data'    => $this->userPayload($user),
-        ], 201);
-    }
-
     public function login(Request $request)
     {
         $identifier = trim((string) ($request->input('login')
@@ -95,6 +51,45 @@ class AuthController extends Controller
                 'message' => 'Akun Anda belum aktif. Silakan hubungi admin.',
             ], 403);
         }
+
+        $token = auth('api')->login($user);
+
+        return $this->tokenResponse($token, $user);
+    }
+
+    public function register(Request $request)
+    {
+        $name = trim((string) ($request->input('name') ?? $request->input('nama')));
+        $request->merge(['name' => $name, 'nama' => $name]);
+
+        $validator = Validator::make($request->all(), [
+            'name'     => 'required|string|max:100',
+            'email'    => 'required|email|max:100|unique:users,email',
+            'password' => 'required|string|min:6',
+            'phone'    => 'nullable|string|max:20',
+            'city'     => 'nullable|string|max:100',
+            'level'    => 'nullable|string|max:50',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validasi pendaftaran gagal.',
+                'errors'  => $validator->errors(),
+            ], 422);
+        }
+
+        $user = User::create([
+            'nama'            => $name,
+            'email'           => Str::lower(trim((string) $request->email)),
+            'password'        => Hash::make($request->password),
+            'role'            => 'mitra',
+            'level'           => $request->input('level', 'Reseller'),
+            'phone'           => $request->input('phone'),
+            'city'            => $request->input('city'),
+            'deposit_balance' => 0,
+            'is_active'       => true,
+        ]);
 
         $token = auth('api')->login($user);
 
@@ -266,6 +261,7 @@ class AuthController extends Controller
 
         return [
             'id'              => $user->id,
+            'mitra_id'        => $user->mitra_id,
             'name'            => $user->nama ?? $user->name,
             'nama'            => $user->nama ?? $user->name,
             'email'           => $user->email,

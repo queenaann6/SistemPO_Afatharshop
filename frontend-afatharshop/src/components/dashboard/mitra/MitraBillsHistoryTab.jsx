@@ -176,7 +176,7 @@ export default function MitraBillsHistoryTab({ orders = [], currentUser, adminBa
         <div>
           <p className="text-xs text-emerald-100 font-medium">Total Pembayaran Terverifikasi (Lunas)</p>
           <h3 className="text-2xl sm:text-3xl font-extrabold mt-1 tracking-tight tabular-nums">
-            Rp {totalSettledAmount.toLocaleString('id-ID')}
+            Rp {Number(totalSettledAmount || 0).toLocaleString('id-ID')}
           </h3>
           <p className="text-xs text-emerald-100/90 mt-1">
             {settledBills.length} transaksi telah diverifikasi Admin Finance
@@ -206,7 +206,7 @@ export default function MitraBillsHistoryTab({ orders = [], currentUser, adminBa
                 <td className="py-3.5 px-3 font-semibold text-stone-400">{i + 1}</td>
                 <td className="py-3.5 px-3 font-mono font-medium text-stone-600">{b.orderNo}</td>
                 <td className="py-3.5 px-3 font-semibold text-stone-800">{b.title}</td>
-                <td className="py-3.5 px-3 font-bold text-stone-900">Rp {b.amount.toLocaleString('id-ID')}</td>
+                <td className="py-3.5 px-3 font-bold text-stone-900">Rp {Number(b.amount || 0).toLocaleString('id-ID')}</td>
                 <td className="py-3.5 px-3">
                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
                     <CheckIcon className="w-3 h-3" />

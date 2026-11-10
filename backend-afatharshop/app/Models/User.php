@@ -42,6 +42,12 @@ class User extends Authenticatable implements JWTSubject
         'remember_token',
     ];
 
+    protected $appends = [
+        'name',
+        'role',
+        'mitra_id',
+    ];
+
     protected function casts(): array
     {
         return [
@@ -72,6 +78,14 @@ class User extends Authenticatable implements JWTSubject
         return in_array($rawLevel, self::MITRA_LEVELS);
     }
 
+    public function getMitraIdAttribute(): ?string
+    {
+        if (!$this->id) {
+            return null;
+        }
+        return 'MTR-' . str_pad((string) $this->id, 3, '0', STR_PAD_LEFT);
+    }
+
     public function orders()
     {
         return $this->hasMany(Order::class, 'user_id');
@@ -87,6 +101,21 @@ class User extends Authenticatable implements JWTSubject
         return $this->hasMany(DepositTransaction::class, 'user_id');
     }
 
+    public function cart()
+    {
+        return $this->hasOne(Cart::class, 'user_id');
+    }
+
+    public function wishlists()
+    {
+        return $this->hasMany(Wishlist::class);
+    }
+
+    public function wishlistProducts()
+    {
+        return $this->belongsToMany(Product::class, 'wishlists', 'user_id', 'product_id')->withTimestamps();
+    }
+
     public function getJWTIdentifier()
     {
         return $this->getKey();
@@ -95,6 +124,8 @@ class User extends Authenticatable implements JWTSubject
     public function getJWTCustomClaims()
     {
         return [
+            'id'              => $this->id,
+            'mitra_id'        => $this->mitra_id,
             'role'            => $this->role,
             'level'           => $this->level,
             'nama'            => $this->nama ?? $this->name,

@@ -1,10 +1,27 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import api, { mediaUrl } from '../../services/api';
-import { dbId, mapBrandToCore, mapSupplier, normalizeLevel } from '../../services/adapters';
-import { DEFAULT_DP_PCT, defaultStagePcts, dpPercentFor } from '../../utils/terminScheme';
-import ProductCatalogModal from './ProductCatalogModal';
-import BankAccountModal from './BankAccountModal';
-import AccountSettingsPanel from './AccountSettingsPanel';
+import api, { mediaUrl } from '../../../services/api';
+import { dbId, mapBrandToCore, mapSupplier, normalizeLevel } from '../../../services/adapters';
+import { DEFAULT_DP_PCT, defaultStagePcts, dpPercentFor } from '../../../utils/terminScheme';
+import ProductCatalogModal from '../ProductCatalogModal';
+import BankAccountModal from '../BankAccountModal';
+import AccountSettingsPanel from '../AccountSettingsPanel';
+import PurchasingOverviewTab from './PurchasingOverviewTab';
+import PurchasingAccOrdersTab from './PurchasingAccOrdersTab';
+import PurchasingOrdersTab from './PurchasingOrdersTab';
+import PurchasingManualOrderTab from './PurchasingManualOrderTab';
+import PurchasingProductSummaryTab from './PurchasingProductSummaryTab';
+import PurchasingCatalogTab from './PurchasingCatalogTab';
+import PurchasingBrandsTab from './PurchasingBrandsTab';
+import PurchasingSuppliersTab from './PurchasingSuppliersTab';
+import PurchasingMitraTab from './PurchasingMitraTab';
+import PurchasingTeamTab from './PurchasingTeamTab';
+import PurchasingManualProofTab from './PurchasingManualProofTab';
+import PurchasingPaymentRequestsTab from './PurchasingPaymentRequestsTab';
+import PurchasingDeletedOrdersTab from './PurchasingDeletedOrdersTab';
+import PurchasingBatchesTab from './PurchasingBatchesTab';
+import PurchasingCategoriesTab from './PurchasingCategoriesTab';
+import PurchasingBankAccountsTab from './PurchasingBankAccountsTab';
+import PurchasingCouriersTab from './PurchasingCouriersTab';
 import {
   ACCENTS,
   Badge,
@@ -88,7 +105,7 @@ import {
   useToast,
   variantLabel,
   waLink
-} from './poCore';
+} from '../poCore';
 
 const hasOwnPrice = (v) => v?.price != null && v?.price !== '';
 const hasOwnAddon = (v) => v?.addon != null && v?.addon !== '';
@@ -142,7 +159,7 @@ const stagesFromProduct = (product) => {
   return makeStages(3, product?.closeDate || todayISO());
 };
 
-const DEFAULT_USER = { name: 'Rina Marketing', role: 'marketing', email: 'marketing@afatharshop.com' };
+const DEFAULT_USER = { name: 'Rindu', role: 'purchasing', email: 'purchasing@afatharshop.com' };
 const normalizeBatch = (b) => {
   if (!b) return null;
   return {
@@ -162,12 +179,13 @@ const normalizeBatch = (b) => {
 const PAGE_DESC =
   'Kelola katalog PO, ACC pesanan dari tim, harga & diskon brand, kuota varian, serta rekap checkout per produk.';
 
-export default function MarketingDashboard({
+export default function PurchasingDashboard({
   currentUser,
   onUpdateUser,
   onUpdateAvatar,
   onNavigateStore,
   onLogout,
+  initialMenu = 'dashboard',
   orders: ordersProp,
   products: productsProp,
   brands: brandsProp,
@@ -202,7 +220,10 @@ export default function MarketingDashboard({
   const { show: toast, toast: toastData, close: closeToast } = useToast();
 
   /* ------------------------------------------------------------------ state */
-  const [activeMenu, setActiveMenu] = useState('dashboard');
+  const [activeMenu, setActiveMenu] = useState(initialMenu || 'dashboard');
+  useEffect(() => {
+    if (initialMenu) setActiveMenu(initialMenu);
+  }, [initialMenu]);
   const [orders, commitOrders] = useDataState(ordersProp, seed.orders, onChangeOrders);
   const [products, commitProducts] = useDataState(productsProp, seed.products, onChangeProducts);
   const [brands, commitBrands] = useDataState(brandsProp, seed.brands, onChangeBrands);
@@ -478,7 +499,12 @@ export default function MarketingDashboard({
   const mitraRows = useMemo(
     () =>
       mitra.map((m) => {
-        const list = orders.filter((o) => o.mitraId === m.id || o.mitraName === m.name);
+        const list = orders.filter(
+          (o) =>
+            String(o.mitraId) === String(m.id) ||
+            (dbId(o.mitraId) && dbId(o.mitraId) === dbId(m)) ||
+            (o.mitraName && o.mitraName === m.name)
+        );
         return {
           ...m,
           invoiceCount: list.length,
@@ -543,7 +569,15 @@ export default function MarketingDashboard({
       lateCount: productOrderRows.length - inRows.length
     };
   }, [productOrderRows]);
-  const mitraDetail = useMemo(() => mitraRows.find((m) => m.id === mitraDetailId) || null, [mitraRows, mitraDetailId]);
+  const mitraDetail = useMemo(
+    () =>
+      mitraRows.find(
+        (m) =>
+          String(m.id) === String(mitraDetailId) ||
+          (dbId(m) && dbId(m) === dbId(mitraDetailId))
+      ) || null,
+    [mitraRows, mitraDetailId]
+  );
   const prDetail = useMemo(
     () => paymentRequests.find((r) => r.id === prDetailId) || null,
     [paymentRequests, prDetailId]
@@ -1040,6 +1074,43 @@ export default function MarketingDashboard({
     setDraftList([]);
     toast(`${created.length} pesanan berhasil diterbitkan.`);
     setActiveMenu('pesanan');
+
+    // Sinkronkan ke API backend secara asinkron
+    Promise.allSettled(
+      created.map(async (item) => {
+        const payload = {
+          user_id: dbId(item.mitraId) || (typeof item.mitraId === 'number' ? item.mitraId : null),
+          order_number: item.invoice,
+          invoice: item.invoice,
+          subtotal: item.subtotal,
+          shipping_cost: item.ongkir || 0,
+          total_amount: (item.subtotal || 0) + (item.ongkir || 0),
+          notes: item.notes,
+          status: 'Menunggu ACC Marketing',
+          items: [{
+            product_id: dbId(item.produkId) || item.produkId,
+            product_variant_id: dbId(item.variantId) || (typeof item.variantId === 'number' ? item.variantId : null),
+            quantity: item.qty,
+            unit_price: item.price,
+            addon_nominal: item.addon || 0,
+            fee: item.feeMitraNominal || 0,
+            discount_nominal: item.discountNominal || 0
+          }]
+        };
+        const res = await api.management.createOrder(payload);
+        if (res?.data?.id) {
+          commitOrders((prev) =>
+            prev.map((o) =>
+              o.invoice === item.invoice
+                ? { ...o, id: res.data.id, backendId: res.data.id, orderNo: res.data.order_number }
+                : o
+            )
+          );
+        }
+      })
+    ).catch((err) => {
+      console.warn('Gagal menyimpan pesanan manual ke server:', err);
+    });
   };
 
   const buildProductOptions = (form, baseOptions) => {
@@ -1107,20 +1178,32 @@ export default function MarketingDashboard({
       return toast('Total porsi termin pembayaran harus 100%.', 'error');
     }
 
-    const variants = (f.variants || []).map((v) => ({
-      ...v,
-      id: v.id || uid('v'),
-      color: v.color || 'Standard',
-      size: String(v.size || 'All'),
-      model: v.model || 'Standard',
-      sku: v.sku || `${v.color} (${v.size})`,
-      hpp: num(v.hpp) || 0,
-      price: num(v.price) || 0,
-      addon: num(v.addon) || 0,
-      quota: num(v.quota ?? v.stock) || 10,
-      stock: num(v.quota ?? v.stock) || 10,
-      is_active: v.is_active !== undefined ? !!v.is_active : true
-    }));
+    const seenSkus = new Set();
+    const variants = (f.variants || []).map((v) => {
+      let candidate = String(v.sku || '').trim() || `${v.color} (${v.size})`;
+      let counter = 1;
+      const base = candidate;
+      while (seenSkus.has(candidate.toUpperCase())) {
+        counter++;
+        candidate = `${base}-${counter}`;
+      }
+      seenSkus.add(candidate.toUpperCase());
+
+      return {
+        ...v,
+        id: v.id || uid('v'),
+        color: v.color || 'Standard',
+        size: String(v.size || 'All'),
+        model: v.model || 'Standard',
+        sku: candidate,
+        hpp: num(v.hpp) || 0,
+        price: num(v.price) || 0,
+        addon: num(v.addon) || 0,
+        quota: num(v.quota ?? v.stock) || 10,
+        stock: num(v.quota ?? v.stock) || 10,
+        is_active: v.is_active !== undefined ? !!v.is_active : true
+      };
+    });
 
     const variantPrices = variants.filter(hasOwnPrice).map((v) => num(v.price));
     const basePrice = variantPrices.length ? Math.min(...variantPrices) : (num(f.price) || num(current?.price) || 295000);
@@ -1144,7 +1227,12 @@ export default function MarketingDashboard({
       po_batch_id: f.po_batch_id || undefined,
       price: basePrice,
       image: f.image || current?.image || '',
-      thumbnails: f.thumbnails || [f.image, f.image2, f.image3, f.image4].filter(Boolean),
+      image2: f.image2 || undefined,
+      image3: f.image3 || undefined,
+      image4: f.image4 || undefined,
+      image5: f.image5 || undefined,
+      image6: f.image6 || undefined,
+      thumbnails: f.thumbnails || [f.image, f.image2, f.image3, f.image4, f.image5, f.image6].filter(Boolean),
       reelUrl: f.reelUrl || '',
       isSale,
       is_sale: isSale,
@@ -1187,8 +1275,10 @@ export default function MarketingDashboard({
       image2: f.image2 || undefined,
       image3: f.image3 || undefined,
       image4: f.image4 || undefined,
+      image5: f.image5 || undefined,
+      image6: f.image6 || undefined,
       reel_url: f.reelUrl || f.reel_url || undefined,
-      thumbnails: f.thumbnails || [f.image, f.image2, f.image3, f.image4].filter(Boolean),
+      thumbnails: f.thumbnails || [f.image, f.image2, f.image3, f.image4, f.image5, f.image6].filter(Boolean),
       is_sale: isSale,
       discount_percent: discountPercent,
       original_price: originalPrice,
@@ -1317,8 +1407,10 @@ export default function MarketingDashboard({
       image2: f.image2 || undefined,
       image3: f.image3 || undefined,
       image4: f.image4 || undefined,
+      image5: f.image5 || undefined,
+      image6: f.image6 || undefined,
       reel_url: f.reelUrl || f.reel_url || undefined,
-      thumbnails: f.thumbnails || [f.image, f.image2, f.image3, f.image4].filter(Boolean),
+      thumbnails: f.thumbnails || [f.image, f.image2, f.image3, f.image4, f.image5, f.image6].filter(Boolean),
       is_sale: isSale,
       discount_percent: discountPercent,
       original_price: originalPrice,
@@ -1564,8 +1656,10 @@ export default function MarketingDashboard({
     e.preventDefault();
     const f = brandModal.form;
     if (!f.name?.trim()) return toast('Nama brand wajib diisi.', 'error');
-    const matchedSup = suppliers.find((s) => s.name === f.supplier);
-    const resolvedSupplierId = dbId({ id: f.supplier_id }) || dbId(matchedSup);
+    const matchedSup = f.supplier ? suppliers.find((s) => s.name === f.supplier) : null;
+    const resolvedSupplierId = f.supplier
+      ? (dbId(matchedSup) || dbId({ id: f.supplier_id }) || null)
+      : null;
     const payload = {
       ...f,
       name: f.name.trim(),
@@ -1573,23 +1667,105 @@ export default function MarketingDashboard({
       supplier_id: resolvedSupplierId || null,
       address: f.address || matchedSup?.city || '',
       discountType: f.discountType === 'nominal' ? 'nominal' : 'pct',
+      discount_type: f.discountType === 'nominal' ? 'nominal' : 'pct',
       discountValue: num(f.discountValue),
+      discount_value: num(f.discountValue),
       feeType: f.feeType === 'nominal' ? 'nominal' : 'pct',
+      fee_type: f.feeType === 'nominal' ? 'nominal' : 'pct',
       discountDBAll: num(f.discountDBAll),
+      discount_db_all: num(f.discountDBAll),
       discountSubDB: num(f.discountSubDB),
+      discount_sub_db: num(f.discountSubDB),
       discountAgen: num(f.discountAgen),
-      discountReseller: num(f.discountReseller)
+      discount_agen: num(f.discountAgen),
+      discountReseller: num(f.discountReseller),
+      discount_reseller: num(f.discountReseller)
     };
 
     if (brandModal.mode === 'edit') {
-      const targetBrandId = dbId(brands.find((b) => b.id === brandModal.id)) || dbId(brandModal);
-      if (!targetBrandId) return notOnServer(`Brand ${payload.name}`);
-      try {
-        await api.management.updateBrand(targetBrandId, payload);
-      } catch (err) {
-        return serverFail(err, `Menyimpan brand ${payload.name}`);
+      const targetBrand = brands.find(
+        (b) =>
+          b.id === brandModal.id ||
+          String(b.id) === String(brandModal.id) ||
+          (dbId(b) && (dbId(b) === dbId(brandModal) || dbId(b) === dbId(brandModal.id))) ||
+          (b.name && brandModal.form?.oldName && b.name.trim().toLowerCase() === brandModal.form.oldName.trim().toLowerCase()) ||
+          (b.name && b.name.trim().toLowerCase() === payload.name.toLowerCase())
+      );
+      const oldName = targetBrand?.name || brandModal.form?.oldName || '';
+      let targetBrandId = dbId(targetBrand) || dbId(brandModal) || dbId(brandModal.id) || targetBrand?.backendId;
+
+      if (!targetBrandId) {
+        try {
+          const remoteRes = await api.management.brands();
+          const list = Array.isArray(remoteRes?.data) ? remoteRes.data : [];
+          const found = list.find(
+            (rb) =>
+              (oldName && String(rb.name).trim().toLowerCase() === oldName.trim().toLowerCase()) ||
+              String(rb.name).trim().toLowerCase() === payload.name.trim().toLowerCase()
+          );
+          if (found?.id) targetBrandId = found.id;
+        } catch (_) {}
       }
-      commitBrands((prev) => prev.map((b) => (b.id === brandModal.id ? { ...b, ...payload } : b)));
+
+      let updatedData = null;
+      if (targetBrandId) {
+        try {
+          const res = await api.management.updateBrand(targetBrandId, payload);
+          updatedData = res?.data;
+        } catch (err) {
+          return serverFail(err, `Menyimpan brand ${payload.name}`);
+        }
+      } else {
+        try {
+          const res = await api.management.createBrand(payload);
+          updatedData = res?.data;
+          targetBrandId = updatedData?.id || null;
+        } catch (err) {
+          return serverFail(err, `Menyimpan brand ${payload.name}`);
+        }
+      }
+
+      commitBrands((prev) =>
+        prev.map((b) => {
+          const isTarget =
+            b.id === brandModal.id ||
+            String(b.id) === String(brandModal.id) ||
+            (targetBrand?.id && (b.id === targetBrand.id || String(b.id) === String(targetBrand.id))) ||
+            (dbId(b) && targetBrandId && dbId(b) === targetBrandId) ||
+            (oldName && b.name.trim().toLowerCase() === oldName.trim().toLowerCase()) ||
+            (b.name && b.name.trim().toLowerCase() === payload.name.toLowerCase());
+          return isTarget
+            ? {
+                ...b,
+                ...(updatedData ? mapBrandToCore(updatedData) : {}),
+                ...payload,
+                id: b.id || (targetBrandId ? `b-${targetBrandId}` : uid('b')),
+                backendId: targetBrandId || b.backendId,
+                oldName: oldName || b.name
+              }
+            : b;
+        })
+      );
+
+      // Sinkronkan nama brand pada produk-produk yang terasosiasi di dashboard
+      if (oldName && oldName !== payload.name) {
+        commitProducts((prev) =>
+          prev.map((p) => {
+            const matchesOld =
+              String(p.brand || '').trim().toLowerCase() === oldName.trim().toLowerCase() ||
+              p.brand_id === targetBrandId ||
+              p.brandId === targetBrand?.id;
+            if (matchesOld) {
+              return {
+                ...p,
+                brand: payload.name,
+                brand_id: targetBrandId
+              };
+            }
+            return p;
+          })
+        );
+      }
       toast(`Brand ${payload.name} diperbarui.`);
     } else {
       let created;
@@ -1599,12 +1775,15 @@ export default function MarketingDashboard({
         return serverFail(err, `Menambahkan brand ${payload.name}`);
       }
       const serverBrand = created?.data;
-      const newB = mapBrandToCore({
-        ...payload,
-        ...(serverBrand || {}),
-        id: serverBrand?.id ?? null,
-        supplier: serverBrand?.supplier?.name || payload.supplier
-      });
+      const newB = {
+        ...mapBrandToCore({
+          ...payload,
+          ...(serverBrand || {}),
+          id: serverBrand?.id ?? null,
+          supplier: serverBrand?.supplier?.name || payload.supplier
+        }),
+        ...payload
+      };
       commitBrands((prev) => [newB, ...prev]);
       toast(`Brand ${payload.name} ditambahkan.`);
     }
@@ -1621,10 +1800,19 @@ export default function MarketingDashboard({
       confirmLabel: 'Hapus brand',
       danger: true,
       onConfirm: async () => {
-        const targetBrandId = dbId(b);
+        let targetBrandId = dbId(b) || b.backendId;
         if (!targetBrandId) {
+          try {
+            const remoteRes = await api.management.brands();
+            const list = Array.isArray(remoteRes?.data) ? remoteRes.data : [];
+            const found = list.find((rb) => String(rb.name).trim().toLowerCase() === String(b.name).trim().toLowerCase());
+            if (found?.id) targetBrandId = found.id;
+          } catch (_) {}
+        }
+        if (!targetBrandId) {
+          commitBrands((prev) => prev.filter((x) => x.id !== b.id));
           setConfirmModal(null);
-          return notOnServer(`Brand ${b.name}`);
+          return toast(`Brand ${b.name} dihapus (lokal).`, 'warning');
         }
         try {
           await api.management.deleteBrand(targetBrandId);
@@ -1894,7 +2082,24 @@ export default function MarketingDashboard({
       const res = await api.management.updateBatch(b.id, { status: nextStatus });
       const updated = normalizeBatch(res?.data || { ...b, status: nextStatus });
       commitBatches((prev) => prev.map((item) => (item.id === b.id ? updated : item)));
-      toast(`Batch PO "${b.name}" sekarang ${nextStatus === 'open' ? 'DIBUKA (Open)' : 'DITUTUP (Closed)'}.`);
+      if (nextStatus === 'closed') {
+        commitProducts((prev) =>
+          prev.map((p) =>
+            p.po_batch_id === b.id || p.batch === b.name
+              ? { ...p, status: 'closed', statusLabel: 'PO Ditutup' }
+              : p
+          )
+        );
+      } else {
+        commitProducts((prev) =>
+          prev.map((p) =>
+            p.po_batch_id === b.id || p.batch === b.name
+              ? { ...p, status: 'open', statusLabel: 'Open Pre-Order' }
+              : p
+          )
+        );
+      }
+      toast(`Batch PO "${b.name}" sekarang ${nextStatus === 'open' ? 'DIBUKA (Open)' : 'DITUTUP (Closed)'}. Seluruh produk terhubung telah disinkronkan.`);
     } catch (err) {
       serverFail(err, `${labelAction} Batch PO ${b.name}`);
     }
@@ -2611,9 +2816,18 @@ export default function MarketingDashboard({
 
   const brandFormFrom = (b) => ({
     ...b,
-    discountType: b.discountType || 'pct',
-    discountValue: b.discountValue ?? b.discountDBAll ?? 0,
-    feeType: b.feeType || 'pct'
+    name: b?.name || '',
+    oldName: b?.name || '',
+    supplier: b?.supplier || '',
+    supplier_id: b?.supplier_id || null,
+    address: b?.address || '',
+    discountType: b?.discountType || 'pct',
+    discountValue: b?.discountValue ?? b?.discountDBAll ?? 0,
+    feeType: b?.feeType || 'pct',
+    discountDBAll: b?.discountDBAll ?? 30,
+    discountSubDB: b?.discountSubDB ?? 25,
+    discountAgen: b?.discountAgen ?? 20,
+    discountReseller: b?.discountReseller ?? 15
   });
 
   const feeBadges = useMemo(() => {
@@ -2650,6 +2864,14 @@ export default function MarketingDashboard({
         readyEstimate: p.readyEstimate,
         description: p.description,
         image: p.image || '',
+        image2: p.image2 || p.thumbnails?.[1] || '',
+        image3: p.image3 || p.thumbnails?.[2] || '',
+        image4: p.image4 || p.thumbnails?.[3] || '',
+        image5: p.image5 || p.thumbnails?.[4] || '',
+        image6: p.image6 || p.thumbnails?.[5] || '',
+        thumbnails: p.thumbnails || [p.image, p.image2, p.image3, p.image4, p.image5, p.image6].filter(Boolean),
+        reelUrl: p.reelUrl || p.reel_url || p.videoUrl || '',
+        videoUrl: p.videoUrl || p.reelUrl || p.reel_url || '',
         isSale: !!p.isSale,
         discountPercent: p.discountPercent || 0,
         originalPrice: p.originalPrice || '',
@@ -2667,15 +2889,16 @@ export default function MarketingDashboard({
 
   const setTerminCount = (count) => {
     setProductModal((prev) => {
-      if (!prev) return prev;
+      if (!prev || !prev.form) return prev;
       const kept = prev.form.stages || [];
       const base = isoDateOf(kept[0]?.date) || prev.form.closeDate || todayISO();
+      const pcts = defaultStagePcts(count, DEFAULT_DP_PCT);
       return {
         ...prev,
         form: {
           ...prev.form,
           terminCount: count,
-          stages: (TERMIN_PCTS[count] || TERMIN_PCTS[3]).map((pct, index) => ({
+          stages: pcts.map((pct, index) => ({
             label: stageLabelOf(index, count),
             pct,
             date: isoDateOf(kept[index]?.date) || addDays(base, index * 30)
@@ -2687,7 +2910,7 @@ export default function MarketingDashboard({
 
   const changeStage = (index, patch) => {
     setProductModal((prev) => {
-      if (!prev) return prev;
+      if (!prev || !prev.form) return prev;
       return {
         ...prev,
         form: {
@@ -2765,9 +2988,10 @@ export default function MarketingDashboard({
     });
     return list.reduce(
       (acc, p) => {
+        const isClosed = p.status === 'closed' || p.status === 'closed_po' || p.isClosedPO === true;
         acc.all += 1;
         if (p.isSale) acc.sale += 1;
-        if (p.status === 'closed') acc.closed += 1;
+        if (isClosed) acc.closed += 1;
         else {
           acc.open += 1;
           if (diffDays(p.closeDate, todayISO()) <= 0) acc.closing += 1;
@@ -2781,11 +3005,12 @@ export default function MarketingDashboard({
   const catalogFiltered = useMemo(() => {
     return productSummary
       .filter((p) => {
+        const isClosed = p.status === 'closed' || p.status === 'closed_po' || p.isClosedPO === true;
         if (catalogBrand !== 'all' && p.brand !== catalogBrand) return false;
         if (catalogCategory !== 'all' && p.category !== catalogCategory) return false;
-        if (catalogStatus === 'open' && p.status !== 'open') return false;
-        if (catalogStatus === 'closed' && p.status !== 'closed') return false;
-        if (catalogStatus === 'closing' && (p.status !== 'open' || diffDays(p.closeDate, todayISO()) > 0)) return false;
+        if (catalogStatus === 'open' && isClosed) return false;
+        if (catalogStatus === 'closed' && !isClosed) return false;
+        if (catalogStatus === 'closing' && (isClosed || diffDays(p.closeDate, todayISO()) > 0)) return false;
         if (catalogStatus === 'sale' && !p.isSale) return false;
         const q = catalogSearch.trim().toLowerCase();
         if (!q) return true;
@@ -2824,7 +3049,7 @@ export default function MarketingDashboard({
     setCatalogSort('default');
   };
 
-  const productFormStages = productModal
+  const productFormStages = productModal?.form
     ? (productModal.form.stages || []).slice(0, productModal.form.terminCount === 2 ? 2 : 3)
     : [];
   const productFormPct = productFormStages.reduce((sum, stage) => sum + num(stage.pct), 0);
@@ -2838,7 +3063,7 @@ export default function MarketingDashboard({
         activeMenu={activeMenu}
         onNavigate={setActiveMenu}
         portalLabel="Admin Purchasing"
-        portalSub="AfatharShop · Katalog & Penjualan PO"
+        portalSub="Afatharshop · Katalog & Penjualan PO"
         currentUser={me}
         onLogout={onLogout}
         onNavigateStore={onNavigateStore}
@@ -2851,2957 +3076,304 @@ export default function MarketingDashboard({
       >
         {/* ============================= DASHBOARD ============================= */}
         {activeMenu === 'dashboard' && (
-          <>
-            <PageHead
-              title="Dashboard Purchasing"
-              desc={PAGE_DESC}
-              badge={<Badge tone="red">{roleLabel('marketing')}</Badge>}
-              actions={
-                <>
-                  <Button variant="outline" icon="download" onClick={exportProducts}>
-                    Rekap Produk
-                  </Button>
-                  <Button icon="plus" onClick={() => goTo('tambah_pesanan')}>
-                    Input Pesanan
-                  </Button>
-                </>
-              }
-            />
-
-            <div className="space-y-2">
-              <PoClosingReminder products={products} onAction={() => goTo('produk')} actionLabel="Kelola Katalog" />
-              <TerminDueReminder products={products} onAction={() => goTo('produk')} actionLabel="Kelola Termin" />
-            </div>
-
-            <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-              <MetricCard
-                label="Pesanan Masuk"
-                value={pendingAcc.length}
-                sub="Menunggu ACC purchasing"
-                tone="amber"
-                icon="clock"
-                badge={pendingAcc.length > 0 ? <Badge tone="amber">Perlu ACC</Badge> : null}
-                onClick={() => goTo('acc_pesanan')}
-              />
-              <MetricCard
-                label="Pesanan Aktif"
-                value={activeOrders.length}
-                sub={`${orders.length} total pesanan`}
-                tone="blue"
-                icon="box"
-                hint="Belum selesai / belum ditolak"
-              />
-              <MetricCard
-                label="Omzet PO"
-                value={rp(omzet)}
-                sub={`DP terkumpul ${rp(dpCollected)}`}
-                tone="emerald"
-                icon="wallet"
-                hint={`${sumBy(orders, (o) => o.qty)} pcs total checkout`}
-              />
-              <MetricCard
-                label="Mitra Aktif"
-                value={mitra.filter((m) => m.active).length}
-                sub={`${products.filter((p) => p.status === 'open').length} PO sedang dibuka`}
-                tone="violet"
-                icon="users"
-                hint="Mitra dengan akses checkout"
-              />
-            </div>
-
-            <div className="grid lg:grid-cols-3 gap-4">
-              <Card
-                title="Perlu Tindakan"
-                subtitle="Antrean yang menunggu admin purchasing"
-                className="lg:col-span-2"
-                action={<Badge tone="amber">{pendingAcc.length + marketingPR.length} item</Badge>}
-              >
-                <div className="divide-y divide-gray-100">
-                  <div className="p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-[11px] font-bold text-gray-800">Pesanan menunggu ACC</p>
-                      <button type="button" onClick={() => goTo('acc_pesanan')} className={`text-[10px] font-bold ${accent.text} hover:underline`}>
-                        Lihat semua
-                      </button>
-                    </div>
-                    {pendingAcc.slice(0, 4).map((o) => (
-                      <div key={o.invoice} className="flex items-center justify-between gap-2 py-2">
-                        <div className="min-w-0">
-                          <p className="text-[11px] font-semibold text-gray-900">
-                            {o.invoice} <span className="font-normal text-gray-500">· {o.mitraName}</span>
-                          </p>
-                          <p className="text-[10px] text-gray-400 truncate">
-                            {o.produk} {o.variant} · {o.qty} pcs · {rp(o.subtotal)}
-                          </p>
-                        </div>
-                        <Button size="xs" onClick={() => setDetailInvoice(o.invoice)}>
-                          Review
-                        </Button>
-                      </div>
-                    ))}
-                    {pendingAcc.length === 0 && (
-                      <p className="text-[11px] text-gray-400 py-2">Tidak ada pesanan menunggu ACC.</p>
-                    )}
-                  </div>
-                  <div className="p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-[11px] font-bold text-gray-800">Pengajuan pembayaran perlu review</p>
-                      <button type="button" onClick={() => goTo('pengajuan')} className={`text-[10px] font-bold ${accent.text} hover:underline`}>
-                        Lihat semua
-                      </button>
-                    </div>
-                    {marketingPR.slice(0, 3).map((r) => (
-                      <div key={r.id} className="flex items-center justify-between gap-2 py-2">
-                        <div className="min-w-0">
-                          <p className="text-[11px] font-semibold text-gray-900">
-                            {r.code} <span className="font-normal text-gray-500">· {r.purpose}</span>
-                          </p>
-                          <p className="text-[10px] text-gray-400">
-                            {rp(r.amount)} · diajukan {r.createdBy}
-                          </p>
-                        </div>
-                        <Button size="xs" variant="outline" onClick={() => { setPrDetailId(r.id); goTo('pengajuan'); }}>
-                          Review
-                        </Button>
-                      </div>
-                    ))}
-                    {marketingPR.length === 0 && (
-                      <p className="text-[11px] text-gray-400 py-2">Tidak ada pengajuan yang perlu direview.</p>
-                    )}
-                  </div>
-                </div>
-              </Card>
-
-              <Card title="Pipeline Pesanan" subtitle="Posisi seluruh pesanan saat ini">
-                <div className="p-4 space-y-2.5">
-                  {stageMetaStages.map((s) => {
-                    const count = stageCounts[s.id] || 0;
-                    return (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => {
-                          setStageFilter(s.id);
-                          goTo('pesanan');
-                        }}
-                        className="w-full flex items-center gap-2 group"
-                      >
-                        <span className="text-[10px] text-gray-500 w-24 text-left shrink-0">{s.label}</span>
-                        <span className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                          <span
-                            className={`block h-full rounded-full ${barTone[stageMeta(s.id).tone] || 'bg-gray-400'}`}
-                            style={{ width: `${Math.min(100, (count / Math.max(1, orders.length)) * 100)}%` }}
-                          />
-                        </span>
-                        <span className="text-[10px] font-bold text-gray-700 w-6 text-right">{count}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </Card>
-            </div>
-
-            <div className="grid lg:grid-cols-2 gap-4">
-              <Card
-                title="Rekap Checkout Teratas"
-                subtitle="Produk dengan kontribusi omzet terbesar"
-                action={
-                  <button type="button" onClick={() => goTo('rekap_produk')} className={`text-[10px] font-bold ${accent.text} hover:underline`}>
-                    Rekap lengkap
-                  </button>
-                }
-              >
-                <TableWrap fluid>
-                  <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>
-                      <th className={TH}>Produk</th>
-                      <th className={`${TH} text-right`}>Qty</th>
-                      <th className={`${TH} text-right`}>Omzet</th>
-                      <th className={`${TH} text-right hidden xl:table-cell`}>Sisa Kuota</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {productSummary
-                      .slice()
-                      .sort((a, b) => b.qtySold - a.qtySold)
-                      .slice(0, 5)
-                      .map((p) => (
-                        <tr key={p.id}>
-                          <td className={TD}>
-                            <p className="font-semibold text-gray-900">{p.title}</p>
-                            <p className="text-[10px] text-gray-400">
-                              {p.brand} · {p.invoiceCount} invoice
-                            </p>
-                          </td>
-                          <td className={`${TD} text-right font-semibold`}>{p.qtySold}</td>
-                          <td className={`${TD} text-right font-bold text-gray-900 whitespace-nowrap`}>{rp(p.omzet)}</td>
-                          <td className={`${TD} text-right hidden xl:table-cell`}>
-                            <Badge tone={p.remaining === 0 ? 'red' : p.remaining < 10 ? 'amber' : 'emerald'}>
-                              {p.remaining} pcs
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </TableWrap>
-              </Card>
-
-              <Card title="Katalog Segera Tutup" subtitle="PO yang berakhir dalam 10 hari">
-                <div className="divide-y divide-gray-100">
-                  {products
-                    .filter((p) => p.status === 'open')
-                    .sort((a, b) => String(a.closeDate).localeCompare(String(b.closeDate)))
-                    .slice(0, 5)
-                    .map((p) => {
-                      const d = diffDays(p.closeDate, todayISO());
-                      const used = sumBy(p.variants, (v) => v.used);
-                      const quota = sumBy(p.variants, (v) => v.quota);
-                      return (
-                        <div key={p.id} className="px-4 py-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <div>
-                              <p className="text-[11px] font-semibold text-gray-900">{p.title}</p>
-                              <p className="text-[10px] text-gray-400">
-                                {p.brand} · tutup {fmtDate(p.closeDate)}
-                              </p>
-                            </div>
-                            <Badge tone={d <= 0 ? 'red' : d <= 3 ? 'amber' : 'emerald'}>
-                              {d < 0 ? 'Ditutup' : d === 0 ? 'Hari ini' : `${d} hari`}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-2 mt-2">
-                            <ProgressBar value={used} max={quota || 1} tone={used / (quota || 1) > 0.85 ? 'red' : 'emerald'} className="flex-1" />
-                            <span className="text-[10px] text-gray-400">
-                              {used}/{quota} pcs
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  {products.filter((p) => p.status === 'open').length === 0 && (
-                    <EmptyState title="Tidak ada PO aktif" desc="Buka PO baru dari menu katalog produk." icon="box" />
-                  )}
-                </div>
-              </Card>
-            </div>
-
-            <Card
-              title="Pesanan Terbaru"
-              subtitle="6 pesanan terakhir dari tim & checkout mitra"
-              action={
-                <Button size="xs" variant="outline" onClick={() => goTo('pesanan')}>
-                  Semua pesanan
-                </Button>
-              }
-            >
-              <OrdersTable
-                orders={orders.slice().sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 6)}
-                onOpen={(o) => setDetailInvoice(o.invoice)}
-                renderActions={(o) => (
-                  <>
-                    {o.marketingStatus === MKT.PENDING ? (
-                      <Button size="xs" onClick={() => approveOrder(o)}>
-                        ACC
-                      </Button>
-                    ) : (
-                      <Button size="xs" variant="outline" onClick={() => setDetailInvoice(o.invoice)}>
-                        Detail
-                      </Button>
-                    )}
-                  </>
-                )}
-              />
-            </Card>
-          </>
+          <PurchasingOverviewTab
+            pageDesc={PAGE_DESC}
+            exportProducts={exportProducts}
+            goTo={goTo}
+            products={products}
+            pendingAcc={pendingAcc}
+            activeOrders={activeOrders}
+            orders={orders}
+            omzet={omzet}
+            dpCollected={dpCollected}
+            mitra={mitra}
+            marketingPR={marketingPR}
+            setDetailInvoice={setDetailInvoice}
+            setPrDetailId={setPrDetailId}
+            stageMetaStages={stageMetaStages}
+            stageCounts={stageCounts}
+            setStageFilter={setStageFilter}
+            barTone={barTone}
+            stageMeta={stageMeta}
+            productSummary={productSummary}
+            approveOrder={approveOrder}
+            accent={accent}
+          />
         )}
 
         {/* ========================== ACC PESANAN =========================== */}
         {activeMenu === 'acc_pesanan' && (
-          <>
-            <PageHead
-              title="ACC Pesanan Masuk"
-              desc="Pesanan dari tim maupun checkout mitra harus di-ACC sebelum mitra dapat membayar DP. Periksa varian, kuota, harga, dan catatan revisi."
-              badge={<Badge tone="amber">{pendingAcc.length} menunggu</Badge>}
-              actions={
-                <Button
-                  icon="check"
-                  disabled={accSelected.length === 0}
-                  onClick={approveMany}
-                >
-                  ACC terpilih ({accSelected.length})
-                </Button>
-              }
-            />
-
-            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-[11px] text-amber-900 flex items-start gap-2">
-              <Icon name="alert" className="w-4 h-4 mt-0.5 shrink-0" />
-              <p>
-                Menolak pesanan akan mengembalikan kuota varian. Setelah ACC, pesanan masuk tahap pembayaran DP dan
-                diproses oleh admin finance.
-              </p>
-            </div>
-
-            <Card
-              title={`Antrean Persetujuan (${filteredAcc.length})`}
-              action={
-                <SearchBox
-                  value={accSearch}
-                  onChange={setAccSearch}
-                  placeholder="Cari invoice / mitra / produk..."
-                  className="w-64"
-                />
-              }
-            >
-              <TableWrap fluid>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className="px-4 py-2.5 w-8">
-                      <input
-                        type="checkbox"
-                        aria-label="Pilih semua"
-                        checked={filteredAcc.length > 0 && filteredAcc.every((o) => accSelected.includes(o.invoice))}
-                        onChange={(e) =>
-                          setAccSelected(e.target.checked ? filteredAcc.map((o) => o.invoice) : [])
-                        }
-                        className="accent-[#6B1416]"
-                      />
-                    </th>
-                    <th className={TH}>Invoice / Tanggal</th>
-                    <th className={TH}>Mitra</th>
-                    <th className={TH}>Item & Varian</th>
-                    <th className={`${TH} text-right hidden xl:table-cell`}>Qty</th>
-                    <th className={`${TH} text-right`}>Nilai</th>
-                    <th className={`${TH} hidden xl:table-cell`}>Catatan</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredAcc.map((o) => (
-                    <tr key={o.invoice} className="hover:bg-gray-50/70">
-                      <td className="px-4 py-3">
-                        <input
-                          type="checkbox"
-                          aria-label={`Pilih ${o.invoice}`}
-                          checked={accSelected.includes(o.invoice)}
-                          onChange={(e) =>
-                            setAccSelected((prev) =>
-                              e.target.checked ? [...prev, o.invoice] : prev.filter((x) => x !== o.invoice)
-                            )
-                          }
-                          className="accent-[#6B1416]"
-                        />
-                      </td>
-                      <td className={TD}>
-                        <button
-                          type="button"
-                          onClick={() => setDetailInvoice(o.invoice)}
-                          className="font-bold text-sky-700 hover:underline whitespace-nowrap"
-                        >
-                          {o.invoice}
-                        </button>
-                        <p className="text-[10px] text-gray-400 mt-0.5">{fmtDate(o.date)}</p>
-                      </td>
-                      <td className={TD}>
-                        <p className="font-semibold text-gray-900">{o.mitraName}</p>
-                        <div className="mt-0.5 flex items-center gap-1">
-                          <Badge tone={levelTone(o.level)}>{o.level}</Badge>
-                          <span className="text-[10px] text-gray-400">{o.phone}</span>
-                        </div>
-                      </td>
-                      <td className={TD}>
-                        <p className="font-medium text-gray-800">{o.produk}</p>
-                        <p className="text-[10px] text-gray-400">
-                          {o.variant} · {o.brand}
-                        </p>
-                        {o.revisionNote && (
-                          <span className="inline-flex mt-1">
-                            <Badge tone="amber">Revisi</Badge>
-                          </span>
-                        )}
-                      </td>
-                      <td className={`${TD} text-right font-semibold hidden xl:table-cell`}>{o.qty}</td>
-                      <td className={`${TD} text-right whitespace-nowrap`}>
-                        <p className="font-bold text-gray-900">{rp(o.subtotal)}</p>
-                        <p className="text-[10px] text-gray-400">DP {rp(o.dpNominal)}</p>
-                      </td>
-                      <td className={`${TD} max-w-[180px] hidden xl:table-cell`}>
-                        {o.revisionNote ? (
-                          <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 leading-snug">
-                            {o.revisionNote}
-                          </p>
-                        ) : (
-                          <p className="text-[10px] text-gray-400">{o.notes || '—'}</p>
-                        )}
-                      </td>
-                      <td className={`${TD} text-right`}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Button size="xs" variant="outline" onClick={() => setDetailInvoice(o.invoice)}>
-                            Detail
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="dangerOutline"
-                            onClick={() =>
-                              setReasonModal({
-                                title: 'Tolak pesanan',
-                                subtitle: `${o.invoice} · ${o.mitraName}`,
-                                label: 'Alasan penolakan',
-                                placeholder: 'Contoh: kuota varian habis / harga tidak sesuai',
-                                confirmLabel: 'Tolak pesanan',
-                                danger: true,
-                                onSubmit: (reason) => {
-                                  rejectOrder(o, reason);
-                                  setReasonModal(null);
-                                }
-                              })
-                            }
-                          >
-                            Tolak
-                          </Button>
-                          <Button size="xs" onClick={() => approveOrder(o)}>
-                            ACC
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {filteredAcc.length === 0 && (
-                    <tr>
-                      <td colSpan={8}>
-                        <EmptyState
-                          title="Tidak ada pesanan menunggu ACC"
-                          desc="Semua pesanan masuk sudah diproses. Antrean baru akan muncul di sini."
-                          icon="check"
-                        />
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </TableWrap>
-            </Card>
-          </>
+          <PurchasingAccOrdersTab
+            pendingAcc={pendingAcc}
+            accSelected={accSelected}
+            setAccSelected={setAccSelected}
+            approveMany={approveMany}
+            filteredAcc={filteredAcc}
+            accSearch={accSearch}
+            setAccSearch={setAccSearch}
+            setDetailInvoice={setDetailInvoice}
+            setReasonModal={setReasonModal}
+            rejectOrder={rejectOrder}
+            approveOrder={approveOrder}
+          />
         )}
 
         {/* ============================ LIST PESANAN ========================= */}
         {activeMenu === 'pesanan' && (
-          <>
-            <PageHead
-              title="List Pesanan PO"
-              desc="Pantau seluruh pesanan lintas tahap. Purchasing mengelola ACC pesanan, update produksi, dan notifikasi Ready."
-              badge={<Badge tone="gray">{filteredOrders.length} pesanan</Badge>}
-              actions={
-                <>
-                  <Button variant="outline" icon="download" onClick={exportOrders}>
-                    Ekspor CSV
-                  </Button>
-                  <Button icon="plus" onClick={() => goTo('tambah_pesanan')}>
-                    Input Pesanan
-                  </Button>
-                </>
-              }
-            />
-
-            <StageTabs orders={orders} value={stageFilter} onChange={setStageFilter} />
-
-            <Card>
-              <div className="p-3.5 border-b border-gray-100 flex flex-wrap items-center gap-2">
-                <SearchBox
-                  value={listSearch}
-                  onChange={setListSearch}
-                  placeholder="Cari invoice, mitra, produk..."
-                  className="w-full sm:w-64"
-                />
-                <Select value={listBrand} onChange={(e) => setListBrand(e.target.value)} className="w-auto">
-                  <option value="all">Semua Brand</option>
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.name}>
-                      {b.name}
-                    </option>
-                  ))}
-                </Select>
-                <Select value={listLevel} onChange={(e) => setListLevel(e.target.value)} className="w-auto">
-                  <option value="all">Semua Level</option>
-                  {LEVELS.map((l) => (
-                    <option key={l} value={l}>
-                      {l}
-                    </option>
-                  ))}
-                </Select>
-                <span className="text-[11px] text-gray-400 ml-auto">
-                  {listPag.total} data ditemukan
-                </span>
-              </div>
-
-              <OrdersTable
-                orders={listPag.rows}
-                onOpen={(o) => setDetailInvoice(o.invoice)}
-                renderActions={(o) => {
-                  const st = orderStage(o);
-                  return (
-                    <>
-                      {o.marketingStatus === MKT.PENDING && (
-                        <>
-                          <Button size="xs" onClick={() => approveOrder(o)}>
-                            ACC
-                          </Button>
-                          <Button size="xs" variant="dangerOutline" onClick={() => {
-                            setReasonModal({
-                              title: 'Tolak pesanan',
-                              subtitle: `${o.invoice} · ${o.mitraName}`,
-                              label: 'Alasan penolakan',
-                              confirmLabel: 'Tolak pesanan',
-                              danger: true,
-                              onSubmit: (reason) => {
-                                rejectOrder(o, reason);
-                                setReasonModal(null);
-                              }
-                            });
-                          }}>
-                            Tolak
-                          </Button>
-                        </>
-                      )}
-                      {o.marketingStatus === MKT.TOLAK && (
-                        <Button size="xs" variant="outline" onClick={() => reopenOrder(o)}>
-                          Buka lagi
-                        </Button>
-                      )}
-                      {o.marketingStatus !== MKT.TOLAK && st === 'produksi' && (
-                        <Button
-                          size="xs"
-                          variant="soft"
-                          onClick={() =>
-                            setProduction(o, o.productionStatus === PROD.QUEUE ? PROD.RUN : PROD.READY)
-                          }
-                        >
-                          {o.productionStatus === PROD.QUEUE ? 'Mulai Produksi' : 'Set Ready'}
-                        </Button>
-                      )}
-                      {st === 'alamat' && (
-                        <Button size="xs" variant="outline" icon="chat" onClick={() => openWA(o, 'ready')}>
-                          Notif Ready
-                        </Button>
-                      )}
-                      <Button size="xs" variant="outline" onClick={() => setDetailInvoice(o.invoice)}>
-                        Detail
-                      </Button>
-                      <button
-                        type="button"
-                        onClick={() => askDelete(o)}
-                        className="p-1.5 rounded-md text-gray-400 hover:text-rose-600 hover:bg-rose-50"
-                        title="Hapus pesanan"
-                      >
-                        <Icon name="trash" className="w-3.5 h-3.5" />
-                      </button>
-                    </>
-                  );
-                }}
-              />
-              <Pagination
-                page={listPag.page}
-                pageSize={listPag.pageSize}
-                total={listPag.total}
-                onPageChange={listPag.setPage}
-                onPageSizeChange={listPag.setPageSize}
-              />
-            </Card>
-          </>
+          <PurchasingOrdersTab
+            filteredOrders={filteredOrders}
+            exportOrders={exportOrders}
+            goTo={goTo}
+            orders={orders}
+            stageFilter={stageFilter}
+            setStageFilter={setStageFilter}
+            listSearch={listSearch}
+            setListSearch={setListSearch}
+            listBrand={listBrand}
+            setListBrand={setListBrand}
+            brands={brands}
+            listLevel={listLevel}
+            setListLevel={setListLevel}
+            levels={LEVELS}
+            listPag={listPag}
+            setDetailInvoice={setDetailInvoice}
+            approveOrder={approveOrder}
+            setReasonModal={setReasonModal}
+            rejectOrder={rejectOrder}
+            reopenOrder={reopenOrder}
+            setProduction={setProduction}
+            openWA={openWA}
+            askDelete={askDelete}
+          />
         )}
 
         {/* =========================== TAMBAH PESANAN ======================= */}
         {activeMenu === 'tambah_pesanan' && (
-          <>
-            <PageHead
-              title="Input Pesanan Manual"
-              desc="Buat invoice atas nama mitra. Harga dan diskon dihitung otomatis berdasarkan brand dan level mitra."
-              badge={<Badge tone="gray">Admin Purchasing</Badge>}
-            />
-
-            <div className="grid lg:grid-cols-3 gap-4 items-start">
-              <Card title="Form Pesanan" className="lg:col-span-2">
-                <div className="p-4 sm:p-5 grid sm:grid-cols-2 gap-3">
-                  <Field label="Mitra" required className="sm:col-span-2">
-                    <Select
-                      value={draft.mitraId}
-                      onChange={(e) => setDraft({ ...draft, mitraId: e.target.value })}
-                    >
-                      <option value="">— Pilih mitra —</option>
-                      {mitra
-                        .filter((m) => m.active)
-                        .map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name} · {m.level} · {m.city}
-                          </option>
-                        ))}
-                    </Select>
-                  </Field>
-
-                  <Field label="Brand" required>
-                    <Select
-                      value={draftPreview.brand?.name || ''}
-                      onChange={(e) => {
-                        const b = brands.find((x) => x.name === e.target.value);
-                        const first = products.find((p) => p.brand === b?.name);
-                        setDraft({
-                          ...draft,
-                          produkId: first?.id || '',
-                          variantId: '',
-                          dpPct: dpPercentFor(first, draft.dpPct)
-                        });
-                      }}
-                    >
-                      <option value="">— Pilih brand —</option>
-                      {brands.map((b) => (
-                        <option key={b.id} value={b.name}>
-                          {b.name}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-
-                  <Field label="Produk PO" required>
-                    <Select
-                      value={draft.produkId}
-                      onChange={(e) => {
-                        const product = products.find((x) => x.id === e.target.value);
-                        setDraft({
-                          ...draft,
-                          produkId: e.target.value,
-                          variantId: '',
-                          dpPct: dpPercentFor(product, draft.dpPct)
-                        });
-                      }}
-                      disabled={!draftPreview.brand}
-                    >
-                      <option value="">— Pilih produk —</option>
-                      {products
-                        .filter((p) => p.brand === draftPreview.brand?.name)
-                        .map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.title} {p.status === 'closed' ? '(PO tutup)' : ''}
-                          </option>
-                        ))}
-                    </Select>
-                  </Field>
-
-                  <Field label="Varian" required className="sm:col-span-2">
-                    <Select
-                      value={draft.variantId}
-                      onChange={(e) => setDraft({ ...draft, variantId: e.target.value })}
-                      disabled={!draft.produkId}
-                    >
-                      <option value="">— Pilih varian —</option>
-                      {(draftPreview.product?.variants || []).map((v) => {
-                        const remaining = num(v.quota) - num(v.used);
-                        return (
-                          <option key={v.id} value={v.id} disabled={remaining <= 0}>
-                            {variantLabel(v)} · sisa {remaining} pcs
-                            {remaining <= 0 ? ' (habis)' : ''}
-                          </option>
-                        );
-                      })}
-                    </Select>
-                  </Field>
-
-                  <Field label="Qty (pcs)" required>
-                    <Input
-                      type="number"
-                      min={1}
-                      value={draft.qty}
-                      onChange={(e) => setDraft({ ...draft, qty: e.target.value })}
-                    />
-                  </Field>
-
-                  <Field label="DP (%)" hint="Default mengikuti konfigurasi bisnis">
-                    <Input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={draft.dpPct}
-                      onChange={(e) => setDraft({ ...draft, dpPct: e.target.value })}
-                    />
-                  </Field>
-
-                  <Field label="Catatan untuk gudang / mitra" className="sm:col-span-2">
-                    <Textarea
-                      rows={2}
-                      value={draft.notes}
-                      placeholder="Opsional — mis. minta dikirim setelah tanggal tertentu"
-                      onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-                    />
-                  </Field>
-
-                  <div className="sm:col-span-2 flex justify-end">
-                    <Button icon="plus" onClick={addDraft} disabled={!draft.mitraId || !draft.variantId}>
-                      Tambah ke Daftar
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-
-              <div className="space-y-4">
-                <Card title="Ringkasan Perhitungan">
-                  <div className="p-4 space-y-2 text-[11px]">
-                    {draftPreview.mitra ? (
-                      <>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Mitra / Level</span>
-                          <span className="font-semibold text-gray-800">
-                            {draftPreview.mitra.name} · {draftPreview.mitra.level}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Fee mitra / pcs</span>
-                          <span className="font-semibold text-gray-800">
-                            {draftPreview.disc}% · {rp(draftPreview.feeNominal)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Harga satuan</span>
-                          <span className="font-semibold text-gray-800">{rp(draftPreview.pricing.price)}</span>
-                        </div>
-                        <div className="border-t border-dashed border-gray-200 my-2" />
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Bruto</span>
-                          <span className="text-gray-800">{rp(draftPreview.amounts.gross)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-500">Fee mitra dipotong</span>
-                          <span className="text-rose-600">-{rp(draftPreview.amounts.feeMitraNominal)}</span>
-                        </div>
-                        <div className="flex justify-between font-bold text-gray-900">
-                          <span>Subtotal</span>
-                          <span>{rp(draftPreview.amounts.subtotal)}</span>
-                        </div>
-                        <div className="flex justify-between text-emerald-700">
-                          <span>Diskon brand (pabrik)</span>
-                          <span>{rp(draftPreview.amounts.brandDiscountNominal)}</span>
-                        </div>
-                        <div className="flex justify-between text-emerald-700">
-                          <span>Fee perusahaan</span>
-                          <span>{rp(draftPreview.amounts.feeCompanyNominal)}</span>
-                        </div>
-                        <div className="flex justify-between text-gray-600">
-                          <span>DP ({draft.dpPct}%)</span>
-                          <span>{rp(draftPreview.amounts.dpNominal)}</span>
-                        </div>
-                        <div className="flex justify-between text-gray-600">
-                          <span>Pelunasan</span>
-                          <span>{rp(draftPreview.amounts.pelunasanNominal)}</span>
-                        </div>
-                        {draftPreview.variant && (
-                          <div className="mt-2 bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-2 text-[10px] text-gray-500">
-                            Sisa kuota varian ini:{' '}
-                            <b className="text-gray-800">
-                              {num(draftPreview.variant.quota) - num(draftPreview.variant.used)} pcs
-                            </b>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <p className="text-gray-400">Pilih mitra & varian untuk melihat perhitungan.</p>
-                    )}
-                  </div>
-                </Card>
-
-                <Card title="Daftar Pesanan" subtitle={`${draftList.length} item siap diterbitkan`}>
-                  <div className="divide-y divide-gray-100">
-                    {draftList.map((item) => {
-                      const p = products.find((x) => x.id === item.produkId);
-                      const m = mitra.find((x) => x.id === item.mitraId);
-                      const v = p?.variants.find((x) => x.id === item.variantId);
-                      return (
-                        <div key={item.key} className="px-3.5 py-2.5 flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="text-[11px] font-semibold text-gray-900">
-                              {m?.name} · {p?.title}
-                            </p>
-                            <p className="text-[10px] text-gray-400">
-                              {variantLabel(v)} · {item.qty} pcs · DP {item.dpPct}%
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setDraftList((prev) => prev.filter((x) => x.key !== item.key))}
-                            className="p-1 text-gray-400 hover:text-rose-600"
-                          >
-                            <Icon name="x" className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                    {draftList.length === 0 && (
-                      <p className="px-3.5 py-6 text-center text-[11px] text-gray-400">
-                        Belum ada item. Tambahkan dari form di samping.
-                      </p>
-                    )}
-                  </div>
-                  <div className="p-3.5 border-t border-gray-100">
-                    <Button className="w-full" disabled={!draftList.length} onClick={submitDrafts}>
-                      Terbitkan {draftList.length || ''} Pesanan
-                    </Button>
-                  </div>
-                </Card>
-              </div>
-            </div>
-          </>
+          <PurchasingManualOrderTab
+            draft={draft}
+            setDraft={setDraft}
+            mitra={mitra}
+            draftPreview={draftPreview}
+            brands={brands}
+            products={products}
+            addDraft={addDraft}
+            draftList={draftList}
+            setDraftList={setDraftList}
+            submitDrafts={submitDrafts}
+          />
         )}
 
         {/* =========================== REKAP CHECKOUT ======================= */}
         {activeMenu === 'rekap_produk' && (
-          <>
-            <PageHead
-              title="Rekap Checkout per Produk"
-              desc="Akumulasi pesanan mitra per produk dan varian: qty checkout, omzet, piutang, serta pemakaian kuota."
-              badge={<Badge tone="gray">{productFiltered.length} produk</Badge>}
-              actions={
-                <Button variant="outline" icon="download" onClick={exportProducts}>
-                  Ekspor CSV
-                </Button>
-              }
-            />
-
-            <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-              <MetricCard
-                label="Total Qty Checkout"
-                value={`${sumBy(productFiltered, (p) => p.qtySold)} pcs`}
-                sub={`${sumBy(productFiltered, (p) => p.invoiceCount)} invoice`}
-                tone="violet"
-                icon="box"
-              />
-              <MetricCard
-                label="Omzet Checkout"
-                value={rp(sumBy(productFiltered, (p) => p.omzet))}
-                sub="Setelah diskon level mitra"
-                tone="emerald"
-                icon="wallet"
-              />
-              <MetricCard
-                label="Piutang Berjalan"
-                value={rp(sumBy(productFiltered, (p) => p.piutang))}
-                sub="Belum dibayar / belum diverifikasi"
-                tone="red"
-                icon="receipt"
-              />
-              <MetricCard
-                label="Varian Hampir Habis"
-                value={productFiltered.reduce(
-                  (n, p) =>
-                    n +
-                    p.variants.filter(
-                      (v) => num(v.used) > 0 && num(v.quota) - num(v.used) <= 10
-                    ).length,
-                  0
-                )}
-                sub="Sisa kuota ≤ 10 pcs pada varian yang sudah ada pesanan"
-                tone="amber"
-                icon="alert"
-              />
-            </div>
-
-            <Card
-              title="Rekap per Produk"
-              action={
-                <Select value={rekapBrand} onChange={(e) => setRekapBrand(e.target.value)} className="w-auto">
-                  <option value="all">Semua Brand</option>
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.name}>
-                      {b.name}
-                    </option>
-                  ))}
-                </Select>
-              }
-            >
-              <TableWrap minWidth={980}>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Produk</th>
-                    <th className={`${TH} text-right`}>Harga</th>
-                    <th className={`${TH} text-right`}>Invoice</th>
-                    <th className={`${TH} text-right`}>Qty</th>
-                    <th className={`${TH} text-right`}>Omzet</th>
-                    <th className={`${TH} text-right`}>Piutang</th>
-                    <th className={TH}>Kuota</th>
-                    <th className={TH}>Status PO</th>
-                    <th className={`${TH} text-right`}>Detail</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {productFiltered.map((p) => {
-                    const d = diffDays(p.closeDate, todayISO());
-                    return (
-                      <React.Fragment key={p.id}>
-                        <tr className="hover:bg-gray-50/70">
-                          <td className={TD}>
-                            <p className="font-bold text-gray-900">{p.title}</p>
-                            <p className="text-[10px] text-gray-400">
-                              {p.brand} · {p.category}
-                            </p>
-                          </td>
-                          <td className={`${TD} text-right`}>{priceRangeOf(p).label}</td>
-                          <td className={`${TD} text-right`}>{p.invoiceCount}</td>
-                          <td className={`${TD} text-right font-semibold`}>{p.qtySold} pcs</td>
-                          <td className={`${TD} text-right font-bold text-gray-900`}>{rp(p.omzet)}</td>
-                          <td className={`${TD} text-right ${p.piutang > 0 ? 'text-rose-600 font-semibold' : 'text-gray-400'}`}>
-                            {rp(p.piutang)}
-                          </td>
-                          <td className={TD}>
-                            <div className="w-28">
-                              <ProgressBar
-                                value={p.used}
-                                max={p.quota || 1}
-                                tone={p.quota - p.used <= 10 ? 'red' : 'emerald'}
-                              />
-                              <p className="text-[10px] text-gray-400 mt-1">
-                                {p.used}/{p.quota} pcs · sisa {p.remaining}
-                              </p>
-                            </div>
-                          </td>
-                          <td className={TD}>
-                            <Badge tone={p.status === 'open' ? (d <= 3 ? 'amber' : 'emerald') : 'gray'}>
-                              {p.status === 'open' ? (d < 0 ? 'Lewat tenggat' : `${d} hari lagi`) : 'Ditutup'}
-                            </Badge>
-                          </td>
-                          <td className={`${TD} text-right`}>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setExpandedProducts((prev) => ({ ...prev, [p.id]: !prev[p.id] }))
-                              }
-                              className="text-[11px] font-semibold text-sky-700 hover:underline"
-                            >
-                              {expandedProducts[p.id] ? 'Tutup' : 'Varian'}
-                            </button>
-                          </td>
-                        </tr>
-                        {expandedProducts[p.id] && (
-                          <tr className="bg-gray-50/60">
-                            <td colSpan={9} className="px-4 py-3">
-                              <div className="rounded-lg border border-gray-200 overflow-hidden bg-white">
-                                <TableWrap>
-                                  <thead className="bg-white border-b border-gray-100">
-                                    <tr>
-                                      <th className={TH}>Warna</th>
-                                      <th className={TH}>Model</th>
-                                      <th className={TH}>Ukuran</th>
-                                      <th className={`${TH} text-right`}>Kuota</th>
-                                      <th className={`${TH} text-right`}>Terpakai</th>
-                                      <th className={`${TH} text-right`}>Sisa</th>
-                                      <th className={TH}>Pemakaian</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-gray-50">
-                                    {p.variants.map((v) => {
-                                      const rem = num(v.quota) - num(v.used);
-                                      return (
-                                        <tr key={v.id}>
-                                          <td className={TD}>{v.color}</td>
-                                          <td className={TD}>{v.model}</td>
-                                          <td className={TD}>{v.size}</td>
-                                          <td className={`${TD} text-right`}>{v.quota}</td>
-                                          <td className={`${TD} text-right`}>{v.used}</td>
-                                          <td className={`${TD} text-right font-semibold ${rem <= 0 ? 'text-rose-600' : ''}`}>
-                                            {rem}
-                                          </td>
-                                          <td className={TD}>
-                                            <ProgressBar
-                                              value={v.used}
-                                              max={v.quota || 1}
-                                              tone={rem <= 0 ? 'red' : rem <= 10 ? 'amber' : 'emerald'}
-                                              className="w-32"
-                                            />
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </TableWrap>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-              </TableWrap>
-              {productFiltered.length === 0 && <EmptyState title="Belum ada produk" icon="box" />}
-            </Card>
-          </>
+          <PurchasingProductSummaryTab
+            productFiltered={productFiltered}
+            exportProducts={exportProducts}
+            rekapBrand={rekapBrand}
+            setRekapBrand={setRekapBrand}
+            brands={brands}
+            priceRangeOf={priceRangeOf}
+            expandedProducts={expandedProducts}
+            setExpandedProducts={setExpandedProducts}
+          />
         )}
 
         {/* ============================== KATALOG =========================== */}
         {activeMenu === 'produk' && (
-          <>
-            <PageHead
-              title="Katalog Produk PO"
-              desc="Upload katalog, atur harga jual, kuota varian, dan periode PO. Katalog yang dibuka otomatis tampil di toko mitra."
-              badge={<Badge tone="emerald">{products.filter((p) => p.status === 'open').length} PO aktif</Badge>}
-              actions={
-                <Button icon="plus" onClick={() => setProductModal({ mode: 'create', form: { ...blankProduct } })}>
-                  Produk Baru
-                </Button>
-              }
-            />
-
-            {/* Filter Bar Katalog Produk PO yang Rapi & Terstruktur */}
-            <div className="bg-white rounded-xl border border-gray-200/90 shadow-2xs p-3.5 sm:p-4 space-y-3">
-              {/* Baris 1: Status PO Tabs & Ringkasan Counter */}
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-gray-100">
-                <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
-                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider shrink-0 mr-1">
-                    Status PO:
-                  </span>
-                  <Segmented
-                    value={catalogStatus}
-                    onChange={setCatalogStatus}
-                    options={[
-                      { value: 'all', label: 'Semua', count: catalogCounts.all },
-                      { value: 'open', label: 'PO Dibuka', count: catalogCounts.open },
-                      { value: 'closing', label: 'Tutup Hari Ini', count: catalogCounts.closing },
-                      { value: 'closed', label: 'Arsip / Ditutup', count: catalogCounts.closed }
-                    ]}
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 self-start md:self-auto shrink-0">
-                  <Badge tone={catalogFiltered.length > 0 ? 'emerald' : 'gray'}>
-                    {catalogFiltered.length} produk tampil
-                  </Badge>
-                  {isCatalogFilterActive && (
-                    <button
-                      type="button"
-                      onClick={handleResetCatalogFilter}
-                      className="text-xs font-semibold text-rose-600 hover:text-rose-700 hover:underline flex items-center gap-1 transition cursor-pointer px-1.5 py-0.5 rounded"
-                      title="Reset semua filter"
-                    >
-                      <Icon name="x" className="w-3.5 h-3.5" />
-                      Reset Filter
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Baris 2: Toolbar Pencarian & Dropdown Filter (Brand, Kategori, Urutkan) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 items-center">
-                {/* Search Box */}
-                <div className="lg:col-span-5">
-                  <SearchBox
-                    value={catalogSearch}
-                    onChange={setCatalogSearch}
-                    placeholder="Cari nama produk, brand, kategori, SKU…"
-                    className="w-full"
-                  />
-                </div>
-
-                {/* Filter Brand */}
-                <div className="lg:col-span-3">
-                  <Select
-                    value={catalogBrand}
-                    onChange={(e) => setCatalogBrand(e.target.value)}
-                    className="w-full text-xs"
-                  >
-                    <option value="all">Semua Brand Vendor</option>
-                    {brands.map((b) => (
-                      <option key={b.id} value={b.name}>
-                        Brand: {b.name}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-
-                {/* Filter Kategori */}
-                <div className="lg:col-span-2">
-                  <Select
-                    value={catalogCategory}
-                    onChange={(e) => setCatalogCategory(e.target.value)}
-                    className="w-full text-xs"
-                  >
-                    <option value="all">Semua Kategori</option>
-                    {catalogCategories.map((c) => (
-                      <option key={c} value={c}>
-                        Kategori: {c}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-
-                {/* Urutkan / Sortir */}
-                <div className="lg:col-span-2">
-                  <Select
-                    value={catalogSort}
-                    onChange={(e) => setCatalogSort(e.target.value)}
-                    className="w-full text-xs"
-                  >
-                    <option value="default">Urutan: Default</option>
-                    <option value="close_asc">Tutup PO Terdekat</option>
-                    <option value="sales_desc">Terlaris (Kuota)</option>
-                    <option value="price_asc">Harga Terendah</option>
-                    <option value="price_desc">Harga Tertinggi</option>
-                  </Select>
-                </div>
-              </div>
-
-              {/* Baris 3: Active Filter Chips */}
-              {isCatalogFilterActive && (
-                <div className="flex items-center gap-1.5 flex-wrap pt-1 text-[11px] text-gray-500">
-                  <span className="font-semibold text-gray-400">Filter Aktif:</span>
-                  {catalogStatus !== 'all' && (
-                    <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 px-2 py-0.5 rounded-md font-medium">
-                      Status: {catalogStatus === 'open' ? 'PO Dibuka' : catalogStatus === 'closing' ? 'Tutup Hari Ini' : 'Arsip'}
-                      <button onClick={() => setCatalogStatus('all')} className="hover:text-rose-600 font-bold ml-0.5">×</button>
-                    </span>
-                  )}
-                  {catalogBrand !== 'all' && (
-                    <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200/80 px-2 py-0.5 rounded-md font-medium">
-                      Brand: {catalogBrand}
-                      <button onClick={() => setCatalogBrand('all')} className="hover:text-rose-600 font-bold ml-0.5">×</button>
-                    </span>
-                  )}
-                  {catalogCategory !== 'all' && (
-                    <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-800 border border-blue-200/80 px-2 py-0.5 rounded-md font-medium">
-                      Kategori: {catalogCategory}
-                      <button onClick={() => setCatalogCategory('all')} className="hover:text-rose-600 font-bold ml-0.5">×</button>
-                    </span>
-                  )}
-                  {catalogSearch.trim() && (
-                    <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-800 border border-rose-200/80 px-2 py-0.5 rounded-md font-medium">
-                      Pencarian: "{catalogSearch.trim()}"
-                      <button onClick={() => setCatalogSearch('')} className="hover:text-rose-600 font-bold ml-0.5">×</button>
-                    </span>
-                  )}
-                  {catalogSort !== 'default' && (
-                    <span className="inline-flex items-center gap-1 bg-stone-100 text-stone-700 px-2 py-0.5 rounded-md font-medium">
-                      Urut: {catalogSort === 'close_asc' ? 'Tutup Terdekat' : catalogSort === 'sales_desc' ? 'Terlaris' : catalogSort === 'price_asc' ? 'Harga Terendah' : 'Harga Tertinggi'}
-                      <button onClick={() => setCatalogSort('default')} className="hover:text-rose-600 font-bold ml-0.5">×</button>
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {catalogFiltered.map((p) => {
-                const d = diffDays(p.closeDate, todayISO());
-                const used = p.used;
-                const quota = p.quota;
-                return (
-                  <div key={p.id} className="bg-white rounded-xl border border-gray-200 shadow-xs overflow-hidden flex flex-col">
-                    <div className="h-28 bg-gradient-to-br from-rose-900 via-rose-800 to-amber-700 relative flex items-end p-4 overflow-hidden">
-                      {p.image ? (
-                        <img src={p.image} alt={p.title} className="absolute inset-0 w-full h-full object-cover opacity-60 hover:scale-105 transition duration-300" />
-                      ) : (
-                        <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(circle at 20% 30%, #fff 1px, transparent 1px)', backgroundSize: '18px 18px' }} />
-                      )}
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
-                      <div className="relative z-10">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-amber-200 drop-shadow-sm">{p.brand}</p>
-                        <h3 className="text-base font-bold text-white leading-tight drop-shadow-md">{p.title}</h3>
-                      </div>
-                      <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5">
-                        {p.isSale && (
-                          <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-sm">
-                            SALE {p.discountPercent || 0}%
-                          </span>
-                        )}
-                        <Badge tone={p.status === 'open' ? 'emerald' : 'gray'}>
-                          {p.status === 'open' ? 'PO Dibuka' : 'PO Ditutup'}
-                        </Badge>
-                      </div>
-                    </div>
-
-                    <div className="p-4 flex-1 space-y-3">
-                      <div className="flex items-end justify-between">
-                        <div>
-                          <p className="text-[10px] text-gray-400 uppercase font-semibold">Harga Varian</p>
-                          <div className="flex items-baseline gap-1.5 flex-wrap">
-                            <p className="text-lg font-bold text-gray-900">{priceRangeOf(p).label}</p>
-                            {p.isSale && p.originalPrice > p.price && (
-                              <span className="text-xs text-gray-400 line-through">
-                                {rp(p.originalPrice)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-right space-y-0.5">
-                          {p.openDate && (
-                            <>
-                              <p className="text-[10px] text-gray-400 uppercase font-semibold">Buka PO</p>
-                              <p className="text-[11px] font-semibold text-gray-700">{fmtDate(p.openDate)}</p>
-                            </>
-                          )}
-                          <p className="text-[10px] text-gray-400 uppercase font-semibold">Tutup PO</p>
-                          <p className={`text-[11px] font-bold ${d < 0 ? 'text-rose-600' : d <= 3 ? 'text-amber-600' : 'text-gray-700'}`}>
-                            {fmtDate(p.closeDate)}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div>
-                        <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
-                          <span>Kuota terjual</span>
-                          <span className="font-semibold text-gray-600">
-                            {used}/{quota} pcs
-                          </span>
-                        </div>
-                        <ProgressBar value={used} max={quota || 1} tone={quota - used <= 10 ? 'red' : 'emerald'} />
-                      </div>
-
-                      <div className="space-y-1">
-                        {p.variants.slice(0, 3).map((v) => {
-                          const { price: vPrice, addon: vAddon } = variantPricing(p, v);
-                          const left = num(v.quota) - num(v.used);
-                          return (
-                            <div key={v.id} className="flex items-center justify-between gap-2 text-[10px]">
-                              <span className="text-gray-600 truncate">{variantLabel(v)}</span>
-                              <span className="shrink-0 flex items-center gap-1.5">
-                                <span className="text-gray-800 font-semibold">{rp(vPrice)}</span>
-                                {vAddon > 0 && <span className="text-amber-700 font-semibold">+{rp(vAddon)}</span>}
-                                <span className={left <= 0 ? 'text-rose-600 font-semibold' : 'text-gray-400'}>
-                                  sisa {left}
-                                </span>
-                              </span>
-                            </div>
-                          );
-                        })}
-                        {p.variants.length > 3 && (
-                          <p className="text-[10px] text-gray-400">+{p.variants.length - 3} varian lain</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="px-4 py-3 border-t border-gray-100 flex items-center gap-1.5 flex-wrap">
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => openEditProduct(p)}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => openVariantModal(p)}
-                      >
-                        Varian ({p.variants.length})
-                      </Button>
-                      <Button size="xs" variant="outline" icon="receipt" onClick={() => setProductOrderId(p.id)}>
-                        Orderan ({p.invoiceCount})
-                      </Button>
-                      <Button size="xs" variant={p.status === 'open' ? 'dangerOutline' : 'primary'} onClick={() => toggleProductStatus(p)}>
-                        {p.status === 'open' ? 'Tutup PO' : 'Buka PO'}
-                      </Button>
-                      <button
-                        type="button"
-                        onClick={() => deleteProduct(p)}
-                        className="ml-auto p-1.5 rounded-md text-gray-400 hover:text-rose-600 hover:bg-rose-50"
-                        title="Hapus produk"
-                      >
-                        <Icon name="trash" className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {catalogFiltered.length === 0 && (
-              <Card>
-                <EmptyState
-                  title={products.length === 0 ? 'Belum ada produk' : 'Tidak ada produk yang cocok'}
-                  desc={
-                    products.length === 0
-                      ? 'Tambahkan produk baru untuk membuka PO.'
-                      : 'Ubah kata kunci pencarian atau filter status PO.'
-                  }
-                  icon="box"
-                  action={
-                    products.length === 0 ? (
-                      <Button onClick={() => setProductModal({ mode: 'create', form: { ...blankProduct } })}>Produk Baru</Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        onClick={handleResetCatalogFilter}
-                      >
-                        Reset Filter
-                      </Button>
-                    )
-                  }
-                />
-              </Card>
-            )}
-          </>
+          <PurchasingCatalogTab
+            products={products}
+            setProductModal={setProductModal}
+            blankProduct={blankProduct}
+            catalogStatus={catalogStatus}
+            setCatalogStatus={setCatalogStatus}
+            catalogCounts={catalogCounts}
+            catalogFiltered={catalogFiltered}
+            isCatalogFilterActive={isCatalogFilterActive}
+            handleResetCatalogFilter={handleResetCatalogFilter}
+            catalogSearch={catalogSearch}
+            setCatalogSearch={setCatalogSearch}
+            catalogBrand={catalogBrand}
+            setCatalogBrand={setCatalogBrand}
+            brands={brands}
+            catalogCategory={catalogCategory}
+            setCatalogCategory={setCatalogCategory}
+            catalogCategories={catalogCategories}
+            catalogSort={catalogSort}
+            setCatalogSort={setCatalogSort}
+            priceRangeOf={priceRangeOf}
+            openEditProduct={openEditProduct}
+            openVariantModal={openVariantModal}
+            setProductOrderId={setProductOrderId}
+            toggleProductStatus={toggleProductStatus}
+            deleteProduct={deleteProduct}
+          />
         )}
 
         {/* =============================== BRAND ============================ */}
         {activeMenu === 'brand' && (
-          <div className="space-y-4">
-            <PageHead
-              title="Brand Vendor"
-              desc="Atur brand vendor resmi, supplier pabrik, diskon pabrik, dan fee mitra per level (persen atau Rupiah). Fee mitra otomatis terpotong saat mitra checkout."
-              badge={<Badge tone="gray">{brands.length} brand</Badge>}
-              actions={
-                <Button icon="plus" onClick={() => setBrandModal({ mode: 'create', form: { ...blankBrand } })}>
-                  Brand Baru
-                </Button>
-              }
-            />
-
-            {/* KPI Summary Cards */}
-            <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
-              <div className="bg-white rounded-2xl p-4 border border-stone-200/80 shadow-2xs space-y-1">
-                <div className="flex items-center justify-between text-stone-500">
-                  <span className="text-xs font-semibold">Total Brand</span>
-                  <span className="p-1.5 rounded-lg bg-rose-50 text-[#6B1416]">
-                    <Icon name="shield" className="w-4 h-4" />
-                  </span>
-                </div>
-                <div className="text-xl font-bold text-stone-900">{brands.length} Brand</div>
-                <p className="text-[11px] text-stone-500">Vendor aktif terdaftar</p>
-              </div>
-
-              <div className="bg-white rounded-2xl p-4 border border-stone-200/80 shadow-2xs space-y-1">
-                <div className="flex items-center justify-between text-stone-500">
-                  <span className="text-xs font-semibold">Total Katalog PO</span>
-                  <span className="p-1.5 rounded-lg bg-sky-50 text-sky-600">
-                    <Icon name="box" className="w-4 h-4" />
-                  </span>
-                </div>
-                <div className="text-xl font-bold text-stone-900">{productSummary.length} Produk</div>
-                <p className="text-[11px] text-stone-500">Katalog pre-order aktif</p>
-              </div>
-
-              <div className="bg-white rounded-2xl p-4 border border-stone-200/80 shadow-2xs space-y-1">
-                <div className="flex items-center justify-between text-stone-500">
-                  <span className="text-xs font-semibold">Total Omzet Vendor</span>
-                  <span className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
-                    <Icon name="wallet" className="w-4 h-4" />
-                  </span>
-                </div>
-                <div className="text-xl font-bold text-stone-900">
-                  {rp(sumBy(productSummary, (p) => p.omzet))}
-                </div>
-                <p className="text-[11px] text-emerald-600 font-medium">Akumulasi penjualan PO</p>
-              </div>
-
-              <div className="bg-white rounded-2xl p-4 border border-stone-200/80 shadow-2xs space-y-1">
-                <div className="flex items-center justify-between text-stone-500">
-                  <span className="text-xs font-semibold">Fee Mitra (rata-rata)</span>
-                  <span className="p-1.5 rounded-lg bg-amber-50 text-amber-600">
-                    <Icon name="spark" className="w-4 h-4" />
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-1 pt-1">
-                  <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold text-[10px] border border-indigo-100">
-                    DB: {feeBadges.values[0]}%
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 font-bold text-[10px] border border-sky-100">
-                    Sub: {feeBadges.values[1]}%
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold text-[10px] border border-emerald-100">
-                    Agen: {feeBadges.values[2]}%
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 font-bold text-[10px] border border-amber-100">
-                    Res: {feeBadges.values[3]}%
-                  </span>
-                  {feeBadges.mixed && (
-                    <span className="px-1.5 py-0.5 rounded bg-stone-100 text-stone-600 font-bold text-[10px] border border-stone-200">
-                      sebagian Rp
-                    </span>
-                  )}
-                </div>
-                <p className="text-[10px] text-stone-400">Potongan otomatis per level</p>
-              </div>
-            </div>
-
-            {/* Filter & Search Controls */}
-            <div className="bg-white rounded-2xl p-3.5 sm:p-4 border border-stone-200/80 shadow-2xs flex flex-wrap items-center justify-between gap-3">
-              <div className="relative flex-1 min-w-[240px]">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-stone-400">
-                  <Icon name="search" className="w-4 h-4" />
-                </div>
-                <input
-                  type="text"
-                  value={brandSearch}
-                  onChange={(e) => setBrandSearch(e.target.value)}
-                  placeholder="Cari nama brand, supplier pabrik, atau kota asal..."
-                  className="w-full pl-9 pr-8 py-2 text-xs bg-stone-50 hover:bg-white focus:bg-white border border-stone-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-[#6B1416] transition"
-                />
-                {brandSearch && (
-                  <button
-                    type="button"
-                    onClick={() => setBrandSearch('')}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-stone-400 hover:text-stone-600 cursor-pointer"
-                  >
-                    <Icon name="x" className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {distinctBrandCities.length > 0 && (
-                  <select
-                    value={brandCityFilter}
-                    onChange={(e) => setBrandCityFilter(e.target.value)}
-                    className="text-xs px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-700 focus:outline-none focus:ring-1 focus:ring-[#6B1416] cursor-pointer"
-                  >
-                    <option value="all">Semua Kota Asal</option>
-                    {distinctBrandCities.map((c) => (
-                      <option key={c} value={c}>
-                        Kota {c}
-                      </option>
-                    ))}
-                  </select>
-                )}
-
-                <select
-                  value={brandSort}
-                  onChange={(e) => setBrandSort(e.target.value)}
-                  className="text-xs px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-stone-700 focus:outline-none focus:ring-1 focus:ring-[#6B1416] cursor-pointer"
-                >
-                  <option value="name">Urut: Nama (A-Z)</option>
-                  <option value="omzet">Urut: Omzet Tertinggi</option>
-                  <option value="products">Urut: Produk Terbanyak</option>
-                </select>
-
-                {(brandSearch || brandCityFilter !== 'all' || brandSort !== 'name') && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBrandSearch('');
-                      setBrandCityFilter('all');
-                      setBrandSort('name');
-                    }}
-                    className="px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition cursor-pointer"
-                  >
-                    Reset
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Table Card */}
-            <Card>
-              <TableWrap>
-                <thead className="bg-stone-50/90 border-b border-stone-200/80">
-                  <tr>
-                    <th className={`${TH} text-center w-12`}>No</th>
-                    <th className={TH}>Brand Vendor & Pabrik</th>
-                    <th className={TH}>Kota Asal</th>
-                    <th className={`${TH} text-center`}>Diskon Pabrik</th>
-                    <th className={`${TH} text-center`}>Fee DB All</th>
-                    <th className={`${TH} text-center`}>Fee Sub DB</th>
-                    <th className={`${TH} text-center`}>Fee Agen</th>
-                    <th className={`${TH} text-center`}>Fee Reseller</th>
-                    <th className={`${TH} text-center`}>Produk PO</th>
-                    <th className={`${TH} text-right`}>Total Omzet</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-stone-100">
-                  {filteredBrands.map((b, index) => {
-                    const brandProducts = productSummary.filter((p) => p.brand === b.name);
-                    const brandInitials = b.name
-                      ? b.name
-                          .split(' ')
-                          .map((w) => w[0])
-                          .join('')
-                          .slice(0, 2)
-                          .toUpperCase()
-                      : 'B';
-                    const brandOmzet = sumBy(brandProducts, (p) => p.omzet);
-
-                    return (
-                      <tr key={b.id} className="hover:bg-stone-50/60 transition">
-                        <td className={`${TD} text-center text-stone-400 font-mono text-[11px] font-semibold`}>
-                          {index + 1}
-                        </td>
-                        <td className={TD}>
-                          <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-rose-100 to-amber-100 border border-orange-200 flex items-center justify-center font-bold text-xs text-[#6B1416] shrink-0 shadow-2xs">
-                              {brandInitials}
-                            </div>
-                            <div>
-                              <p className="font-bold text-stone-900 text-xs sm:text-sm">{b.name}</p>
-                              <p className="text-[11px] text-stone-500 flex items-center gap-1 mt-0.5">
-                                <Icon name="truck" className="w-3 h-3 text-stone-400 shrink-0" />
-                                <span>{b.supplier || 'Pabrik Rekanan'}</span>
-                              </p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className={TD}>
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs bg-stone-100/70 text-stone-700 font-medium border border-stone-200/60">
-                            <span>📍</span>
-                            <span>{b.address || 'Bandung'}</span>
-                          </span>
-                        </td>
-                        <td className={`${TD} text-center`}>
-                          <span className="inline-block px-2 py-0.5 rounded-md font-bold text-xs bg-stone-100 text-stone-700 border border-stone-200/80">
-                            {brandDiscountTypeFor(b) === 'nominal'
-                              ? rp(brandDiscountValueFor(b))
-                              : `${brandDiscountValueFor(b)}%`}
-                          </span>
-                        </td>
-                        <td className={`${TD} text-center`}>
-                          <span className="inline-block px-2 py-0.5 rounded-md font-bold text-xs bg-indigo-50 text-indigo-700 border border-indigo-200/80">
-                            {feeTypeFor(b) === 'nominal' ? rp(b.discountDBAll) : `${num(b.discountDBAll)}%`}
-                          </span>
-                        </td>
-                        <td className={`${TD} text-center`}>
-                          <span className="inline-block px-2 py-0.5 rounded-md font-bold text-xs bg-sky-50 text-sky-700 border border-sky-200/80">
-                            {feeTypeFor(b) === 'nominal' ? rp(b.discountSubDB) : `${num(b.discountSubDB)}%`}
-                          </span>
-                        </td>
-                        <td className={`${TD} text-center`}>
-                          <span className="inline-block px-2 py-0.5 rounded-md font-bold text-xs bg-emerald-50 text-emerald-700 border border-emerald-200/80">
-                            {feeTypeFor(b) === 'nominal' ? rp(b.discountAgen) : `${num(b.discountAgen)}%`}
-                          </span>
-                        </td>
-                        <td className={`${TD} text-center`}>
-                          <span className="inline-block px-2 py-0.5 rounded-md font-bold text-xs bg-amber-50 text-amber-700 border border-amber-200/80">
-                            {feeTypeFor(b) === 'nominal' ? rp(b.discountReseller) : `${num(b.discountReseller)}%`}
-                          </span>
-                        </td>
-                        <td className={`${TD} text-center`}>
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-stone-100 text-stone-700 border border-stone-200/70">
-                            <Icon name="box" className="w-3 h-3 text-stone-500" />
-                            <span>{brandProducts.length} Produk</span>
-                          </span>
-                        </td>
-                        <td className={`${TD} text-right`}>
-                          <p className="font-bold text-stone-900 text-xs sm:text-sm">
-                            {rp(brandOmzet)}
-                          </p>
-                          <p className="text-[10px] text-emerald-600 font-medium">Omzet PO</p>
-                        </td>
-                        <td className={`${TD} text-right`}>
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setBrandModal({ mode: 'edit', id: b.id, form: brandFormFrom(b) })}
-                              className="px-2.5 py-1.5 text-xs font-semibold text-sky-700 hover:text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg flex items-center gap-1 transition cursor-pointer"
-                            >
-                              <Icon name="edit" className="w-3 h-3" />
-                              <span>Edit</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteBrand(b)}
-                              className="px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg flex items-center gap-1 transition cursor-pointer"
-                              title="Hapus brand vendor"
-                            >
-                              <Icon name="trash" className="w-3 h-3" />
-                              <span>Hapus</span>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </TableWrap>
-
-              {filteredBrands.length === 0 && (
-                <EmptyState
-                  title={brandSearch ? 'Tidak ada brand vendor yang sesuai' : 'Belum ada brand vendor'}
-                  desc={brandSearch ? `Pencarian "${brandSearch}" tidak menemukan brand vendor apapun.` : undefined}
-                  icon="shield"
-                  action={
-                    brandSearch ? (
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setBrandSearch('');
-                          setBrandCityFilter('all');
-                        }}
-                      >
-                        Reset Pencarian
-                      </Button>
-                    ) : (
-                      <Button onClick={() => setBrandModal({ mode: 'create', form: { ...blankBrand } })}>
-                        Tambah Brand Baru
-                      </Button>
-                    )
-                  }
-                />
-              )}
-
-              {/* Table Footer */}
-              <div className="px-4 py-3 bg-stone-50/70 border-t border-stone-100 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-500">
-                <span>
-                  Menampilkan <strong>{filteredBrands.length}</strong> dari <strong>{brands.length}</strong> brand vendor
-                </span>
-                <span className="text-[11px] text-stone-400">
-                  Fee mitra otomatis terpotong saat mitra checkout; diskon pabrik dipakai untuk fee perusahaan
-                </span>
-              </div>
-            </Card>
-          </div>
+          <PurchasingBrandsTab
+            brands={brands}
+            setBrandModal={setBrandModal}
+            blankBrand={blankBrand}
+            productSummary={productSummary}
+            feeBadges={feeBadges}
+            brandSearch={brandSearch}
+            setBrandSearch={setBrandSearch}
+            distinctBrandCities={distinctBrandCities}
+            brandCityFilter={brandCityFilter}
+            setBrandCityFilter={setBrandCityFilter}
+            brandSort={brandSort}
+            setBrandSort={setBrandSort}
+            filteredBrands={filteredBrands}
+            brandFormFrom={brandFormFrom}
+            deleteBrand={deleteBrand}
+          />
         )}
 
         {/* ============================= SUPPLIER =========================== */}
         {activeMenu === 'supplier' && (
-          <>
-            <PageHead
-              title="Supplier Pabrik"
-              desc="Data vendor produksi beserta kontak dan brand yang dipasok."
-              badge={<Badge tone="gray">{suppliers.length} supplier</Badge>}
-              actions={
-                <Button icon="plus" onClick={() => setSupplierModal({ mode: 'create', form: { ...blankSupplier } })}>
-                  Supplier Baru
-                </Button>
-              }
-            />
-
-            <Card>
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Supplier</th>
-                    <th className={TH}>Kota</th>
-                    <th className={TH}>Kontak</th>
-                    <th className={TH}>Telepon</th>
-                    <th className={TH}>Brand Dipasok</th>
-                    <th className={TH}>Catatan</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {suppliers.map((s) => {
-                    const supplied = brands.filter((b) => b.supplier === s.name);
-                    return (
-                      <tr key={s.id} className="hover:bg-gray-50/70">
-                        <td className={`${TD} font-bold text-gray-900`}>{s.name}</td>
-                        <td className={TD}>{s.city || '—'}</td>
-                        <td className={TD}>{s.contact || '—'}</td>
-                        <td className={TD}>{s.phone || '—'}</td>
-                        <td className={TD}>
-                          <div className="flex flex-wrap gap-1">
-                            {supplied.map((b) => (
-                              <Badge key={b.id} tone="teal">
-                                {b.name}
-                              </Badge>
-                            ))}
-                            {supplied.length === 0 && <span className="text-[10px] text-gray-400">—</span>}
-                          </div>
-                        </td>
-                        <td className={`${TD} max-w-[180px] text-[10px] text-gray-500`}>{s.note || '—'}</td>
-                        <td className={`${TD} text-right`}>
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setSupplierModal({ mode: 'edit', id: s.id, form: { ...s } })}
-                              className="px-2.5 py-1.5 text-xs font-semibold text-sky-700 hover:text-sky-800 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg flex items-center gap-1 transition cursor-pointer"
-                            >
-                              <Icon name="edit" className="w-3 h-3" />
-                              <span>Edit</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteSupplier(s)}
-                              className="px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg flex items-center gap-1 transition cursor-pointer"
-                              title="Hapus supplier"
-                            >
-                              <Icon name="trash" className="w-3 h-3" />
-                              <span>Hapus</span>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </TableWrap>
-              {suppliers.length === 0 && <EmptyState title="Belum ada supplier" icon="truck" />}
-            </Card>
-          </>
+          <PurchasingSuppliersTab
+            suppliers={suppliers}
+            setSupplierModal={setSupplierModal}
+            blankSupplier={blankSupplier}
+            brands={brands}
+            deleteSupplier={deleteSupplier}
+          />
         )}
 
         {/* ============================= MITRA ============================== */}
         {activeMenu === 'mitra' && (
-          <>
-            <PageHead
-              title="Mitra & User"
-              desc="Buat akun mitra, atur level harga, dan pantau omzet serta piutang masing-masing mitra."
-              badge={<Badge tone="gray">{mitra.length} mitra</Badge>}
-              actions={
-                <Button icon="plus" onClick={() => setMitraModal({ mode: 'create', form: { ...blankMitra } })}>
-                  Mitra Baru
-                </Button>
-              }
-            />
-
-            <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-              <MetricCard label="Total Mitra" value={mitra.length} sub={`${mitra.filter((m) => m.active).length} aktif`} tone="blue" icon="users" />
-              <MetricCard label="Total Omzet" value={rp(sumBy(mitraRows, (m) => m.omzet))} sub="Seluruh pesanan mitra" tone="emerald" icon="wallet" />
-              <MetricCard label="Piutang Mitra" value={rp(sumBy(mitraRows, (m) => m.outstanding))} sub="Belum lunas" tone="red" icon="receipt" />
-              <MetricCard label="Saldo Deposit" value={rp(sumBy(mitra, (m) => m.deposit))} sub="Saldo aktif mitra" tone="violet" icon="card" />
-            </div>
-
-            <Card>
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Nama / Kontak</th>
-                    <th className={TH}>Level</th>
-                    <th className={TH}>Kota</th>
-                    <th className={`${TH} text-right`}>Invoice</th>
-                    <th className={`${TH} text-right`}>Omzet</th>
-                    <th className={`${TH} text-right`}>Piutang</th>
-                    <th className={`${TH} text-right`}>Deposit</th>
-                    <th className={TH}>Status</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {mitraRows.map((m) => (
-                    <tr key={m.id} className="hover:bg-gray-50/70">
-                      <td className={TD}>
-                        <button
-                          type="button"
-                          onClick={() => setMitraDetailId(m.id)}
-                          className="font-bold text-sky-700 hover:underline"
-                        >
-                          {m.name}
-                        </button>
-                        <p className="text-[10px] text-gray-400">{m.email || '—'}</p>
-                        <p className="text-[10px] text-gray-400">{m.phone}</p>
-                      </td>
-                      <td className={TD}>
-                        <Badge tone={levelTone(m.level)}>{m.level}</Badge>
-                      </td>
-                      <td className={TD}>{m.city || '—'}</td>
-                      <td className={`${TD} text-right`}>{m.invoiceCount}</td>
-                      <td className={`${TD} text-right font-semibold`}>{rp(m.omzet)}</td>
-                      <td className={`${TD} text-right ${m.outstanding > 0 ? 'text-rose-600 font-semibold' : 'text-gray-400'}`}>
-                        {rp(m.outstanding)}
-                      </td>
-                      <td className={`${TD} text-right`}>{rp(m.deposit)}</td>
-                      <td className={TD}>
-                        <Badge tone={m.active ? 'emerald' : 'gray'}>{m.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                      </td>
-                      <td className={`${TD} text-right`}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            onClick={() => setMitraModal({ mode: 'edit', id: m.id, form: { ...m } })}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant={m.active ? 'dangerOutline' : 'primary'}
-                            onClick={() => toggleMitra(m)}
-                          >
-                            {m.active ? 'Nonaktifkan' : 'Aktifkan'}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="danger"
-                            onClick={() => deleteMitra(m)}
-                          >
-                            Hapus
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
-            </Card>
-          </>
+          <PurchasingMitraTab
+            mitra={mitra}
+            setMitraModal={setMitraModal}
+            blankMitra={blankMitra}
+            mitraRows={mitraRows}
+            setMitraDetailId={setMitraDetailId}
+            toggleMitra={toggleMitra}
+            deleteMitra={deleteMitra}
+          />
         )}
 
         {/* ============================ TIM ADMIN =========================== */}
         {activeMenu === 'tim' && (
-          <>
-            <PageHead
-              title="Tim Admin"
-              desc="Buat akun tim finance & purchasing. Setiap akun hanya dapat mengakses menu sesuai perannya."
-              badge={<Badge tone="gray">{team.length} akun</Badge>}
-              actions={
-                <Button
-                  icon="plus"
-                  onClick={() =>
-                    setTeamModal({
-                      form: { name: '', email: '', phone: '', role: 'marketing' }
-                    })
-                  }
-                >
-                  Akun Tim Baru
-                </Button>
-              }
-            />
-
-            <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-[11px] text-gray-600 flex items-start gap-2">
-              <Icon name="shield" className="w-4 h-4 mt-0.5 shrink-0 text-gray-400" />
-              <p>
-                Admin purchasing dapat membuat akun finance dan purchasing. Akun <b>owner</b> hanya dapat dibuat dari
-                portal owner untuk menjaga pemisahan hak akses.
-              </p>
-            </div>
-
-            <Card>
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Nama</th>
-                    <th className={TH}>Email</th>
-                    <th className={TH}>Peran</th>
-                    <th className={TH}>Telepon</th>
-                    <th className={TH}>Dibuat</th>
-                    <th className={TH}>Status</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {team.map((u) => (
-                    <tr key={u.id} className="hover:bg-gray-50/70">
-                      <td className={TD}>
-                        <p className="font-semibold text-gray-900">{u.name}</p>
-                        <p className="text-[10px] text-gray-400">oleh {u.createdBy || 'System'}</p>
-                      </td>
-                      <td className={TD}>{u.email}</td>
-                      <td className={TD}>
-                        <Badge tone={u.role === 'finance' ? 'emerald' : u.role === 'marketing' ? 'red' : 'amber'}>
-                          {roleLabel(u.role)}
-                        </Badge>
-                      </td>
-                      <td className={TD}>{u.phone || '—'}</td>
-                      <td className={TD}>{fmtDate(u.createdAt)}</td>
-                      <td className={TD}>
-                        <Badge tone={u.active ? 'emerald' : 'gray'}>{u.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                      </td>
-                      <td className={`${TD} text-right`}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            disabled={u.role === 'owner'}
-                            onClick={() => setTeamModal({ mode: 'edit', id: u.id, form: { ...u, password: '' } })}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant={u.active ? 'dangerOutline' : 'primary'}
-                            disabled={u.role === 'owner'}
-                            onClick={() => toggleTeam(u)}
-                          >
-                            {u.active ? 'Nonaktifkan' : 'Aktifkan'}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="danger"
-                            disabled={u.role === 'owner'}
-                            onClick={() => deleteTeam(u)}
-                          >
-                            Hapus
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
-            </Card>
-          </>
+          <PurchasingTeamTab
+            team={team}
+            setTeamModal={setTeamModal}
+            toggleTeam={toggleTeam}
+            deleteTeam={deleteTeam}
+          />
         )}
 
         {/* ========================= INPUT BUKTI TRANSFER ==================== */}
         {activeMenu === 'input_bukti' && (
-          <>
-            <PageHead
-              title="Input Bukti Transfer"
-              desc="Catat bukti transfer DP, pelunasan, ongkir, atau deposit mitra secara manual. Setelah disimpan, status menjadi MENUNGGU VERIFIKASI dan diteruskan ke admin finance."
-              badge={<Badge tone="blue">{pendingProofList.length} menunggu verifikasi</Badge>}
-              actions={
-                <Button
-                  variant="outline"
-                  icon="refresh"
-                  onClick={() =>
-                    setProofForm((prev) => ({ ...prev, invoice: '', nominal: '', refNo: '', proof: '' }))
-                  }
-                >
-                  Reset Form
-                </Button>
-              }
-            />
-
-            <div className="grid lg:grid-cols-3 gap-4">
-              <Card
-                title="Form Bukti Transfer"
-                subtitle="Semua admin dapat menginput bukti TF mitra"
-                className="lg:col-span-2"
-              >
-                <form onSubmit={submitProofForm} className="p-4 sm:p-5 space-y-4">
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field label="Mitra" required>
-                      <Select
-                        value={proofForm.mitraId}
-                        onChange={(e) =>
-                          setProofForm((prev) => ({ ...prev, mitraId: e.target.value, invoice: '' }))
-                        }
-                      >
-                        <option value="">Pilih mitra…</option>
-                        {mitra
-                          .filter((m) => m.active)
-                          .map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name} · {m.level}
-                            </option>
-                          ))}
-                      </Select>
-                    </Field>
-                    <Field label="Jenis Pembayaran" required>
-                      <Select
-                        value={proofForm.kind}
-                        onChange={(e) => {
-                          const nextKind = e.target.value;
-                          const o = orders.find((x) => x.invoice === proofForm.invoice);
-                          const suggested =
-                            nextKind === 'DP'
-                              ? o?.dpNominal
-                              : nextKind === 'Pelunasan'
-                              ? o?.pelunasanNominal
-                              : nextKind === 'Ongkir'
-                              ? o?.ongkir
-                              : '';
-                          setProofForm((prev) => ({
-                            ...prev,
-                            kind: nextKind,
-                            invoice: nextKind === 'Deposit' ? '' : prev.invoice,
-                            nominal: suggested || ''
-                          }));
-                        }}
-                      >
-                        {['DP', 'Pelunasan', 'Ongkir', 'Deposit'].map((kind) => (
-                          <option key={kind} value={kind}>
-                            {kind}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                  </div>
-
-                  {proofForm.kind !== 'Deposit' && (
-                    <Field label="Invoice Terkait" required hint="Hanya invoice milik mitra yang dipilih.">
-                      <Select
-                        value={proofForm.invoice}
-                        onChange={(e) => {
-                          const invoice = e.target.value;
-                          const o = orders.find((x) => x.invoice === invoice);
-                          const suggested =
-                            proofForm.kind === 'DP'
-                              ? o?.dpNominal
-                              : proofForm.kind === 'Pelunasan'
-                              ? o?.pelunasanNominal
-                              : o?.ongkir;
-                          setProofForm((prev) => ({ ...prev, invoice, nominal: suggested || '' }));
-                        }}
-                      >
-                        <option value="">Pilih invoice…</option>
-                        {orders
-                          .filter((o) => o.mitraId === proofForm.mitraId && orderStage(o) !== 'ditolak')
-                          .filter((o) => {
-                            const statusKey = { DP: 'dpStatus', Pelunasan: 'pelunasanStatus', Ongkir: 'ongkirStatus' }[
-                              proofForm.kind
-                            ];
-                            return o[statusKey] !== PAY.ACC;
-                          })
-                          .map((o) => (
-                            <option key={o.invoice} value={o.invoice}>
-                              {o.invoice} · {o.produk} · sisa {rp(orderOutstanding(o))}
-                            </option>
-                          ))}
-                      </Select>
-                    </Field>
-                  )}
-
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field label="Nominal Transfer" required>
-                      <Input
-                        type="number"
-                        min="0"
-                        placeholder="0"
-                        value={proofForm.nominal}
-                        onChange={(e) => setProofForm((prev) => ({ ...prev, nominal: e.target.value }))}
-                      />
-                    </Field>
-                    <Field label="Tanggal Transfer" required>
-                      <Input
-                        type="date"
-                        value={proofForm.date}
-                        onChange={(e) => setProofForm((prev) => ({ ...prev, date: e.target.value }))}
-                      />
-                    </Field>
-                  </div>
-
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    <Field label="Rekening Tujuan">
-                      <Select
-                        value={proofForm.bankId}
-                        onChange={(e) => setProofForm((prev) => ({ ...prev, bankId: e.target.value }))}
-                      >
-                        {bankAccounts
-                          .filter((b) => b.active)
-                          .map((b) => (
-                            <option key={b.id} value={b.id}>
-                              {b.bank} · {b.accountNo}
-                            </option>
-                          ))}
-                      </Select>
-                    </Field>
-                    <Field label="No. Referensi / Berita Transfer">
-                      <Input
-                        placeholder="Contoh: TRF-778812"
-                        value={proofForm.refNo}
-                        onChange={(e) => setProofForm((prev) => ({ ...prev, refNo: e.target.value }))}
-                      />
-                    </Field>
-                  </div>
-
-                  <Field label="Berkas Bukti" hint="JPG atau PNG, maksimal 2 MB.">
-                    <div className="space-y-2">
-                      <input
-                        type="file"
-                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
-                        onChange={(e) => handleProofFile(e.target.files?.[0])}
-                        className="block w-full text-[11px] text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-semibold file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200"
-                      />
-                      <div className="flex items-center gap-3 flex-wrap">
-                        {proofForm.proof && (
-                          <ProofThumb
-                            src={mediaUrl(proofForm.proof)}
-                            onClick={() =>
-                              setProofView({ src: mediaUrl(proofForm.proof), title: 'Pratinjau bukti transfer' })
-                            }
-                            label="Pratinjau"
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </Field>
-
-                  <div className="flex items-center justify-between gap-3 pt-1">
-                    <p className="text-[10px] text-gray-400">
-                      Bukti akan diverifikasi finance sebelum status pembayaran menjadi ACC.
-                    </p>
-                    <Button type="submit" icon="check">
-                      Simpan Bukti
-                    </Button>
-                  </div>
-                </form>
-              </Card>
-
-              <div className="space-y-4">
-                <Card title="Rekening Tujuan" subtitle="Rekening resmi AfatharShop">
-                  <div className="divide-y divide-gray-100">
-                    {bankAccounts.map((b) => (
-                      <div key={b.id} className="px-4 py-3 flex items-start justify-between gap-2">
-                        <div>
-                          <p className="text-xs font-bold text-gray-900">{b.bank}</p>
-                          <p className="text-[11px] text-gray-500 font-mono">{b.accountNo}</p>
-                          <p className="text-[10px] text-gray-400">{b.holder}</p>
-                        </div>
-                        <Badge tone={b.active ? 'emerald' : 'gray'}>{b.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-
-                <Card title="Alur Verifikasi">
-                  <ol className="p-4 space-y-3">
-                    {[
-                      'Admin purchasing input bukti transfer mitra.',
-                      'Status pembayaran menjadi Menunggu Verifikasi.',
-                      'Finance mencocokkan nominal dengan mutasi rekening.',
-                      'Finance ACC / tolak dengan catatan.'
-                    ].map((step, i) => (
-                      <li key={step} className="flex items-start gap-2.5">
-                        <span className="w-5 h-5 rounded-full bg-gray-900 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
-                          {i + 1}
-                        </span>
-                        <span className="text-[11px] text-gray-600 leading-snug">{step}</span>
-                      </li>
-                    ))}
-                  </ol>
-                </Card>
-              </div>
-            </div>
-
-            <Card
-              title="Bukti Menunggu Verifikasi"
-              subtitle="Input terbaru dari seluruh admin"
-              action={<Badge tone="blue">{pendingProofList.length} dokumen</Badge>}
-            >
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Tanggal</th>
-                    <th className={TH}>Invoice / Mitra</th>
-                    <th className={TH}>Jenis</th>
-                    <th className={`${TH} text-right`}>Nominal</th>
-                    <th className={TH}>Bukti</th>
-                    <th className={TH}>Diinput oleh</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {pendingProofList.map((row) => (
-                    <tr key={row.key} className="hover:bg-gray-50/70">
-                      <td className={TD}>{fmtDate(row.date)}</td>
-                      <td className={TD}>
-                        <p className="font-semibold text-gray-900">{row.invoice}</p>
-                        <p className="text-[10px] text-gray-400">{row.mitra}</p>
-                      </td>
-                      <td className={TD}>
-                        <Badge tone="amber">{row.kind}</Badge>
-                      </td>
-                      <td className={`${TD} text-right font-bold text-gray-900`}>{rp(row.amount)}</td>
-                      <td className={TD}>
-                        <ProofThumb
-                          src={row.proof}
-                          onClick={() => setProofView({ src: row.proof, title: `Bukti ${row.kind} ${row.invoice}` })}
-                        />
-                      </td>
-                      <td className={TD}>{row.by || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
-              {pendingProofList.length === 0 && (
-                <EmptyState
-                  title="Tidak ada bukti menunggu verifikasi"
-                  desc="Semua bukti transfer yang diinput sudah diverifikasi finance."
-                  icon="upload"
-                />
-              )}
-            </Card>
-          </>
+          <PurchasingManualProofTab
+            pendingProofList={pendingProofList}
+            proofForm={proofForm}
+            setProofForm={setProofForm}
+            submitProofForm={submitProofForm}
+            mitra={mitra}
+            orders={orders}
+            bankAccounts={bankAccounts}
+            handleProofFile={handleProofFile}
+            setProofView={setProofView}
+          />
         )}
 
         {/* ============================ PENGAJUAN =========================== */}
         {activeMenu === 'pengajuan' && (
-          <>
-            <PageHead
-              title="Review Pengajuan Pembayaran"
-              desc="Finance mengajukan dana ke owner melalui portal ini. Persetujuan berjenjang: Purchasing → Owner → Transfer."
-              badge={<Badge tone="amber">{prCounts[PREQ.REVIEW_MKT] || 0} perlu review</Badge>}
-            />
-
-            <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-              <MetricCard
-                label="Perlu Review"
-                value={prCounts[PREQ.REVIEW_MKT] || 0}
-                sub="Menunggu keputusan purchasing"
-                tone="amber"
-                icon="clock"
-                onClick={() => setPrFilter(PREQ.REVIEW_MKT)}
-              />
-              <MetricCard
-                label="Menunggu Owner"
-                value={prCounts[PREQ.APPROVAL_OWNER] || 0}
-                sub="Sudah disetujui purchasing"
-                tone="violet"
-                icon="shield"
-                onClick={() => setPrFilter(PREQ.APPROVAL_OWNER)}
-              />
-              <MetricCard
-                label="Siap Ditransfer"
-                value={prCounts[PREQ.APPROVED] || 0}
-                sub={rp(sumBy(paymentRequests.filter((r) => r.status === PREQ.APPROVED), (r) => r.amount))}
-                tone="blue"
-                icon="wallet"
-                onClick={() => setPrFilter(PREQ.APPROVED)}
-              />
-              <MetricCard
-                label="Total Ditransfer"
-                value={rp(sumBy(paymentRequests.filter((r) => r.status === PREQ.TRANSFERRED), (r) => r.amount))}
-                sub={`${prCounts[PREQ.TRANSFERRED] || 0} pengajuan selesai`}
-                tone="emerald"
-                icon="check"
-              />
-            </div>
-
-            <Card
-              title="Daftar Pengajuan"
-              subtitle="Pantau posisi setiap pengajuan pembayaran"
-              action={
-                <Segmented
-                  value={prFilter}
-                  onChange={setPrFilter}
-                  options={[
-                    { value: 'all', label: 'Semua', count: prCounts.all },
-                    { value: PREQ.REVIEW_MKT, label: 'Review', count: prCounts[PREQ.REVIEW_MKT] || 0 },
-                    { value: PREQ.APPROVAL_OWNER, label: 'Owner', count: prCounts[PREQ.APPROVAL_OWNER] || 0 },
-                    { value: PREQ.APPROVED, label: 'Disetujui', count: prCounts[PREQ.APPROVED] || 0 },
-                    { value: PREQ.TRANSFERRED, label: 'Transfer', count: prCounts[PREQ.TRANSFERRED] || 0 },
-                    { value: PREQ.REJECTED, label: 'Ditolak', count: prCounts[PREQ.REJECTED] || 0 }
-                  ]}
-                />
-              }
-            >
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Kode / Tanggal</th>
-                    <th className={TH}>Tujuan Pembayaran</th>
-                    <th className={TH}>Referensi</th>
-                    <th className={`${TH} text-right`}>Nominal</th>
-                    <th className={TH}>Diajukan</th>
-                    <th className={TH}>Progres</th>
-                    <th className={TH}>Status</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredPr.map((r) => (
-                    <tr key={r.id} className="hover:bg-gray-50/70">
-                      <td className={TD}>
-                        <p className="font-bold text-gray-900">{r.code}</p>
-                        <p className="text-[10px] text-gray-400">{fmtDate(r.createdAt)}</p>
-                      </td>
-                      <td className={`${TD} max-w-[220px]`}>
-                        <p className="font-medium text-gray-800">{r.purpose}</p>
-                        <p className="text-[10px] text-gray-400 truncate">{r.note}</p>
-                      </td>
-                      <td className={TD}>{r.ref}</td>
-                      <td className={`${TD} text-right font-bold text-gray-900`}>{rp(r.amount)}</td>
-                      <td className={TD}>{r.createdBy}</td>
-                      <td className={TD}>
-                        <div className="flex items-center gap-1">
-                          {prSteps(r).map((s) => (
-                            <span
-                              key={s.label}
-                              title={`${s.label}: ${s.state}`}
-                              className={`w-2 h-2 rounded-full ${
-                                s.state === 'done'
-                                  ? 'bg-emerald-500'
-                                  : s.state === 'active'
-                                  ? 'bg-amber-400'
-                                  : s.state === 'reject'
-                                  ? 'bg-rose-500'
-                                  : 'bg-gray-300'
-                              }`}
-                            />
-                          ))}
-                        </div>
-                        <p className="text-[10px] text-gray-400 mt-1 whitespace-nowrap">
-                          {r.bank} <span className="font-mono">· {r.accountNo}</span>
-                        </p>
-                      </td>
-                      <td className={`${TD} whitespace-nowrap`}>
-                        <Badge tone={preqTone(r.status)}>{r.status}</Badge>
-                      </td>
-                      <td className={`${TD} text-right`}>
-                        <Button
-                          size="xs"
-                          variant={r.status === PREQ.REVIEW_MKT ? 'primary' : 'outline'}
-                          className="min-w-[64px] justify-center"
-                          onClick={() => setPrDetailId(r.id)}
-                        >
-                          {r.status === PREQ.REVIEW_MKT ? 'Review' : 'Detail'}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
-              {filteredPr.length === 0 && (
-                <EmptyState title="Tidak ada pengajuan" desc="Belum ada pengajuan pada filter ini." icon="wallet" />
-              )}
-            </Card>
-          </>
+          <PurchasingPaymentRequestsTab
+            prCounts={prCounts}
+            paymentRequests={paymentRequests}
+            prFilter={prFilter}
+            setPrFilter={setPrFilter}
+            filteredPr={filteredPr}
+            setPrDetailId={setPrDetailId}
+          />
         )}
 
+        {/* ============================ REKAP FEE =========================== */}
         {activeMenu === 'rekap_fee' && (
           <FeeRecapPanel
             orders={orders}
             brands={brands}
-            subtitle="Fee mitra dipotong otomatis dari harga varian saat mitra checkout. Diskon pabrik dicatat sebagai pendapatan perusahaan."
+            subtitle="Rekap fee mitra yang dipotong saat checkout dan diskon brand dari pabrik yang menjadi fee perusahaan."
           />
         )}
 
-        {/* ========================= PENJUALAN TERHAPUS ===================== */}
+        {/* ========================== TERHAPUS / TRASH ====================== */}
         {activeMenu === 'terhapus' && (
-          <>
-            <PageHead
-              title="Penjualan Terhapus"
-              desc="Pesanan yang dipindahkan ke sini tidak dihitung pada omzet. Pulihkan jika pesanan ternyata masih berjalan, atau hapus permanen jika data tidak lagi dibutuhkan."
-              badge={<Badge tone="gray">{deletedOrders.length} pesanan</Badge>}
-              actions={
-                <div className="flex items-center gap-2">
-                  {trashSelected.length > 0 ? (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        icon="refresh"
-                        onClick={restoreSelectedTrash}
-                      >
-                        Pulihkan Terpilih ({trashSelected.length})
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        icon="trash"
-                        onClick={askDeleteSelectedTrash}
-                      >
-                        Hapus Permanen Terpilih ({trashSelected.length})
-                      </Button>
-                    </>
-                  ) : (
-                    deletedOrders.length > 0 && (
-                      <Button
-                        size="sm"
-                        variant="dangerOutline"
-                        icon="trash"
-                        onClick={askEmptyTrash}
-                      >
-                        Kosongkan Arsip
-                      </Button>
-                    )
-                  )}
-                </div>
-              }
-            />
-
-            <Card
-              title="Arsip Pesanan"
-              action={
-                <div className="w-full sm:w-64">
-                  <SearchBox
-                    value={trashSearch}
-                    onChange={setTrashSearch}
-                    placeholder="Cari invoice, mitra, produk…"
-                  />
-                </div>
-              }
-            >
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={`${TH} w-10 text-center`}>
-                      <input
-                        type="checkbox"
-                        className="rounded border-gray-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
-                        checked={filteredTrash.length > 0 && filteredTrash.every((o) => trashSelected.includes(o.invoice))}
-                        onChange={(e) =>
-                          setTrashSelected(e.target.checked ? filteredTrash.map((o) => o.invoice) : [])
-                        }
-                      />
-                    </th>
-                    <th className={TH}>Invoice</th>
-                    <th className={TH}>Mitra</th>
-                    <th className={TH}>Produk</th>
-                    <th className={`${TH} text-right`}>Nilai</th>
-                    <th className={TH}>Dihapus</th>
-                    <th className={TH}>Alasan</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredTrash.map((o) => {
-                    const isSelected = trashSelected.includes(o.invoice);
-                    return (
-                      <tr key={o.invoice} className={`hover:bg-gray-50/70 ${isSelected ? 'bg-rose-50/30' : ''}`}>
-                        <td className={`${TD} text-center`}>
-                          <input
-                            type="checkbox"
-                            className="rounded border-gray-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
-                            checked={isSelected}
-                            onChange={() =>
-                              setTrashSelected((prev) =>
-                                isSelected ? prev.filter((x) => x !== o.invoice) : [...prev, o.invoice]
-                              )
-                            }
-                          />
-                        </td>
-                        <td className={TD}>
-                          <button
-                            type="button"
-                            className="font-bold text-gray-900 hover:text-emerald-700 hover:underline text-left cursor-pointer"
-                            onClick={() => setDetailInvoice(o.invoice)}
-                          >
-                            {o.invoice}
-                          </button>
-                          <p className="text-[10px] text-gray-400">{fmtDate(o.date)}</p>
-                        </td>
-                        <td className={TD}>
-                          <p className="font-medium text-gray-800">{o.mitraName}</p>
-                          <p className="text-[10px] text-gray-400">{o.level}</p>
-                        </td>
-                        <td className={TD}>
-                          <p className="text-gray-800">{o.produk}</p>
-                          <p className="text-[10px] text-gray-400">{o.variant} · {o.qty} pcs</p>
-                        </td>
-                        <td className={`${TD} text-right font-semibold`}>{rp(o.subtotal)}</td>
-                        <td className={TD}>
-                          <p>{fmtDate(o.deletedAt)}</p>
-                          <p className="text-[10px] text-gray-400">oleh {o.deletedBy || '—'}</p>
-                        </td>
-                        <td className={`${TD} max-w-[200px] text-[11px] text-gray-600`}>{o.deleteReason || '—'}</td>
-                        <td className={`${TD} text-right`}>
-                          <div className="flex items-center justify-end gap-1.5">
-                            <Button size="xs" variant="outline" icon="refresh" onClick={() => restoreOrder(o)}>
-                              Pulihkan
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="dangerOutline"
-                              icon="trash"
-                              onClick={() => askPermanentDelete(o)}
-                            >
-                              Hapus Permanen
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </TableWrap>
-              {filteredTrash.length === 0 && (
-                <EmptyState
-                  title="Arsip kosong"
-                  desc="Tidak ada pesanan terhapus yang cocok dengan pencarian."
-                  icon="trash"
-                />
-              )}
-            </Card>
-          </>
+          <PurchasingDeletedOrdersTab
+            deletedOrders={deletedOrders}
+            trashSelected={trashSelected}
+            setTrashSelected={setTrashSelected}
+            restoreSelectedTrash={restoreSelectedTrash}
+            askDeleteSelectedTrash={askDeleteSelectedTrash}
+            askEmptyTrash={askEmptyTrash}
+            trashSearch={trashSearch}
+            setTrashSearch={setTrashSearch}
+            filteredTrash={filteredTrash}
+            setDetailInvoice={setDetailInvoice}
+            restoreOrder={restoreOrder}
+            askPermanentDelete={askPermanentDelete}
+          />
         )}
 
         {/* ============================ BATCH PO ============================ */}
         {activeMenu === 'batch' && (
-          <>
-            <PageHead
-              title="Batch Pre-Order"
-              desc="Kelola batch periode buka dan tutup PO. Menutup batch (Closed) akan otomatis menutup pemesanan pada seluruh produk yang terhubung ke batch tersebut di toko dan dashboard mitra."
-              badge={
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <Badge tone="gray">{poBatches.length} batch</Badge>
-                  <Badge tone="emerald">
-                    {poBatches.filter((b) => b.status === 'open').length} Open
-                  </Badge>
-                  <Badge tone="rose">
-                    {poBatches.filter((b) => b.status === 'closed').length} Closed
-                  </Badge>
-                </div>
-              }
-              actions={
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" icon="refresh" onClick={refreshBatches}>
-                    Sinkron
-                  </Button>
-                  <Button icon="plus" onClick={openCreateBatchModal}>
-                    Batch Baru
-                  </Button>
-                </div>
-              }
-            />
-
-            <Card
-              title="Daftar Batch Pre-Order"
-              subtitle="Jadwal buka-tutup PO dan status batch otomatis mengontrol status pre-order produk."
-              action={
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
-                  <div className="w-full sm:w-56">
-                    <SearchBox
-                      value={batchSearch}
-                      onChange={setBatchSearch}
-                      placeholder="Cari nama batch, brand…"
-                    />
-                  </div>
-                  <select
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 focus:border-emerald-500 focus:outline-none"
-                    value={batchStatusFilter}
-                    onChange={(e) => setBatchStatusFilter(e.target.value)}
-                  >
-                    <option value="all">Semua Status</option>
-                    <option value="open">Open (Buka PO)</option>
-                    <option value="closed">Closed (Tutup PO)</option>
-                  </select>
-                  <select
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 focus:border-emerald-500 focus:outline-none"
-                    value={batchBrandFilter}
-                    onChange={(e) => setBatchBrandFilter(e.target.value)}
-                  >
-                    <option value="all">Semua Brand</option>
-                    {brands.map((br) => (
-                      <option key={br.id || br.name} value={br.name}>
-                        {br.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              }
-            >
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Batch PO</th>
-                    <th className={TH}>Brand</th>
-                    <th className={TH}>Jadwal PO</th>
-                    <th className={TH}>Estimasi Kirim</th>
-                    <th className={`${TH} text-center`}>Produk Terhubung</th>
-                    <th className={`${TH} text-center`}>Status Batch</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredBatches.map((b) => {
-                    const linkedCount =
-                      b.products_count ??
-                      products.filter((p) => p.po_batch_id === b.id || p.batch === b.name).length;
-                    const isOpen = b.status === 'open';
-
-                    let closeText = '—';
-                    if (b.close_date) {
-                      const datePart = b.close_date.slice(0, 10);
-                      const timePart = b.close_date.includes(' ')
-                        ? b.close_date.split(' ')[1]?.slice(0, 5)
-                        : b.close_date.includes('T')
-                        ? b.close_date.split('T')[1]?.slice(0, 5)
-                        : '';
-                      closeText = `${fmtDate(datePart)}${timePart ? ` (${timePart} WIB)` : ''}`;
-                    }
-
-                    return (
-                      <tr key={b.id || b.name} className="hover:bg-gray-50/70">
-                        <td className={TD}>
-                          <p className="font-bold text-gray-900">{b.name}</p>
-                          <p className="text-[10px] text-gray-400">ID: #{b.id || '—'}</p>
-                        </td>
-                        <td className={TD}>
-                          <span className="font-medium text-gray-800">{b.brand || 'Semua Brand'}</span>
-                        </td>
-                        <td className={TD}>
-                          <p className="text-xs text-gray-800">
-                            <span className="text-[10px] text-gray-400">Buka:</span> {b.start_date ? fmtDate(b.start_date) : '—'}
-                          </p>
-                          <p className="text-xs text-gray-800">
-                            <span className="text-[10px] text-gray-400">Tutup:</span> {closeText}
-                          </p>
-                        </td>
-                        <td className={TD}>
-                          <span className="text-xs text-gray-700">
-                            {b.estimated_shipment ? fmtDate(b.estimated_shipment) : '—'}
-                          </span>
-                        </td>
-                        <td className={`${TD} text-center`}>
-                          <Badge tone={linkedCount > 0 ? 'teal' : 'gray'}>
-                            {linkedCount} produk
-                          </Badge>
-                        </td>
-                        <td className={`${TD} text-center`}>
-                          <Badge tone={isOpen ? 'emerald' : 'rose'}>
-                            {isOpen ? 'OPEN' : 'CLOSED'}
-                          </Badge>
-                        </td>
-                        <td className={`${TD} text-right`}>
-                          <div className="inline-flex items-center gap-1.5">
-                            <Button
-                              size="xs"
-                              variant={isOpen ? 'outline' : 'soft'}
-                              icon={isOpen ? 'x' : 'check'}
-                              onClick={() => toggleBatchStatus(b)}
-                              title={isOpen ? 'Tutup Pre-Order Batch ini' : 'Buka Pre-Order Batch ini'}
-                            >
-                              {isOpen ? 'Tutup PO' : 'Buka PO'}
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              icon="edit"
-                              onClick={() => openEditBatchModal(b)}
-                            >
-                              Ubah
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="dangerOutline"
-                              icon="trash"
-                              onClick={() => deleteBatch(b)}
-                            >
-                              Hapus
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </TableWrap>
-              {filteredBatches.length === 0 && (
-                <EmptyState
-                  title="Belum ada batch PO"
-                  desc="Belum ada batch yang cocok dengan pencarian / filter."
-                  icon="clock"
-                />
-              )}
-            </Card>
-          </>
+          <PurchasingBatchesTab
+            poBatches={poBatches}
+            refreshBatches={refreshBatches}
+            openCreateBatchModal={openCreateBatchModal}
+            batchSearch={batchSearch}
+            setBatchSearch={setBatchSearch}
+            batchStatusFilter={batchStatusFilter}
+            setBatchStatusFilter={setBatchStatusFilter}
+            batchBrandFilter={batchBrandFilter}
+            setBatchBrandFilter={setBatchBrandFilter}
+            brands={brands}
+            filteredBatches={filteredBatches}
+            products={products}
+            toggleBatchStatus={toggleBatchStatus}
+            openEditBatchModal={openEditBatchModal}
+            deleteBatch={deleteBatch}
+          />
         )}
 
         {/* ============================ KATEGORI ============================ */}
         {activeMenu === 'kategori' && (
-          <>
-            <PageHead
-              title="Kategori Produk"
-              desc="Kategori master yang dipublikasikan ke filter katalog toko. Input produk wajib memilih dari daftar ini agar filter toko selalu sinkron."
-              badge={<Badge tone="gray">{categories.length} kategori</Badge>}
-              actions={
-                <Button icon="plus" onClick={() => setCategoryModal({ mode: 'create', form: { name: '' } })}>
-                  Kategori Baru
-                </Button>
-              }
-            />
-
-            <Card
-              title="Daftar Kategori"
-              subtitle="Urutan filter di toko mengikuti urutan daftar ini."
-              action={<Badge tone="gray">{products.length} produk terhubung</Badge>}
-            >
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Kategori</th>
-                    <th className={`${TH} text-center`}>Jumlah Produk</th>
-                    <th className={`${TH} text-center`}>Status</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {categories.map((c) => {
-                    const count = products.filter((p) => p.category === c).length;
-                    return (
-                      <tr key={c} className="hover:bg-gray-50/70">
-                        <td className={`${TD} font-semibold text-gray-900`}>{c}</td>
-                        <td className={`${TD} text-center`}>{count}</td>
-                        <td className={`${TD} text-center`}>
-                          <Badge tone={count > 0 ? 'teal' : 'gray'}>{count > 0 ? 'Dipakai' : 'Kosong'}</Badge>
-                        </td>
-                        <td className={`${TD} text-right`}>
-                          <div className="inline-flex items-center gap-1">
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              icon="edit"
-                              onClick={() => setCategoryModal({ mode: 'edit', id: c, form: { name: c } })}
-                            >
-                              Ubah
-                            </Button>
-                            <Button size="xs" variant="dangerOutline" icon="trash" onClick={() => deleteCategory(c)}>
-                              Hapus
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </TableWrap>
-              {categories.length === 0 && (
-                <EmptyState
-                  title="Belum ada kategori"
-                  desc="Tambahkan kategori agar produk bisa difilter di katalog toko."
-                  icon="filter"
-                />
-              )}
-            </Card>
-          </>
+          <PurchasingCategoriesTab
+            categories={categories}
+            setCategoryModal={setCategoryModal}
+            products={products}
+            deleteCategory={deleteCategory}
+          />
         )}
 
         {/* ============================ REKENING ============================ */}
-        {activeMenu === 'rekening' && (() => {
-          const publicBanks = bankAccounts.filter((b) => (b.type || 'public') === 'public');
-          const pengajuanBanks = bankAccounts.filter((b) => b.type === 'pengajuan');
-          const currentList = bankTab === 'public' ? publicBanks : pengajuanBanks;
-
-          return (
-            <>
-              <PageHead
-                title="Master Rekening Bank"
-                desc={
-                  bankTab === 'public'
-                    ? 'Kelola rekening resmi toko untuk pembayaran checkout mitra, DP, pelunasan, dan faktur invoice.'
-                    : 'Kelola rekening transfer vendor / supplier untuk tujuan pengajuan dana ke Owner.'
-                }
-                badge={
-                  <Badge tone={bankTab === 'public' ? 'emerald' : 'amber'}>
-                    {currentList.filter((b) => b.active).length} aktif / {currentList.length} total
-                  </Badge>
-                }
-                actions={
-                  <Button
-                    icon="plus"
-                    variant={bankTab === 'pengajuan' ? 'gold' : 'primary'}
-                    onClick={() =>
-                      setBankModal({
-                        mode: 'create',
-                        form: {
-                          bank: '',
-                          accountNo: '',
-                          holder: '',
-                          type: bankTab,
-                          purpose: bankTab === 'public' ? 'Penerimaan Pembayaran Mitra' : '',
-                          active: true
-                        }
-                      })
-                    }
-                  >
-                    {bankTab === 'pengajuan' ? 'Rekening Pengajuan Baru' : 'Rekening Publik Baru'}
-                  </Button>
-                }
-              />
-
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-                <Segmented
-                  value={bankTab}
-                  onChange={setBankTab}
-                  options={[
-                    {
-                      value: 'public',
-                      label: 'Rekening Publik Toko',
-                      count: publicBanks.length
-                    },
-                    {
-                      value: 'pengajuan',
-                      label: 'Rekening Pengajuan Owner',
-                      count: pengajuanBanks.length
-                    }
-                  ]}
-                />
-              </div>
-
-              <Card>
-                <TableWrap>
-                  <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>
-                      <th className={TH}>Bank</th>
-                      <th className={TH}>Nomor Rekening</th>
-                      <th className={TH}>Atas Nama</th>
-                      <th className={TH}>{bankTab === 'pengajuan' ? 'Brand / Peruntukan Vendor' : 'Label / Kegunaan'}</th>
-                      <th className={`${TH} text-center`}>Status</th>
-                      <th className={`${TH} text-right`}>Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {currentList.map((b) => {
-                      const isEditing = inlineBankId === b.id;
-
-                      if (isEditing) {
-                        return (
-                          <tr key={b.id} className="bg-amber-50/60">
-                            <td className={TD}>
-                              <input
-                                type="text"
-                                value={inlineBankForm.bank}
-                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, bank: e.target.value }))}
-                                placeholder="Bank"
-                                className="w-24 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#541221] bg-white font-semibold"
-                              />
-                            </td>
-                            <td className={TD}>
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                value={inlineBankForm.accountNo}
-                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, accountNo: e.target.value.replace(/\D/g, '') }))}
-                                placeholder="No Rekening"
-                                className="w-36 font-mono px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#541221] bg-white"
-                              />
-                            </td>
-                            <td className={TD}>
-                              <input
-                                type="text"
-                                value={inlineBankForm.holder}
-                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, holder: e.target.value }))}
-                                placeholder="Atas Nama"
-                                className="w-full min-w-[140px] px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#541221] bg-white"
-                              />
-                            </td>
-                            <td className={TD}>
-                              <input
-                                type="text"
-                                value={inlineBankForm.purpose}
-                                onChange={(e) => setInlineBankForm((prev) => ({ ...prev, purpose: e.target.value }))}
-                                placeholder={bankTab === 'pengajuan' ? 'Brand / Peruntukan Vendor' : 'Label / Kegunaan'}
-                                className="w-full min-w-[140px] px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-[#541221] bg-white"
-                              />
-                            </td>
-                            <td className={`${TD} text-center`}>
-                              <label className="inline-flex items-center gap-1 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={inlineBankForm.active}
-                                  onChange={(e) => setInlineBankForm((prev) => ({ ...prev, active: e.target.checked }))}
-                                  className="rounded border-gray-300 text-[#541221]"
-                                />
-                                <span className="text-[11px] text-gray-600 font-medium">{inlineBankForm.active ? 'Aktif' : 'Nonaktif'}</span>
-                              </label>
-                            </td>
-                            <td className={`${TD} text-right`}>
-                              <div className="inline-flex items-center gap-1">
-                                <Button size="xs" variant="primary" onClick={() => saveInlineEditBank(b)}>
-                                  Simpan
-                                </Button>
-                                <Button size="xs" variant="outline" onClick={() => setInlineBankId(null)}>
-                                  Batal
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      }
-
-                      return (
-                        <tr key={b.id} className="hover:bg-gray-50/70">
-                          <td className={`${TD} font-semibold text-gray-900`}>{b.bank}</td>
-                          <td className={`${TD} font-mono whitespace-nowrap`}>{b.accountNo}</td>
-                          <td className={TD}>{b.holder}</td>
-                          <td className={`${TD} text-xs text-gray-600`}>
-                            {b.type === 'pengajuan' && Array.isArray(b.brands) && b.brands.length > 0 ? (
-                              <div className="space-y-1">
-                                <div className="flex flex-wrap gap-1">
-                                  {b.brands.map((br) => (
-                                    <span
-                                      key={br}
-                                      className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-rose-50 text-rose-900 border border-rose-200"
-                                    >
-                                      {br}
-                                    </span>
-                                  ))}
-                                </div>
-                                {b.purpose && !b.purpose.startsWith('Brand:') && (
-                                  <p className="text-[11px] text-gray-500">{b.purpose}</p>
-                                )}
-                              </div>
-                            ) : (
-                              b.purpose || (b.type === 'pengajuan' ? 'Vendor / Operasional' : 'Penerimaan Mitra')
-                            )}
-                          </td>
-                          <td className={`${TD} text-center`}>
-                            <Badge tone={b.active ? (bankTab === 'public' ? 'emerald' : 'amber') : 'gray'}>
-                              {b.active ? 'Aktif' : 'Nonaktif'}
-                            </Badge>
-                          </td>
-                          <td className={`${TD} text-right`}>
-                            <div className="inline-flex items-center gap-1">
-                              <Button size="xs" variant="outline" onClick={() => startInlineEditBank(b)}>
-                                Ubah
-                              </Button>
-                              <Button size="xs" variant="outline" onClick={() => toggleBank(b)}>
-                                {b.active ? 'Nonaktifkan' : 'Aktifkan'}
-                              </Button>
-                              <Button
-                                size="xs"
-                                variant="danger"
-                                icon="trash"
-                                onClick={() => deleteBank(b)}
-                              >
-                                Hapus
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </TableWrap>
-                {currentList.length === 0 && (
-                  <EmptyState
-                    title={bankTab === 'public' ? 'Belum ada rekening publik' : 'Belum ada rekening pengajuan vendor'}
-                    desc={
-                      bankTab === 'public'
-                        ? 'Tambahkan rekening toko agar mitra dapat melakukan transfer pembayaran pesanan.'
-                        : 'Tambahkan rekening supplier atau vendor untuk tujuan pengajuan dana ke Owner.'
-                    }
-                    icon="card"
-                  />
-                )}
-              </Card>
-            </>
-          );
-        })()}
+        {activeMenu === 'rekening' && (
+          <PurchasingBankAccountsTab
+            bankAccounts={bankAccounts}
+            bankTab={bankTab}
+            setBankTab={setBankTab}
+            setBankModal={setBankModal}
+            inlineBankId={inlineBankId}
+            setInlineBankId={setInlineBankId}
+            inlineBankForm={inlineBankForm}
+            setInlineBankForm={setInlineBankForm}
+            startInlineEditBank={startInlineEditBank}
+            saveInlineEditBank={saveInlineEditBank}
+            toggleBank={toggleBank}
+            deleteBank={deleteBank}
+          />
+        )}
 
         {/* ============================ EKSPEDISI =========================== */}
         {activeMenu === 'ekspedisi' && (
-          <>
-            <PageHead
-              title="Master Ekspedisi Pengiriman"
-              desc="Daftar jasa kirim yang bisa dipilih saat admin input ongkir dan dipublikasikan ke halaman checkout mitra."
-              badge={<Badge tone="gray">{couriers.filter((c) => c.active).length} aktif</Badge>}
-              actions={
-                <Button
-                  icon="plus"
-                  onClick={() =>
-                    setCourierModal({ mode: 'create', form: { name: '', code: '', note: '', active: true } })
-                  }
-                >
-                  Ekspedisi Baru
-                </Button>
-              }
-            />
-
-            <Card title="Daftar Ekspedisi" subtitle="Ekspedisi nonaktif tidak muncul pada pilihan checkout.">
-              <TableWrap>
-                <thead className="bg-gray-50 border-b border-gray-100">
-                  <tr>
-                    <th className={TH}>Ekspedisi</th>
-                    <th className={TH}>Kode</th>
-                    <th className={TH}>Catatan</th>
-                    <th className={`${TH} text-center`}>Status</th>
-                    <th className={`${TH} text-right`}>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {couriers.map((c) => (
-                    <tr key={c.id} className="hover:bg-gray-50/70">
-                      <td className={`${TD} font-semibold text-gray-900`}>{c.name}</td>
-                      <td className={`${TD} font-mono whitespace-nowrap`}>{c.code || '—'}</td>
-                      <td className={`${TD} max-w-[260px] text-[11px] text-gray-600`}>{c.note || '—'}</td>
-                      <td className={`${TD} text-center`}>
-                        <Badge tone={c.active ? 'teal' : 'gray'}>{c.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                      </td>
-                      <td className={`${TD} text-right`}>
-                        <div className="inline-flex items-center gap-1">
-                          <Button size="xs" variant="outline" onClick={() => toggleCourier(c)}>
-                            {c.active ? 'Nonaktifkan' : 'Aktifkan'}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            icon="edit"
-                            onClick={() => setCourierModal({ mode: 'edit', id: c.id, form: { ...c } })}
-                          >
-                            Ubah
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="danger"
-                            icon="trash"
-                            onClick={() => deleteCourier(c)}
-                          >
-                            Hapus
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
-              {couriers.length === 0 && (
-                <EmptyState
-                  title="Belum ada ekspedisi"
-                  desc="Tambahkan jasa kirim agar ongkir bisa diinput saat verifikasi pesanan."
-                  icon="truck"
-                />
-              )}
-            </Card>
-          </>
+          <PurchasingCouriersTab
+            couriers={couriers}
+            setCourierModal={setCourierModal}
+            toggleCourier={toggleCourier}
+            deleteCourier={deleteCourier}
+          />
         )}
 
         {/* ============================= PENGATURAN AKUN ============================= */}
@@ -5993,6 +3565,27 @@ export default function MarketingDashboard({
           brands={brands}
           categories={categories}
           poBatches={poBatches}
+          onCreateBrand={async (brandPayload) => {
+            try {
+              let cleanPayload = { ...brandPayload };
+              const res = await api.management.createBrand(cleanPayload);
+              if (res?.data) {
+                const serverBrand = res.data;
+                const newB = mapBrandToCore({
+                  ...cleanPayload,
+                  ...(serverBrand || {}),
+                  id: serverBrand?.id ?? null,
+                  supplier: serverBrand?.supplier?.name || cleanPayload.supplier
+                });
+                commitBrands((prev) => [newB, ...prev]);
+                return serverBrand;
+              }
+            } catch (err) {
+              console.error('Gagal membuat brand baru:', err);
+              throw err;
+            }
+            return null;
+          }}
           onCreateBatch={async (batchPayload) => {
             try {
               let cleanPayload = { ...batchPayload };
@@ -6004,7 +3597,8 @@ export default function MarketingDashboard({
               }
               const res = await api.management.createBatch(cleanPayload);
               if (res?.data) {
-                setPoBatches((prev) => [...prev, res.data]);
+                const normalized = normalizeBatch(res.data);
+                commitBatches((prev) => [...prev, normalized]);
                 return res.data;
               }
             } catch (err) {
@@ -6225,9 +3819,19 @@ export default function MarketingDashboard({
               <Field label="Supplier Pabrik">
                 <Select
                   value={brandModal.form.supplier || ''}
-                  onChange={(e) =>
-                    setBrandModal((prev) => ({ ...prev, form: { ...prev.form, supplier: e.target.value } }))
-                  }
+                  onChange={(e) => {
+                    const supName = e.target.value;
+                    const matched = suppliers.find((s) => s.name === supName);
+                    setBrandModal((prev) => ({
+                      ...prev,
+                      form: {
+                        ...prev.form,
+                        supplier: supName,
+                        supplier_id: matched ? (dbId(matched) || matched.id) : null,
+                        address: matched?.city || prev.form.address || ''
+                      }
+                    }));
+                  }}
                 >
                   <option value="">— Pilih supplier —</option>
                   {suppliers.map((s) => (
@@ -6883,7 +4487,7 @@ export default function MarketingDashboard({
               <Button
                 variant="outline"
                 icon="chat"
-                onClick={() => window.open(waLink(mitraDetail.phone, `Halo ${mitraDetail.name}, kami dari AfatharShop.`), '_blank')}
+                onClick={() => window.open(waLink(mitraDetail.phone, `Halo ${mitraDetail.name}, kami dari Afatharshop.`), '_blank')}
               >
                 WhatsApp
               </Button>
@@ -6940,7 +4544,12 @@ export default function MarketingDashboard({
               <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Riwayat Pesanan</p>
             </div>
             <OrdersTable
-              orders={orders.filter((o) => o.mitraId === mitraDetail.id)}
+              orders={orders.filter(
+                (o) =>
+                  String(o.mitraId) === String(mitraDetail.id) ||
+                  (dbId(o.mitraId) && dbId(o.mitraId) === dbId(mitraDetail.id)) ||
+                  (o.mitraName && o.mitraName === mitraDetail.name)
+              )}
               onOpen={(o) => {
                 setDetailInvoice(o.invoice);
                 setMitraDetailId(null);

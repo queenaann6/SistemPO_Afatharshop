@@ -12,7 +12,7 @@ export default function LogoutSuccessPage({ onNavigateLogin, onNavigateHome }) {
           </div>
           <div className="text-center">
             <h2 className="font-serif text-lg font-bold text-[#8B6A3E] tracking-wider leading-none">
-              Afathar Shop
+              Afatharshop
             </h2>
             <p className="text-[10px] text-[#A6804A] tracking-widest uppercase mt-0.5 font-medium">
               OFFICIAL
@@ -26,7 +26,7 @@ export default function LogoutSuccessPage({ onNavigateLogin, onNavigateHome }) {
             Selamat! Kamu berhasil keluar
           </h1>
           <p className="text-xs sm:text-sm text-stone-500 leading-relaxed max-w-xs mx-auto">
-            Terima kasih telah berbelanja di Afathar Shop. Sampai jumpa kembali!
+            Terima kasih telah berbelanja di Afatharshop. Sampai jumpa kembali!
           </p>
         </div>
 
@@ -55,7 +55,7 @@ export default function LogoutSuccessPage({ onNavigateLogin, onNavigateHome }) {
 
       {/* Footer copyright */}
       <div className="mt-8 text-center text-[11px] text-stone-500">
-        © 2025 Afathar Shop Official. Hak Cipta Dilindungi Undang-Undang.
+        © 2025 Afatharshop Official. Hak Cipta Dilindungi Undang-Undang.
       </div>
     </div>
   );

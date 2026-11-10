@@ -47,7 +47,7 @@ export default function FilterSection({
                 <ChevronDownIcon className={`w-3.5 h-3.5 text-stone-500 transition-transform ${isBrandDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
-              {/* Brand Options Dropdown Menu (Matches Screenshot 2) */}
+              {/* Brand Options Dropdown Menu */}
               {isBrandDropdownOpen && (
                 <div className="absolute left-0 mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-stone-200 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
                   {brands.map((brand) => {
@@ -118,7 +118,7 @@ export default function FilterSection({
 
         </div>
 
-        {/* Sub-bar: Active Tag & Sorting (Matches Screenshot 3) */}
+        {/* Sub-bar: Active Tag & Sorting */}
         {isFiltered && (
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
             

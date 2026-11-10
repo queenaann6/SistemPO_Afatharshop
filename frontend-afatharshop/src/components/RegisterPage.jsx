@@ -7,7 +7,7 @@ export default function RegisterPage({
 }) {
   const adminNumber = '6281219991888';
   const defaultMessage =
-    'Halo Admin Afathar Shop, saya tertarik untuk mendaftar sebagai Mitra / Reseller resmi Afathar Shop. Mohon informasi syarat & langkah pendaftarannya. Terima kasih! 🙏✨';
+    'Halo Admin Afatharshop, saya tertarik untuk mendaftar sebagai Mitra / Reseller resmi Afatharshop. Mohon informasi syarat & langkah pendaftarannya. Terima kasih! 🙏✨';
   const waUrl = `https://wa.me/${adminNumber}?text=${encodeURIComponent(
     defaultMessage
   )}`;
@@ -22,7 +22,7 @@ export default function RegisterPage({
         <div className="flex flex-col items-center justify-center">
           <img
             src="/logo-nobg.png"
-            alt="AfatharShop Official"
+            alt="Afatharshop Official"
             className="h-16 sm:h-20 w-auto object-contain mx-auto mb-1"
           />
         </div>
@@ -36,7 +36,7 @@ export default function RegisterPage({
 
         {/* Heading */}
         <h1 className="font-serif text-xl sm:text-2xl font-bold text-stone-900 tracking-tight leading-snug">
-          Tertarik Bergabung Menjadi Mitra Afathar Shop?
+          Tertarik Bergabung Menjadi Mitra Afatharshop?
         </h1>
 
         {/* Description */}
@@ -60,7 +60,7 @@ export default function RegisterPage({
               <span className="w-4 h-4 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
                 <CheckIcon className="w-3 h-3" />
               </span>
-              <span>Harga Khusus</span>
+              <span>Harga Khusus Reseller & Agen Resmi</span>
             </li>
             <li className="flex items-center gap-2.5">
               <span className="w-4 h-4 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">

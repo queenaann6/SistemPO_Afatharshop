@@ -20,6 +20,7 @@ class OrderItem extends Model
         'discount_nominal',
         'addon_nominal',
         'subtotal',
+        'splits_data',
         'created_at',
     ];
 
@@ -30,6 +31,17 @@ class OrderItem extends Model
         'addon_nominal'    => 'float',
         'subtotal'         => 'float',
     ];
+
+    protected $appends = ['splits'];
+
+    public function getSplitsAttribute(): array
+    {
+        if (empty($this->splits_data)) {
+            return [];
+        }
+        $decoded = json_decode($this->splits_data, true);
+        return is_array($decoded) ? $decoded : [];
+    }
 
     public function order()
     {

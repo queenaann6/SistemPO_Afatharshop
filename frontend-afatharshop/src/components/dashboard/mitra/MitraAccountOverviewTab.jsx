@@ -26,7 +26,7 @@ export default function MitraAccountOverviewTab({ currentUser, onSelectTab }) {
             Akun Saya
           </h2>
           <p className="text-xs text-stone-500 mt-0.5">
-            Informasi legalitas kemitraan, ringkasan profil distributor, dan status keanggotaan resmi Afathar Shop.
+            Informasi legalitas kemitraan, ringkasan profil distributor, dan status keanggotaan resmi Afatharshop.
           </p>
         </div>
 
@@ -78,7 +78,7 @@ export default function MitraAccountOverviewTab({ currentUser, onSelectTab }) {
                 </span>
               </div>
               <p className="text-rose-100 text-xs font-mono">
-                ID Kemitraan: <strong className="text-white">MTR-2026-08182</strong>
+                ID Kemitraan: <strong className="text-white">{currentUser?.mitraId || currentUser?.id_mitra || (currentUser?.id ? `MTR-${String(currentUser.id).padStart(3, '0')}` : 'MTR-001')}</strong>
               </p>
               <p className="text-xs text-rose-200">
                 Terdaftar Sejak: 18 Oktober 2026 &bull; Kota Bekasi, Jawa Barat

@@ -230,3 +230,11 @@ Artisan::command('termin:sync-invoices', function () {
     $this->info("Selesai. {$rebuilt} invoice diperbarui mengikuti termin katalog.");
 })->purpose('Rebuild unpaid invoice installments from catalog product payment_stages');
 
+Artisan::command('po:auto-close', function () {
+    $this->info('Menjalankan pengecekan tanggal & jam tutup PO...');
+    App\Models\Product::autoSyncExpired();
+    $this->info('Sinkronisasi penutupan batch & produk PO expired berhasil diselesaikan.');
+})->purpose('Auto close expired PO batches and products based on close date & time');
+
+\Illuminate\Support\Facades\Schedule::command('po:auto-close')->everyMinute();
+

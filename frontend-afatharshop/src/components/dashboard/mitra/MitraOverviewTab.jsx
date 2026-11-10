@@ -61,7 +61,7 @@ export default function MitraOverviewTab({
         </h2>
       </div>
 
-      {/* Maroon Welcome Banner (Matches Screenshot 2) */}
+      {/* Maroon Welcome Banner */}
       <div className="bg-gradient-to-br from-[#6B1416] via-[#831843] to-[#520C0E] rounded-3xl p-5 sm:p-6 text-white shadow-sm flex items-start gap-4">
         <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center shrink-0 mt-0.5">
           <UserIcon className="w-5 h-5 text-rose-100" />
@@ -213,7 +213,7 @@ export default function MitraOverviewTab({
                 BULAN INI
               </p>
               <p className="text-lg sm:text-xl font-bold text-emerald-600 mt-0.5">
-                Rp {bulanIniPembelian.toLocaleString('id-ID')}
+                Rp {Number(bulanIniPembelian || 0).toLocaleString('id-ID')}
               </p>
             </div>
           </div>
@@ -253,7 +253,7 @@ export default function MitraOverviewTab({
                 BULAN INI (ESTIMASI MARGIN)
               </p>
               <p className="text-lg sm:text-xl font-bold text-cyan-700 mt-0.5">
-                Rp {bulanIniProfit.toLocaleString('id-ID')}
+                Rp {Number(bulanIniProfit || 0).toLocaleString('id-ID')}
               </p>
             </div>
           </div>

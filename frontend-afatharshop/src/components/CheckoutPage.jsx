@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   HomeIcon,
   ChevronRightIcon,
@@ -20,27 +20,10 @@ export default function CheckoutPage({
   onCompleteOrder,
   adminCouriers = []
 }) {
-  // Fallback items if cart was empty or directly checked out (Matches Screenshot 4)
-  const items =
-    checkoutItems && checkoutItems.length > 0
-      ? checkoutItems
-      : [
-          {
-            id: 'po-hera-bag',
-            title: 'HESEA HERA BAG',
-            variant: 'HERA BAG all',
-            color: 'AMERICANO',
-            price: 71200,
-            qty: 1,
-            weight: 0.999,
-            image:
-              'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=400&q=80',
-            store: 'Afathar Shop',
-            storeCity: 'KOTA BOGOR'
-          }
-        ];
+  // Hanya gunakan item yang benar-benar dikirim dari keranjang / Buy Now
+  const items = Array.isArray(checkoutItems) ? checkoutItems : [];
 
-  // Address List (Matches Screenshot 2 & synchronizes with Mitra Address Book)
+  // Address List (Synchronizes with Mitra Address Book)
   const [addresses, setAddresses] = useState(() => getStoredAddresses());
 
   // Selected address
@@ -55,7 +38,7 @@ export default function CheckoutPage({
   // Options & Forms States
   const [aturSebelumKirim, setAturSebelumKirim] = useState(true);
   const [notes, setNotes] = useState('');
-  const [selectedCourier, setSelectedCourier] = useState('Reguler');
+  const [selectedCourier, setSelectedCourier] = useState('Ditentukan Sebelum Pengiriman');
 
   // Dropship Info State
   const [isDropshipActive, setIsDropshipActive] = useState(false);
@@ -162,6 +145,7 @@ export default function CheckoutPage({
   // Confirm and Create Order
   const handleConfirmOrder = () => {
     setIsSummaryModalOpen(false);
+    if (!items || items.length === 0) return;
 
     const firstItem = items[0] || {};
     const schemeDpPct = dpPercentFor(firstItem);
@@ -209,8 +193,11 @@ export default function CheckoutPage({
       recipientAddress: activeAddress.address,
       recipientCity: activeAddress.city || '',
       addressId: activeAddress.backendId || activeAddress.id || null,
-      courier: selectedCourier,
-      aturSebelumKirim,
+      courier: aturSebelumKirim ? 'Ditentukan Sebelum Pengiriman' : (selectedCourier || 'Ditentukan Sebelum Pengiriman'),
+      aturSebelumKirim: Boolean(aturSebelumKirim),
+      shippingCost: 0,
+      shippingFee: 0,
+      ongkir: 0,
       notes,
       isDropshipActive,
       dropshipInfo,
@@ -261,6 +248,84 @@ export default function CheckoutPage({
     }
   };
 
+  const isAdmin = useMemo(() => {
+    const r = String(currentUser?.roleId || currentUser?.role || '').toLowerCase();
+    return ['marketing', 'purchasing', 'finance', 'owner', 'admin', 'superadmin'].includes(r);
+  }, [currentUser]);
+
+  if (isAdmin) {
+    return (
+      <div className="min-h-screen bg-[#faeae5] py-12 px-4 antialiased flex items-center justify-center">
+        <div className="max-w-md w-full bg-white rounded-3xl border border-stone-200/90 shadow-xl p-6 sm:p-8 text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto text-[#6B1416] text-xl font-bold font-serif">
+            !
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-lg font-bold text-stone-900 font-serif">
+              Halaman Khusus Mitra
+            </h2>
+            <p className="text-xs text-stone-600 leading-relaxed">
+              Akun Admin/Staff internal tidak melakukan checkout langsung di etalase toko. Untuk membuatkan pesanan atas nama mitra, silakan gunakan menu <strong>Input Pesanan Manual</strong> di Dashboard Purchasing.
+            </p>
+          </div>
+          <div className="pt-2 flex flex-col sm:flex-row gap-2.5 justify-center">
+            <button
+              type="button"
+              onClick={onNavigateHome}
+              className="px-4 py-2.5 rounded-xl border border-stone-300 text-xs font-semibold text-stone-700 hover:bg-stone-50 transition cursor-pointer"
+            >
+              Kembali ke Toko
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('afathar_current_page', 'marketing_dashboard');
+                  window.location.reload();
+                }
+              }}
+              className="px-4 py-2.5 rounded-xl bg-[#6B1416] hover:bg-[#520C0E] text-white text-xs font-bold transition cursor-pointer shadow-sm"
+            >
+              Ke Dashboard Purchasing
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!items || items.length === 0) {
+    return (
+      <div className="min-h-screen bg-[#faeae5] py-12 px-4 antialiased flex items-center justify-center">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-stone-200/90 shadow-sm p-8 text-center space-y-4">
+          <div className="w-16 h-16 rounded-full bg-stone-100 flex items-center justify-center mx-auto text-stone-400">
+            <TruckIcon className="w-8 h-8" />
+          </div>
+          <h2 className="text-lg font-bold text-stone-900">Item Checkout Kosong</h2>
+          <p className="text-xs text-stone-500 leading-relaxed">
+            Tidak ada produk yang dipilih untuk proses checkout. Silakan pilih produk dari katalog atau keranjang belanja terlebih dahulu.
+          </p>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onNavigateCart}
+              className="px-4 py-2.5 text-xs font-semibold rounded-xl border border-stone-300 text-stone-700 hover:bg-stone-50 transition cursor-pointer"
+            >
+              Buka Keranjang
+            </button>
+            <button
+              type="button"
+              onClick={onNavigateHome}
+              className="px-4 py-2.5 text-xs font-semibold rounded-xl bg-[#6B1416] text-white hover:bg-[#520C0E] transition cursor-pointer"
+            >
+              Jelajahi Katalog
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#faeae5] py-6 sm:py-8 antialiased">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-5">
@@ -284,7 +349,7 @@ export default function CheckoutPage({
           <span className="font-semibold text-stone-900">Checkout Pre-Order</span>
         </div>
 
-        {/* 2-Column Checkout Layout (Matches Screenshot 4) */}
+        {/* 2-Column Checkout Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           
           {/* LEFT COLUMN: Shipping Address & Products (8 Cols) */}
@@ -367,34 +432,52 @@ export default function CheckoutPage({
                 </button>
               </div>
 
-              {/* Checkbox: Atur Sebelum Pengiriman (Exact styling from Screenshot 4) */}
-              <div className="bg-[#fefcf8] border border-amber-200/80 rounded-lg p-3.5 space-y-1">
-                <label className="flex items-center gap-2 cursor-pointer font-bold text-stone-900 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={aturSebelumKirim}
-                    onChange={(e) => setAturSebelumKirim(e.target.checked)}
-                    className="w-4 h-4 rounded border-amber-300 text-stone-900 focus:ring-stone-800"
-                  />
-                  <span>Atur Sebelum Pengiriman</span>
-                </label>
-                <p className="text-[11px] text-stone-500 pl-6 leading-relaxed">
-                  Centang jika alamat & ongkos kirim ingin diatur nanti sebelum barang dikirim. Ongkir tidak dihitung sekarang (ditagih menyusul).
-                </p>
+              {/* Checkbox: Atur Sebelum Pengiriman */}
+              <div
+                onClick={() => setAturSebelumKirim((prev) => !prev)}
+                className={`rounded-xl p-3.5 sm:p-4 border transition-all cursor-pointer select-none ${
+                  aturSebelumKirim
+                    ? 'bg-[#fffdf9] border-amber-300 shadow-2xs ring-1 ring-amber-300/40'
+                    : 'bg-stone-50 border-stone-200 hover:border-stone-300'
+                }`}
+              >
+                <div className="flex items-start gap-2.5">
+                  <div className="pt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={aturSebelumKirim}
+                      onChange={(e) => setAturSebelumKirim(e.target.checked)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-4 h-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500 cursor-pointer accent-amber-600"
+                    />
+                  </div>
+                  <div className="space-y-0.5">
+                    <label className="text-xs font-bold text-stone-900 cursor-pointer block">
+                      Atur Sebelum Pengiriman
+                    </label>
+                    <p className="text-[11px] text-stone-500 leading-relaxed">
+                      Centang jika alamat & ongkos kirim ingin diatur nanti sebelum barang dikirim. Ongkir tidak dihitung sekarang (ditagih menyusul).
+                    </p>
+                  </div>
+                </div>
               </div>
 
             </div>
 
-            {/* CARD 2: Store & Product Item (Matches Screenshot 4) */}
+            {/* CARD 2: Store & Product Item */}
             <div className="bg-white rounded-xl border border-stone-200/90 shadow-xs p-5 sm:p-6 space-y-4">
               
-              {/* Store Identity */}
-              <div className="flex items-center gap-2 pb-3 border-b border-stone-100">
-                <span className="text-base">🏪</span>
-                <span className="text-xs font-bold text-stone-900">Afathar Shop</span>
-                <span className="text-[10px] text-stone-400 font-semibold uppercase tracking-wider ml-1">
-                  DISTRIBUTOR RESMI
-                </span>
+              {/* Store Identity (Logo + Brand + Distributor Resmi) */}
+              <div className="flex items-center gap-2.5 pb-3 border-b border-stone-100">
+                <div className="w-7 h-7 rounded-full overflow-hidden border border-[#F0C973] bg-white shadow-2xs shrink-0 flex items-center justify-center">
+                  <img src="/logo.jpg" alt="Afathar Shop" className="w-full h-full object-cover" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs sm:text-sm font-bold text-stone-900">Afathar Shop</span>
+                  <span className="bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-[9.5px] font-bold px-1.5 py-0.5 rounded tracking-wide uppercase">
+                    Distributor Resmi
+                  </span>
+                </div>
               </div>
 
               {/* Product Rows */}
@@ -443,52 +526,22 @@ export default function CheckoutPage({
                 ))}
               </div>
 
-              {/* Order Notes Field (Matches Screenshot 4) */}
+              {/* Order Notes Field */}
               <div className="pt-2">
                 <input
                   type="text"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Catatan"
-                  className="w-full px-3 py-2 text-xs border border-stone-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-stone-400 placeholder:text-stone-400"
+                  placeholder="Catatan untuk pesanan ini..."
+                  className="w-full px-3.5 py-2.5 text-xs border border-stone-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-stone-400 placeholder:text-stone-400"
                 />
-              </div>
-
-              {/* Courier Selection (Matches Screenshot 4) */}
-              <div className="pt-3 border-t border-stone-100 space-y-2">
-                <label className="text-xs font-bold text-stone-900">
-                  Jasa Pengiriman
-                </label>
-
-                <div className="border border-stone-200 rounded-lg p-3 flex flex-wrap items-center justify-between gap-2">
-                  <div className="space-y-0.5">
-                    <p className="text-xs font-bold text-stone-900">{selectedCourier}</p>
-                    <p className="text-[11px] text-stone-500">
-                      Hitung Sebelum Pengiriman -
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <div className="text-right">
-                      <p className="text-[10px] text-stone-400">Biaya</p>
-                      <p className="text-xs font-bold text-stone-900">Rp 0</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsCourierModalOpen(true)}
-                      className="px-3 py-1 border border-stone-300 hover:bg-stone-50 text-xs font-semibold text-stone-700 rounded-md transition cursor-pointer"
-                    >
-                      Ubah
-                    </button>
-                  </div>
-                </div>
               </div>
 
             </div>
 
           </div>
 
-          {/* RIGHT COLUMN: Order Summary (4 Cols) - Matches Screenshot 4 */}
+          {/* RIGHT COLUMN: Order Summary (4 Cols) */}
           <div className="lg:col-span-4">
             <div className="bg-white rounded-xl border border-stone-200/90 shadow-xs p-5 sm:p-6 space-y-4 sticky top-24">
               
@@ -511,7 +564,14 @@ export default function CheckoutPage({
 
                 <div className="flex justify-between items-center">
                   <span>Total Ongkos Kirim</span>
-                  <span className="font-semibold text-stone-900">Rp 0</span>
+                  <span className="font-semibold text-stone-900 flex items-center gap-1.5">
+                    Rp 0
+                    {aturSebelumKirim && (
+                      <span className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200/80 px-1.5 py-0.5 rounded font-semibold">
+                        Ditagih Menyusul
+                      </span>
+                    )}
+                  </span>
                 </div>
 
                 <div className="flex justify-between items-center text-stone-400">
@@ -527,7 +587,7 @@ export default function CheckoutPage({
                 </span>
               </div>
 
-              {/* Buat Pesanan Button (Exact Black Button from Screenshot 4) */}
+              {/* Buat Pesanan Button */}
               <button
                 type="button"
                 onClick={() => setIsSummaryModalOpen(true)}
@@ -548,7 +608,7 @@ export default function CheckoutPage({
       </div>
 
       {/* ============================================================ */}
-      {/* MODAL 1: PILIH ALAMAT (Exact Match to Screenshot 2)         */}
+      {/* MODAL 1: PILIH ALAMAT   */}
       {/* ============================================================ */}
       {isSelectAddressOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-2xs animate-in fade-in">
@@ -654,7 +714,7 @@ export default function CheckoutPage({
       )}
 
       {/* ============================================================ */}
-      {/* MODAL 2: TAMBAH / UBAH ALAMAT BARU (Screenshot 3)           */}
+      {/* MODAL 2: TAMBAH / UBAH ALAMAT BARU */}
       {/* ============================================================ */}
       <AddressFormModal
         isOpen={isAddressFormOpen}
@@ -798,7 +858,7 @@ export default function CheckoutPage({
       )}
 
       {/* ============================================================ */}
-      {/* MODAL 5: RINGKASAN PEMBAYARAN (Exact Match to Screenshot 5)  */}
+      {/* MODAL 5: RINGKASAN PEMBAYARAN */}
       {/* ============================================================ */}
       {isSummaryModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-2xs animate-in fade-in">
@@ -834,7 +894,14 @@ export default function CheckoutPage({
 
                 <div className="flex justify-between items-center">
                   <span>Total Ongkos Kirim</span>
-                  <span className="font-semibold text-stone-900">Rp 0</span>
+                  <span className="font-semibold text-stone-900 flex items-center gap-1.5">
+                    Rp 0
+                    {aturSebelumKirim && (
+                      <span className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200/80 px-1.5 py-0.5 rounded font-semibold">
+                        Ditagih Menyusul
+                      </span>
+                    )}
+                  </span>
                 </div>
               </div>
 
@@ -845,7 +912,7 @@ export default function CheckoutPage({
                 </span>
               </div>
 
-              {/* Buat Pesanan Outline Button (Exact Match to Screenshot 5) */}
+              {/* Buat Pesanan Outline Button */}
               <button
                 type="button"
                 onClick={handleConfirmOrder}

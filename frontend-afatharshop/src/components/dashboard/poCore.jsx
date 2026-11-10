@@ -13,7 +13,7 @@ import { DEFAULT_DP_PCT, stageRowsOf, defaultStagePcts, stageLabelFor } from '..
 
 /* ============================================================================
    PO CORE — model status, helper, komponen UI, shell & data demo
-   Dipakai bersama oleh MarketingDashboard, FinanceDashboard, OwnerFinanceDashboard.
+   Dipakai bersama oleh PurchasingDashboard, FinanceDashboard, OwnerFinanceDashboard.
    Semua file dashboard diimpor dari folder yang sama.
    ========================================================================== */
 
@@ -27,7 +27,17 @@ export const pct = (n) => `${Math.round(Number(n || 0))}%`;
 
 export const toISO = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-export const parseISO = (iso) => new Date(`${iso}T00:00:00`);
+export const parseISO = (iso) => {
+  if (!iso) return new Date();
+  if (iso instanceof Date) return iso;
+  const s = String(iso).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T00:00:00`);
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d;
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return new Date(`${m[1]}T00:00:00`);
+  return new Date();
+};
 export const addDays = (iso, n) => {
   const d = parseISO(iso);
   d.setDate(d.getDate() + n);
@@ -618,14 +628,18 @@ const brandFeeKey = (level) => {
     Agen: 'discountAgen',
     Reseller: 'discountReseller'
   };
-  return map[level] || 'discountDBAll';
+  return map[level] || null;
 };
 
 export const feeTypeFor = (brand) => (brand?.feeType === 'nominal' ? 'nominal' : 'pct');
 
-export const brandFeeValue = (brand, level) => num(brand?.[brandFeeKey(level)]);
+export const brandFeeValue = (brand, level) => {
+  const key = brandFeeKey(level);
+  return key ? num(brand?.[key]) : 0;
+};
 
 export const feeNominalFor = (brand, level, price) => {
+  if (!level || level === 'Guest' || level === 'Retail') return 0;
   const value = brandFeeValue(brand, level);
   if (!value) return 0;
   const perUnit = feeTypeFor(brand) === 'nominal' ? value : Math.round((num(price) * value) / 100);
@@ -691,12 +705,19 @@ export const groupBy = (list, fn) => {
 
 export const sumBy = (list, fn) => (list || []).reduce((s, x) => s + num(fn(x)), 0);
 
+export const variantPricing = (product, variant) => {
+  const base = Number(product?.price || 0);
+  const addon = Number(variant?.addon || 0);
+  const price = addon > 0 ? base + addon : Number(variant?.price || base);
+  return { price, addon };
+};
+
 export const variantLabel = (v) => [v?.color, v?.model, v?.size].filter(Boolean).join('/');
 
 /* -------------------------------------------------------- WhatsApp messages */
 export const buildWA = (kind, order, ctx = {}) => {
-  const shop = ctx.shopName || 'Afathar Shop';
-  const sender = ctx.senderName || 'Admin Afathar Shop';
+  const shop = ctx.shopName || 'Afatharshop';
+  const sender = ctx.senderName || 'Admin Afatharshop';
   const banks = (ctx.banks || []).filter((b) => b.active && (b.type || 'public') === 'public');
   const bankLines = banks.length
     ? banks.map((b) => `• ${b.bank} ${b.accountNo} a.n ${b.holder}`).join('\n')
@@ -820,10 +841,10 @@ export const createSeedData = () => {
 
   const bankAccounts = [
     // Rekening Publik (Resmi Distributor untuk Mitra / Checkout / Deposit / Invoice)
-    { id: 'bk-1', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
-    { id: 'bk-2', bank: 'Mandiri', accountNo: '133-00-2998801', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
-    { id: 'bk-3', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
-    { id: 'bk-4', bank: 'BSI', accountNo: '718-002-9988', holder: 'CV AFATHAR SHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bk-1', bank: 'BCA', accountNo: '739-082-9988', holder: 'CV AFATHARSHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bk-2', bank: 'Mandiri', accountNo: '133-00-2998801', holder: 'CV AFATHARSHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bk-3', bank: 'BRI', accountNo: '0120-01-002998-50-2', holder: 'CV AFATHARSHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
+    { id: 'bk-4', bank: 'BSI', accountNo: '718-002-9988', holder: 'CV AFATHARSHOP DISTRIBUTOR', active: true, type: 'public', purpose: 'Penerimaan Pembayaran Mitra' },
 
     // Rekening Pengajuan ke Owner (Tujuan Transfer Vendor / Supplier / Produksi / Operasional)
     { id: 'pr-1', bank: 'BCA', accountNo: '522-034-1100', holder: 'PT HANA TEXTILE NUSANTARA', active: true, type: 'pengajuan', purpose: 'Supplier Kain & Bahan Baku' },
@@ -853,12 +874,12 @@ export const createSeedData = () => {
   const paymentRequests = [];
 
   const settings = {
-    shopName: 'Afathar Shop',
-    senderName: 'Owner Afathar Shop',
+    shopName: 'Afatharshop',
+    senderName: 'Owner Afatharshop',
     dpPct: DEFAULT_DP_PCT,
     pelunasanDueDays: 7,
     ongkirDueDays: 3,
-    waFooter: 'Transfer hanya ke rekening resmi Afathar Shop.',
+    waFooter: 'Transfer hanya ke rekening resmi Afatharshop.',
     instagram: '@afatharshop'
   };
 
@@ -2263,7 +2284,7 @@ export function DashboardShell({
   onNavigate,
   portalLabel = 'Portal',
   portalSub = '',
-  brandName = 'Afathar Group',
+  brandName = 'Afatharshop',
   brandInitial = 'A',
   currentUser,
   onLogout,

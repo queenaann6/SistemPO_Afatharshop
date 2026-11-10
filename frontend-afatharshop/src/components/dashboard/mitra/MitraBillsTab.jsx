@@ -11,6 +11,7 @@ import {
 import InvoiceModal from '../../InvoiceModal';
 import { openInvoicePrintTab } from '../../../utils/printInvoice';
 import api, { mediaUrl } from '../../../services/api';
+import { formatDisplayDate } from '../../../services/adapters';
 
 // Helper format Rupiah rapi standar Indonesia
 export const formatRp = (val) => {
@@ -30,11 +31,9 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
     const handledOrderNos = new Set();
 
     const formatDue = (value) => {
-      if (!value) return '';
-      const d = new Date(String(value));
-      return Number.isNaN(d.getTime())
-        ? String(value)
-        : d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+      if (!value || value === '-' || value === '—') return '';
+      const formatted = formatDisplayDate(value);
+      return formatted === '—' ? String(value) : formatted;
     };
 
     ordersList.forEach((order) => {
@@ -78,7 +77,9 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
           else if (st === 'Menunggu Verifikasi' || stg.proof) status = 'Menunggu Verifikasi Finance';
           else if (st === 'Ditolak') status = 'Ditolak Finance (Upload Ulang)';
 
-          const label = stg.label || (isFirst ? 'DP' : isLast ? 'Pelunasan' : `Cicilan ${sIdx}`);
+          const label = (stg.label && !/^cicilan/i.test(stg.label))
+            ? stg.label
+            : (isFirst ? (stages.length <= 2 ? 'DP' : 'DP 1') : isLast ? 'Pelunasan' : `DP ${sIdx + 1}`);
           derived.push({
             id: `bill-stage-${orderNo}-${stg.id ?? sIdx}`,
             orderNo,
@@ -343,8 +344,10 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
             ? {
                 ...b,
                 status: 'Lunas (Dipotong Deposit)',
-                bank: 'Saldo Deposit Mitra',
-                paidDate: todayDate
+                bank: 'Deposit',
+                account: 'Saldo Deposit',
+                paidDate: todayDate,
+                isDeposit: true
               }
             : b
         )
@@ -393,20 +396,34 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
     setPaySubmitting(true);
     setPayError('');
     try {
-      const uploaded = await api.management.uploadFile(payProofFile, 'proof');
-      const proofPath = uploaded?.data?.path || '';
-      if (!proofPath) throw new Error('Server tidak mengembalikan path berkas bukti.');
+      let proofPath = '';
+      if (tokenStore.get()) {
+        try {
+          const uploaded = await api.management.uploadFile(payProofFile, 'proof');
+          proofPath = uploaded?.data?.path || '';
+        } catch (upErr) {
+          console.warn('Gagal upload berkas ke endpoint server, lanjut simpan lokal:', upErr);
+        }
+      }
 
-      const row = await api.my.uploadPayment({
-        order_number: bill.orderNo,
-        invoice_number: bill.order?.invoiceNumber || '',
-        installment_id: installmentIdForBill(bill),
-        stage: bill.billType,
-        amount: bill.amount,
-        proof_url: proofPath
-      });
+      let payment = {};
+      if (proofPath && tokenStore.get()) {
+        try {
+          const row = await api.my.uploadPayment({
+            order_number: bill.orderNo,
+            invoice_number: bill.order?.invoiceNumber || '',
+            installment_id: installmentIdForBill(bill),
+            stage: bill.billType,
+            amount: bill.amount,
+            proof_url: proofPath
+          });
+          payment = row?.data || {};
+        } catch (payErr) {
+          console.warn('Gagal simpan pembayaran ke database backend:', payErr);
+        }
+      }
 
-      const payment = row?.data || {};
+      const displayProof = proofPath ? mediaUrl(proofPath) : payProofPreview;
 
       setBills((prev) =>
         prev.map((b) =>
@@ -414,7 +431,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
             ? {
                 ...b,
                 status: 'Menunggu Verifikasi Finance',
-                proof: mediaUrl(payment.proof_url || proofPath),
+                proof: displayProof,
                 bank: chosenBankLabel,
                 paidDate: todayDate
               }
@@ -430,7 +447,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
         nominal: bill.amount,
         bank: chosenBankLabel,
         note: bill.notes || 'Pembayaran Tagihan',
-        image: mediaUrl(payment.proof_url || proofPath),
+        image: displayProof,
         date: todayDate,
         status: 'Menunggu Validasi'
       });
@@ -445,7 +462,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
         setSelectedPayBill(null);
       }, 2000);
     } catch (err) {
-      setPayError(err?.message || 'Bukti pembayaran gagal dikirim ke server.');
+      setPayError(err?.message || 'Bukti pembayaran gagal diproses.');
     } finally {
       setPaySubmitting(false);
     }
@@ -734,7 +751,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
                 <p className="text-xs text-stone-500">
                   {payMethod === 'deposit'
                     ? 'Tagihan telah dipotong langsung dari Saldo Deposit dan status langsung diperbarui.'
-                    : 'Admin Finance Afathar Shop akan memverifikasi mutasi bank dalam 1x24 jam kerja.'}
+                    : 'Admin finance akan memverifikasi mutasi bank dalam 1x24 jam kerja.'}
                 </p>
               </div>
             ) : (

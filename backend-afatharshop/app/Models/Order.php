@@ -52,6 +52,11 @@ class Order extends Model
         return $this->hasOne(Invoice::class, 'order_id');
     }
 
+    public function payments()
+    {
+        return $this->hasManyThrough(Payment::class, Invoice::class, 'order_id', 'invoice_id');
+    }
+
     public function statusHistories()
     {
         return $this->hasMany(OrderStatusHistory::class, 'order_id');

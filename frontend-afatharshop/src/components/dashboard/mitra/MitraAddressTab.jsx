@@ -162,7 +162,7 @@ export default function MitraAddressTab() {
         ))}
       </div>
 
-      {/* Add / Edit Address Modal (Matches Screenshot 3) */}
+      {/* Add / Edit Address Modal */}
       <AddressFormModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}

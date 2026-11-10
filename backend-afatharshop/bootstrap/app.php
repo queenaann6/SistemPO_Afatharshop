@@ -22,6 +22,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'role'  => RoleMiddleware::class,
             'level' => CheckLevel::class,
         ]);
+
+        // Request unauthenticated pada API tidak boleh redirect ke route 'login', harus return null agar lempar AuthenticationException
+        $middleware->redirectGuestsTo(function ($request) {
+            return null;
+        });
     })
 
     ->withExceptions(function (Exceptions $exceptions) {
@@ -39,6 +44,16 @@ return Application::configure(basePath: dirname(__DIR__))
                 'success' => false,
                 'message' => 'Sesi kamu berakhir. Silakan masuk kembali.',
             ], 401);
+        });
+
+        $exceptions->render(function (\Symfony\Component\Routing\Exception\RouteNotFoundException $e, $request) use ($isApi) {
+            if ($isApi($request) && str_contains($e->getMessage(), 'login')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Sesi kamu berakhir. Silakan masuk kembali.',
+                ], 401);
+            }
+            return null;
         });
 
         $exceptions->render(function (ValidationException $e, $request) use ($isApi) {

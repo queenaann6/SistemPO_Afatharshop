@@ -18,7 +18,7 @@ export default function DeleteConfirmModal({
         className="bg-white rounded-3xl p-6 sm:p-8 max-w-sm w-full text-center shadow-2xl border border-stone-200 animate-in zoom-in-95 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Warning Circle (Matches Screenshot 3) */}
+        {/* Warning Circle */}
         <div className="w-16 h-16 rounded-full border-2 border-amber-400 text-amber-500 flex items-center justify-center mx-auto text-3xl font-serif">
           !
         </div>
@@ -33,7 +33,7 @@ export default function DeleteConfirmModal({
           </p>
         )}
 
-        {/* Buttons (Matches Screenshot 3) */}
+        {/* Buttons */}
         <div className="flex items-center justify-center gap-3 pt-2">
           <button
             type="button"

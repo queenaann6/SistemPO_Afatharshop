@@ -42,9 +42,62 @@ const toNumber = (value, fallback = 0) => {
 export const formatRupiah = (value) =>
   'Rp ' + Math.round(toNumber(value)).toLocaleString('id-ID');
 
+const INDO_MONTHS = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+];
+
+export const formatDisplayDate = (val) => {
+  if (!val || val === '-' || val === '—') return '—';
+  const str = String(val).trim();
+
+  // If already Indonesian format like "20 November 2026" or "12 Nov 2026"
+  if (/^\d{1,2}\s+[A-Za-z]+(\s+\d{4})?/.test(str)) {
+    return str.replace(/(\s+\d{2}:\d{2}(:\d{2})?.*)$/, '').trim();
+  }
+
+  // If ISO datetime with time component (contains 'T' or ':')
+  if (str.includes('T') || (str.includes(':') && /\d{4}/.test(str))) {
+    const parsed = new Date(str);
+    if (!Number.isNaN(parsed.getTime()) && parsed.getFullYear() > 1970) {
+      try {
+        return parsed.toLocaleDateString('id-ID', {
+          timeZone: 'Asia/Jakarta',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric'
+        });
+      } catch {
+        return parsed.toLocaleDateString('id-ID', {
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric'
+        });
+      }
+    }
+  }
+
+  // If format starts with YYYY-MM-DD
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) {
+    const year = Number(m[1]);
+    const monthIndex = Number(m[2]) - 1;
+    const day = Number(m[3]);
+    if (year <= 1970) return '—';
+    return `${day} ${INDO_MONTHS[monthIndex] || ''} ${year}`;
+  }
+
+  // Fallback Date parse
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime()) && parsed.getFullYear() > 1970) {
+    return `${parsed.getDate()} ${INDO_MONTHS[parsed.getMonth()]} ${parsed.getFullYear()}`;
+  }
+
+  return str;
+};
+
 export const brandIdFor = (brandName) => {
-  const key = String(brandName || '').toLowerCase().trim();
-  return BRAND_ID_MAP[key] || slugify(brandName);
+  return slugify(brandName);
 };
 
 const colorOption = (name) => {
@@ -76,11 +129,12 @@ export const mapCategoryNames = (categories = []) =>
 export const mapProduct = (product) => {
   const prices = Array.isArray(product.prices) ? product.prices : [];
   const priceValues = prices.map((row) => toNumber(row.price)).filter((value) => value > 0);
+  const explicitPrice = product.user_price ?? product.userPrice ?? product.price ?? product.selling_price ?? product.sellingPrice ?? product.original_price ?? product.originalPrice;
   const basePrice = toNumber(
-    product.user_price ?? product.price,
+    explicitPrice,
     priceValues.length ? Math.min(...priceValues) : 0
   );
-  const maxPrice = priceValues.length ? Math.max(...priceValues) : basePrice;
+  const maxPrice = toNumber(product.price_max ?? product.priceMax, priceValues.length ? Math.max(...priceValues) : basePrice);
   // Jadwal termin katalog adalah sumber persen; min_dp_percent hanya cadangan.
   const paymentStages = terminPlanFor(product);
   const dpPct = paymentStages[0]?.pct || 0;
@@ -90,8 +144,55 @@ export const mapProduct = (product) => {
   const variantSizes = unique(rawVariants.map((variant) => variant.size));
   const variantColors = unique(rawVariants.map((variant) => variant.color));
 
-  const status = ['closed_po', 'closed'].includes(product.status) ? 'closed' : 'pre_order';
-  const closeIso = product.tutup_po_iso ? String(product.tutup_po_iso).slice(0, 10) : '';
+  const rawCloseStr = String(product.tutup_po_iso || product.tutup_po || product.close_date || product.closeDate || '').trim();
+
+  let closeIso = '';
+  const dateMatch = rawCloseStr.match(/(\d{4}-\d{2}-\d{2})/);
+  if (dateMatch) {
+    closeIso = dateMatch[1];
+  }
+
+  let closeTime = '23:59';
+  if (product.close_time) {
+    closeTime = String(product.close_time).slice(0, 5);
+  } else if (rawCloseStr.includes('T') && rawCloseStr.split('T')[1]) {
+    closeTime = rawCloseStr.split('T')[1].slice(0, 5);
+  } else if (rawCloseStr.includes(' ') && rawCloseStr.split(' ')[1]) {
+    closeTime = rawCloseStr.split(' ')[1].slice(0, 5);
+  }
+
+  // Cek apakah waktu saat ini telah melewati batas hari & jam tutup PO
+  let isExpiredByTime = false;
+  if (closeIso) {
+    const timeIso = rawCloseStr.includes('+') || rawCloseStr.endsWith('Z')
+      ? rawCloseStr
+      : `${closeIso}T${closeTime}:00+07:00`;
+    const closeTimestamp = new Date(timeIso).getTime();
+    if (!Number.isNaN(closeTimestamp) && closeTimestamp <= Date.now()) {
+      isExpiredByTime = true;
+    }
+  }
+
+  const isClosed = Boolean(
+    product.is_closed === true ||
+    product.isClosedPO === true ||
+    ['closed_po', 'closed'].includes(product.status) ||
+    isExpiredByTime
+  );
+  const status = isClosed ? 'closed_po' : (product.status === 'ready_stock' ? 'ready_stock' : 'pre_order');
+
+  const displayCloseDate = closeIso
+    ? formatDisplayDate(closeIso)
+    : (product.tutup_po && !product.tutup_po.includes('T') && !product.tutup_po.includes('+') ? formatDisplayDate(product.tutup_po) : '—');
+
+  const displayTutupPO = displayCloseDate !== '—' ? displayCloseDate : '-';
+  const displayTutupPODetail = displayCloseDate !== '—' ? `${displayCloseDate} pukul ${closeTime} WIB` : '-';
+  const overlayText = displayCloseDate !== '—' ? `Tutup PO ${displayCloseDate}` : '';
+
+  const displayEstimatedShipment = (product.estimated_shipment && !String(product.estimated_shipment).startsWith('1970'))
+    ? (/^\d{4}-\d{2}-\d{2}/.test(String(product.estimated_shipment)) ? formatDisplayDate(product.estimated_shipment) : String(product.estimated_shipment))
+    : '-';
+  const openDate = product.open_date || product.openDate || (product.batch?.start_date ? String(product.batch.start_date).slice(0, 10) : '');
 
   return {
     id: product.id,
@@ -103,34 +204,45 @@ export const mapProduct = (product) => {
     brandId: brandIdFor(product.brand),
     category: product.category || 'Gamis & Abaya',
     price: basePrice,
+    userPrice: toNumber(product.user_price ?? product.userPrice ?? basePrice),
     priceMin: basePrice,
     priceMax: maxPrice,
+    sellingPrice: Number(
+      product.selling_price ||
+      product.sellingPrice ||
+      product.original_price ||
+      product.originalPrice ||
+      basePrice
+    ),
     originalPrice: Number(
       product.original_price ||
       product.originalPrice ||
-      (product.is_sale || product.isSale ? Math.round(basePrice * 1.2) : maxPrice)
+      product.selling_price ||
+      product.sellingPrice ||
+      basePrice
     ),
     discountPercent: Number(
-      product.discount_percent ||
-      product.discountPercent ||
-      (product.is_sale || product.isSale ? 15 : 0)
+      product.discount_percent ??
+      product.discountPercent ??
+      0
     ),
     isSale: Boolean(
       product.is_sale === true ||
+      product.is_sale === 1 ||
+      product.is_sale === '1' ||
       product.isSale === true ||
       (product.discount_percent && Number(product.discount_percent) > 0) ||
-      (product.discountPercent && Number(product.discountPercent) > 0) ||
-      [2, 3, 4, 6].includes(Number(product.id)) ||
-      [2, 3, 4, 6].includes(Number(product.backendId))
+      (product.discountPercent && Number(product.discountPercent) > 0)
     ),
     status,
     statusLabel: status === 'closed' ? 'PO Ditutup' : 'Open Pre-Order',
-    tutupPO: product.tutup_po || '-',
-    tutupPODetail: product.tutup_po ? `${product.tutup_po} WIB` : '-',
+    tutupPO: displayTutupPO,
+    tutupPODetail: displayTutupPODetail,
     closeDate: closeIso,
-    openDate: '',
-    estimatedShipment: product.estimated_shipment || '-',
-    overlayText: product.tutup_po ? `Tutup PO ${product.tutup_po}` : '',
+    closeTime,
+    openDate,
+    estimatedShipment: displayEstimatedShipment,
+    overlayText,
     minDpPercent: dpPct,
     dpPct,
     pelunasanDueDate: '',
@@ -144,18 +256,38 @@ export const mapProduct = (product) => {
     colors: (variantColors.length ? variantColors : DEFAULT_COLORS.map((color) => color.name)).map(
       colorOption
     ),
-    variants: rawVariants.map((variant) => ({
-      id: variant.id,
-      color: variant.color,
-      model: variant.model,
-      size: String(variant.size ?? ''),
-      price: basePrice,
-      addon: 0
-    })),
+    variants: rawVariants.map((variant) => {
+      const vSellingPrice = toNumber(
+        variant.selling_price ||
+        variant.sellingPrice ||
+        variant.original_price ||
+        variant.originalPrice ||
+        variant.price ||
+        basePrice
+      );
+      const vUserPrice = (variant.user_price !== undefined || variant.userPrice !== undefined)
+        ? toNumber(variant.user_price ?? variant.userPrice)
+        : null;
+
+      return {
+        id: variant.id,
+        color: variant.color,
+        model: variant.model,
+        size: String(variant.size ?? ''),
+        price: vSellingPrice,
+        sellingPrice: vSellingPrice,
+        originalPrice: vSellingPrice,
+        userPrice: vUserPrice,
+        userFee: toNumber(variant.user_fee || variant.userFee || 0),
+        addon: toNumber(variant.addon || 0)
+      };
+    }),
     image: mediaUrl(product.image) || FALLBACK_IMAGE,
     image2: mediaUrl(product.image2),
     image3: mediaUrl(product.image3),
     image4: mediaUrl(product.image4),
+    image5: mediaUrl(product.image5),
+    image6: mediaUrl(product.image6),
     reelUrl: mediaUrl(product.reel_url || product.reelUrl),
     videoUrl: mediaUrl(product.reel_url || product.reelUrl),
     thumbnails: (() => {
@@ -164,6 +296,8 @@ export const mapProduct = (product) => {
         product.image2,
         product.image3,
         product.image4,
+        product.image5,
+        product.image6,
         ...(Array.isArray(product.thumbnails) ? product.thumbnails : [])
       ]
         .filter(Boolean)
@@ -223,16 +357,27 @@ export const normalizeLevel = (level) => {
 export const mapApiUser = (user, fallback = {}) => {
   if (!user) return null;
 
+  const rawId = user.id || fallback.id || null;
+  const formattedMitraId =
+    user.mitra_id ||
+    user.id_mitra ||
+    (rawId ? `MTR-${String(rawId).padStart(3, '0')}` : (fallback.mitraId || fallback.id_mitra || 'MTR-001'));
+
   return {
+    id: rawId,
+    mitraId: formattedMitraId,
+    id_mitra: formattedMitraId,
     name: user.name || user.nama || fallback.name || 'Mitra',
     role: user.role || user.level || fallback.role || 'Mitra Distributor',
     roleId: roleIdFromApiUser(user),
     level: normalizeLevel(user.level || fallback.level || 'DB All'),
     avatar: (user.avatar && !user.avatar.includes('unsplash.com')) ? user.avatar : (fallback.avatar && !fallback.avatar.includes('unsplash.com') ? fallback.avatar : ''),
     balance: formatRupiah(user.deposit_balance ?? 0),
+    deposit_balance: user.deposit_balance,
     totalBill: fallback.totalBill || 'Rp 0',
     phone: user.phone || fallback.phone || '',
     email: user.email || fallback.email || '',
+    city: user.city || fallback.city || '',
     address: user.address || user.city || fallback.address || ''
   };
 };
@@ -386,8 +531,28 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
   const dpPayment = lastPaymentFor(dpRow);
   const pelunasanPayment = lastPaymentFor(pelunasanRow);
 
+  const isDepositPayment = (p) => {
+    if (!p) return false;
+    const proof = String(p.proof_url || '').toUpperCase();
+    const bName = String(p.bank_name || p.bank || '').toLowerCase();
+    const method = String(p.method || '').toLowerCase();
+    return method === 'deposit' || proof === 'DEPOSIT' || bName.includes('deposit') || (!p.proof_url && p.status === 'disetujui');
+  };
+
+  const isDpDep = isDepositPayment(dpPayment) || String(order.dpBank || '').toLowerCase().includes('deposit') || String(order.dpNote || '').toLowerCase().includes('deposit');
+  const dpDateVal = dpPayment?.verified_at || dpPayment?.uploaded_at || dpPayment?.created_at || order.dpPaidAt || order.dpDate || order.dpVerifiedAt || order.dpSubmittedAt || '';
+
+  const isPelunasanDep = isDepositPayment(pelunasanPayment) || String(order.pelunasanBank || '').toLowerCase().includes('deposit') || String(order.pelunasanNote || '').toLowerCase().includes('deposit');
+  const pelunasanDateVal = pelunasanPayment?.verified_at || pelunasanPayment?.uploaded_at || pelunasanPayment?.created_at || order.pelunasanPaidAt || order.pelunasanDate || order.pelunasanVerifiedAt || order.pelunasanSubmittedAt || '';
+
+  const isOngkirDep = isDepositPayment(stagelessPayment) || String(order.ongkirBank || '').toLowerCase().includes('deposit') || String(order.ongkirNote || '').toLowerCase().includes('deposit');
+  const ongkirDateVal = stagelessPayment?.verified_at || stagelessPayment?.uploaded_at || stagelessPayment?.created_at || order.ongkirPaidAt || order.ongkirDate || order.ongkirVerifiedAt || order.ongkirSubmittedAt || '';
+
   const isReady = String(order.production_status || '').toLowerCase() === 'ready';
-  const hasOngkir = shipping > 0;
+  const aturSebelumKirim = order.atur_sebelum_kirim !== undefined
+    ? Boolean(order.atur_sebelum_kirim)
+    : (!shipping || shipping === 0 || String(order.courier_name || '').toLowerCase().includes('sebelum'));
+  const hasOngkir = !aturSebelumKirim && shipping > 0;
   const isAddressSubmitted = Boolean(
     order.address_id &&
       (hasOngkir ||
@@ -435,6 +600,49 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
       })
     : '';
 
+  const mappedItems = items.map((item, index) => {
+    const qty = toNumber(item.quantity, 1);
+    const gross = toNumber(item.subtotal, toNumber(item.unit_price) * qty);
+    const fee = toNumber(item.fee);
+    // Baris tua tidak punya kolom diskon/addon: fee negatif = potongan,
+    // fee positif = biaya tambahan.
+    const discountNominal = toNumber(item.discount_nominal) || Math.max(0, -fee);
+    const addonNominal = toNumber(item.addon_nominal) || Math.max(0, fee);
+    return {
+      id: item.id ?? index + 1,
+      variantId: item.variant?.id ?? item.product_variant_id ?? null,
+      productId: item.variant?.product?.id ?? null,
+      splits: Array.isArray(item.splits) ? item.splits : [],
+      addressId: item.address_id ?? null,
+      title: item.variant?.product?.name || product.name || 'Item PO',
+      variant:
+        [item.variant?.color, item.variant?.model, item.variant?.size]
+          .filter(Boolean)
+          .join('/') || 'All Varian',
+      color: item.variant?.color || '',
+      model: item.variant?.model || '',
+      size: item.variant?.size || '',
+      price: toNumber(item.unit_price),
+      qty,
+      fee,
+      discountNominal,
+      discountPct: gross > 0 ? Math.round((discountNominal / gross) * 100) : 0,
+      addon: qty > 0 ? Math.round(addonNominal / qty) : 0,
+      addonNominal,
+      // Nilai bersih yang ditagih untuk baris ini: gross - diskon + addon.
+      subtotal: Math.max(
+        0,
+        Math.round(toNumber(item.net_subtotal) || gross - discountNominal + addonNominal)
+      ),
+      image: mediaUrl(item.variant?.product?.image || product.image) || FALLBACK_IMAGE
+    };
+  });
+
+  const feeMitraNominal = mappedItems.reduce((sum, it) => sum + (it.discountNominal || 0), 0);
+  const addonNominal = mappedItems.reduce((sum, it) => sum + (it.addonNominal || 0), 0);
+  const brandDiscountNominal = feeMitraNominal > 0 ? Math.round(feeMitraNominal * 1.5) : 0;
+  const feeCompanyNominal = Math.max(0, brandDiscountNominal - feeMitraNominal);
+
   return {
     orderNo: order.order_number || `PO-${order.id}`,
     id: order.id,
@@ -458,7 +666,8 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     brand: product.brand?.name || '',
     brandName: product.brand?.name || '',
     title: product.name || 'Pesanan PO',
-    date: order.ordered_at || order.created_at,
+    date: order.ordered_at || order.created_at ? formatDisplayDate(order.ordered_at || order.created_at) : '',
+    dateRaw: order.ordered_at || order.created_at || '',
     status,
     marketingStatus:
       order.marketing_status ||
@@ -468,20 +677,42 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
           ? MARKETING_REJECTED
           : MARKETING_ACC),
     subtotal,
-    ongkir: shipping,
+    ongkir: aturSebelumKirim ? 0 : shipping,
     total,
     paidAmount: paid,
     dpStatus: orderRejected ? 'Ditolak' : stageStatus(dpRow),
     pelunasanStatus: stageStatus(pelunasanRow),
-    ongkirStatus: orderLunas ? 'ACC' : 'Belum',
+    ongkirStatus: stagelessPayment ? normalizePaymentStatus(stagelessPayment.status) : (orderLunas ? 'ACC' : 'Belum'),
     dpProof: mediaUrl(dpPayment?.proof_url || ''),
     pelunasanProof: mediaUrl(pelunasanPayment?.proof_url || ''),
     ongkirProof: mediaUrl(stagelessPayment?.proof_url || ''),
     dpPaymentId: dpPayment?.id ?? null,
     pelunasanPaymentId: pelunasanPayment?.id ?? null,
     ongkirPaymentId: stagelessPayment?.id ?? null,
+    isDpDeposit: isDpDep,
+    dpBank: isDpDep ? 'Deposit' : (order.dpBank || ''),
+    dpBankAccount: isDpDep ? 'Saldo Deposit' : (order.dpBankAccount || ''),
+    dpVerifiedAt: dpPayment?.verified_at || order.dpVerifiedAt,
+    dpSubmittedAt: dpPayment?.uploaded_at || dpPayment?.created_at || order.dpSubmittedAt,
+    dpPaidAt: dpDateVal,
+    dpDate: dpDateVal,
+    isPelunasanDeposit: isPelunasanDep,
+    pelunasanBank: isPelunasanDep ? 'Deposit' : (order.pelunasanBank || ''),
+    pelunasanBankAccount: isPelunasanDep ? 'Saldo Deposit' : (order.pelunasanBankAccount || ''),
+    pelunasanVerifiedAt: pelunasanPayment?.verified_at || order.pelunasanVerifiedAt,
+    pelunasanSubmittedAt: pelunasanPayment?.uploaded_at || pelunasanPayment?.created_at || order.pelunasanSubmittedAt,
+    pelunasanPaidAt: pelunasanDateVal,
+    pelunasanDate: pelunasanDateVal,
+    isOngkirDeposit: isOngkirDep,
+    ongkirBank: isOngkirDep ? 'Deposit' : (order.ongkirBank || ''),
+    ongkirBankAccount: isOngkirDep ? 'Saldo Deposit' : (order.ongkirBankAccount || ''),
+    ongkirVerifiedAt: stagelessPayment?.verified_at || order.ongkirVerifiedAt,
+    ongkirSubmittedAt: stagelessPayment?.uploaded_at || stagelessPayment?.created_at || order.ongkirSubmittedAt,
+    ongkirPaidAt: ongkirDateVal,
+    ongkirDate: ongkirDateVal,
     address,
-    courier: order.courier_name || '',
+    courier: order.courier_name || (aturSebelumKirim ? 'Ditentukan Sebelum Pengiriman' : ''),
+    aturSebelumKirim,
     dpPct,
     dpNominal: toNumber(dpRow?.amount),
     paymentStages: installments
@@ -489,16 +720,17 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
         const related = payments.filter((p) => Number(p.installment_id) === Number(row.id));
         const lastPay = related[related.length - 1] || null;
         const stgStatus = stageStatus(row);
+        const isDepStage = isDepositPayment(lastPay);
         return {
           id: row.id,
           type: row.type,
           sequence: row.sequence_number ?? index + 1,
           label:
             row.type === 'dp'
-              ? 'DP'
+              ? (installments.length <= 2 ? 'DP' : 'DP 1')
               : row.type === 'pelunasan'
                 ? 'Pelunasan'
-                : `Cicilan ${row.sequence_number ? row.sequence_number - 1 : index + 1}`,
+                : (installments.length <= 2 ? 'Pelunasan' : `DP ${row.sequence_number || index + 1}`),
           pct: stageBase ? Math.round((toNumber(row.amount) / stageBase) * 100) : 0,
           amount: toNumber(row.amount),
           status: stgStatus,
@@ -507,49 +739,22 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
             id: lastPay.id,
             status: normalizePaymentStatus(lastPay.status),
             image: mediaUrl(lastPay.proof_url || ''),
-            bank: lastPay.bank_account?.bank_name || 'BCA (PT Afathar Niaga Indonesia)',
-            date: lastPay.created_at,
+            bank: isDepStage ? 'Deposit' : (lastPay.bank_name || lastPay.bank_account?.bank_name || 'BCA (PT Afathar Niaga Indonesia)'),
+            account: isDepStage ? 'Saldo Deposit' : (lastPay.account_number || lastPay.bank_account?.account_number || ''),
+            method: isDepStage ? 'deposit' : 'transfer',
+            date: lastPay ? (lastPay.verified_at || lastPay.uploaded_at || lastPay.created_at ? formatDisplayDate(lastPay.verified_at || lastPay.uploaded_at || lastPay.created_at) : '') : '',
             nominal: toNumber(lastPay.amount)
           } : null,
-          date: row.due_at || ''
+          date: row.due_at ? formatDisplayDate(row.due_at) : (row.due_date ? formatDisplayDate(row.due_date) : ''),
+          dateRaw: row.due_at || row.due_date || ''
         };
       })
       .filter((stage) => stage.amount > 0 || stage.pct > 0),
-    items: items.map((item, index) => {
-      const qty = toNumber(item.quantity, 1);
-      const gross = toNumber(item.subtotal, toNumber(item.unit_price) * qty);
-      const fee = toNumber(item.fee);
-      // Baris tua tidak punya kolom diskon/addon: fee negatif = potongan,
-      // fee positif = biaya tambahan.
-      const discountNominal = toNumber(item.discount_nominal) || Math.max(0, -fee);
-      const addonNominal = toNumber(item.addon_nominal) || Math.max(0, fee);
-      return {
-        id: item.id ?? index + 1,
-        variantId: item.variant?.id ?? null,
-        productId: item.variant?.product?.id ?? null,
-        title: item.variant?.product?.name || product.name || 'Item PO',
-        variant:
-          [item.variant?.color, item.variant?.model, item.variant?.size]
-            .filter(Boolean)
-            .join('/') || 'All Varian',
-        color: item.variant?.color || '',
-        model: item.variant?.model || '',
-        size: item.variant?.size || '',
-        price: toNumber(item.unit_price),
-        qty,
-        fee,
-        discountNominal,
-        discountPct: gross > 0 ? Math.round((discountNominal / gross) * 100) : 0,
-        addon: qty > 0 ? Math.round(addonNominal / qty) : 0,
-        addonNominal,
-        // Nilai bersih yang ditagih untuk baris ini: gross - diskon + addon.
-        subtotal: Math.max(
-          0,
-          Math.round(toNumber(item.net_subtotal) || gross - discountNominal + addonNominal)
-        ),
-        image: mediaUrl(item.variant?.product?.image || product.image) || FALLBACK_IMAGE
-      };
-    }),
+    items: mappedItems,
+    feeMitraNominal,
+    brandDiscountNominal,
+    feeCompanyNominal,
+    addonNominal,
     mitraId: owner.id ? `m-${owner.id}` : '',
     mitraName: owner.name || owner.nama || '',
     mitraPhone: owner.phone || '',
@@ -561,7 +766,7 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     image: mediaUrl(product.image) || FALLBACK_IMAGE,
     closeDate: closeDateFormatted || (product.closeDate || ''),
     closeDateRaw: batchCloseIso,
-    isClosedPO: batchClosed || product.status === 'closed_po',
+    isClosedPO: batchClosed || product.status === 'closed_po' || product.status === 'closed' || product.isClosedPO === true,
     invoiceOutstanding:
       order.invoice?.outstanding_amount !== undefined
         ? toNumber(order.invoice.outstanding_amount)
@@ -572,7 +777,10 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
 export const buildOrderPayload = (order, items = []) => {
   const itemPayload = (Array.isArray(items) ? items : []).map((item) => {
     const variantId = Number(item.variantId);
-    const productId = Number(item.productId ?? item.product_id ?? item.id);
+    const productId = Number(item.productId ?? item.product_id ?? item.backendId ?? item.id);
+    const fee = toNumber(item.feeNominal ?? item.fee);
+    const discountNominal = toNumber(item.discountNominal ?? fee);
+    const addonNominal = toNumber(item.addonTotal ?? item.addon);
     return {
       product_variant_id:
         Number.isInteger(variantId) && variantId > 0 ? variantId : null,
@@ -580,22 +788,34 @@ export const buildOrderPayload = (order, items = []) => {
         Number.isInteger(productId) && productId > 0 ? productId : null,
       quantity: Math.max(1, toNumber(item.qty, 1)),
       unit_price: toNumber(item.price),
-      fee: toNumber(item.feeNominal)
+      fee,
+      discount_nominal: discountNominal,
+      addon_nominal: addonNominal,
+      model: item.model || item.selectedModel || undefined,
+      size: item.size || item.selectedSize || undefined,
+      color: item.color || item.selectedColor || undefined
     };
   });
 
   const itemsTotal = itemPayload.reduce(
-    (sum, item) => sum + item.unit_price * item.quantity,
+    (sum, item) => sum + (item.unit_price * item.quantity) + (item.addon_nominal || 0),
     0
   );
   const subtotal = itemsTotal || toNumber(order.total);
 
   const addressId = Number(order.addressId);
+  const aturSebelumKirim = order.aturSebelumKirim !== undefined ? Boolean(order.aturSebelumKirim) : true;
+  const shippingCost = aturSebelumKirim ? 0 : toNumber(order.shippingCost ?? order.ongkir);
+  const courierName = aturSebelumKirim
+    ? 'Ditentukan Sebelum Pengiriman'
+    : (order.courier || 'Ditentukan Sebelum Pengiriman');
+
   return {
     total_amount: toNumber(order.total) || subtotal,
     subtotal,
-    shipping_cost: toNumber(order.shippingCost ?? order.ongkir),
-    courier_name: order.courier || null,
+    shipping_cost: shippingCost,
+    courier_name: courierName,
+    atur_sebelum_kirim: aturSebelumKirim,
     notes: order.notes || null,
     address_id: Number.isInteger(addressId) && addressId > 0 ? addressId : null,
     is_split_address: Boolean(order.isSplitAddress),
@@ -606,19 +826,29 @@ export const buildOrderPayload = (order, items = []) => {
 
 /* ------------------------------------------------------------------ data dashboard */
 
-export const mapUserToMitra = (user) => ({
-  id: user.id ? `m-${user.id}` : `m-${slugify(user.name || user.nama)}`,
-  backendId: user.id,
-  name: user.name || user.nama || '',
-  email: user.email || '',
-  level: normalizeLevel(user.level),
-  phone: user.phone || '',
-  city: user.city || '',
-  address: user.address || '',
-  active: user.is_active !== false,
-  deposit: toNumber(user.deposit_balance),
-  joinedAt: String(user.joined_at || '').slice(0, 10)
-});
+export const mapUserToMitra = (user) => {
+  const rawId = user.id || null;
+  const formattedMitraId =
+    user.mitra_id ||
+    user.id_mitra ||
+    (rawId ? `MTR-${String(rawId).padStart(3, '0')}` : `m-${slugify(user.name || user.nama || 'mitra')}`);
+
+  return {
+    id: rawId ? `m-${rawId}` : `m-${slugify(user.name || user.nama || 'mitra')}`,
+    backendId: rawId,
+    mitraId: formattedMitraId,
+    id_mitra: formattedMitraId,
+    name: user.name || user.nama || '',
+    email: user.email || '',
+    level: normalizeLevel(user.level),
+    phone: user.phone || '',
+    city: user.city || '',
+    address: user.address || '',
+    active: user.is_active !== false,
+    deposit: toNumber(user.deposit_balance),
+    joinedAt: String(user.joined_at || '').slice(0, 10)
+  };
+};
 
 export const mapUserToTeam = (user) => ({
   id: user.id ? `u-${user.id}` : `u-${slugify(user.name || user.nama)}`,
@@ -645,7 +875,7 @@ export const mapSupplier = (supplier) => ({
 
 export const mapBrandToCore = (brand) => {
   const supplierName = brand.supplier_name || (typeof brand.supplier === 'object' ? brand.supplier?.name : brand.supplier) || '';
-  const supplierCity = (typeof brand.supplier === 'object' ? brand.supplier?.city : '') || brand.address || 'Bandung';
+  const supplierCity = brand.address || (typeof brand.supplier === 'object' ? brand.supplier?.city : '') || 'Solo';
   return {
     id: brand.id ? `b-${brand.id}` : (brand.id || `b-${slugify(brand.name)}`),
     backendId: brand.id,
@@ -653,9 +883,9 @@ export const mapBrandToCore = (brand) => {
     supplier: supplierName,
     supplier_id: brand.supplier_id || (typeof brand.supplier === 'object' ? brand.supplier?.id : null),
     address: supplierCity,
-    discountType: 'pct',
-    discountValue: toNumber(brand.discount_db_all ?? brand.discountDBAll, 30),
-    feeType: 'pct',
+    discountType: brand.discount_type || brand.discountType || 'pct',
+    discountValue: toNumber(brand.discount_value ?? brand.discountValue ?? brand.discount_db_all ?? brand.discountDBAll, 30),
+    feeType: brand.fee_type || brand.feeType || 'pct',
     discountDBAll: toNumber(brand.discount_db_all ?? brand.discountDBAll, 30),
     discountSubDB: toNumber(brand.discount_sub_db ?? brand.discountSubDB, 25),
     discountAgen: toNumber(brand.discount_agen ?? brand.discountAgen, 20),
@@ -736,29 +966,49 @@ export const mapPaymentRequestToCore = (request) => ({
 });
 
 export const mapBatchToCore = (batch) => {
-  const close = batch.close_date ? new Date(batch.close_date) : null;
-  const valid = close && !Number.isNaN(close.getTime());
+  const name = batch.name || batch.title || '';
+  const brandName = typeof batch.brand === 'object' ? (batch.brand?.name || '') : (batch.brand || '');
+  const rawClose = batch.close_date || batch.closeDate || '';
+  let closeIso = '';
+  const m = String(rawClose).match(/(\d{4}-\d{2}-\d{2})/);
+  if (m) closeIso = m[1];
+
+  let closeTime = '23:59';
+  if (String(rawClose).includes('T') && String(rawClose).split('T')[1]) {
+    closeTime = String(rawClose).split('T')[1].slice(0, 5);
+  } else if (String(rawClose).includes(' ') && String(rawClose).split(' ')[1]) {
+    closeTime = String(rawClose).split(' ')[1].slice(0, 5);
+  }
+
+  const closeFormatted = closeIso ? formatDisplayDate(closeIso) : (batch.closeDate && batch.closeDate !== '-' ? batch.closeDate : '-');
+
   return {
     id: batch.id,
     backendId: batch.id,
-    title: batch.name,
-    brand: batch.brand || '',
+    name,
+    title: name,
+    brand: brandName,
+    brand_id: batch.brand_id || batch.brandId || null,
     status: batch.status === 'closed' ? 'closed' : 'open',
-    closeDate: valid
-      ? close.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' })
-      : '-',
-    closeTime: valid
-      ? `${close.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB`
+    start_date: batch.start_date ? String(batch.start_date).slice(0, 10) : '',
+    close_date: batch.close_date ? String(batch.close_date) : '',
+    closeDateIso: closeIso,
+    closeDate: closeFormatted,
+    closeTime,
+    closeTimeDisplay: closeFormatted !== '-' ? `${closeTime} WIB` : '',
+    estimated_shipment: batch.estimated_shipment && !String(batch.estimated_shipment).startsWith('1970')
+      ? String(batch.estimated_shipment).slice(0, 10)
       : '',
     quotaTarget: 0,
-    quotaFilled: toNumber(batch.products_count)
+    quotaFilled: toNumber(batch.products_count),
+    products_count: toNumber(batch.products_count)
   };
 };
 
 export const mapSettings = (payload) => {
   const raw = payload?.data || payload || {};
   return {
-    shopName: raw.shopName || 'Afathar Shop',
+    shopName: raw.shopName || 'Afatharshop',
     senderName: raw.senderName || '',
     dpPct: toNumber(raw.dpPct, DEFAULT_DP_PCT),
     pelunasanDueDays: toNumber(raw.pelunasanDueDays, 30),
@@ -859,13 +1109,15 @@ export const addressBookToPayload = (address) => ({
  */
 export const dbId = (row) => {
   if (!row) return null;
-  const candidates = [
-    row.backendId,
-    row.db_id,
-    row.id,
-    row.form?.backendId,
-    row.form?.id
-  ];
+  const candidates = typeof row === 'object'
+    ? [
+        row.backendId,
+        row.db_id,
+        row.id,
+        row.form?.backendId,
+        row.form?.id
+      ]
+    : [row];
   for (const raw of candidates) {
     if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
     const text = String(raw ?? '').trim();

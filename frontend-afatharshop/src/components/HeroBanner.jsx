@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function HeroBanner({ onSelectPreOrder }) {
+export default function HeroBanner({ onSelectSale, onSelectPreOrder }) {
   return (
     <section className="w-full px-4 pt-6 pb-2">
       <div className="max-w-7xl mx-auto">
@@ -14,7 +14,7 @@ export default function HeroBanner({ onSelectPreOrder }) {
             <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full border-2 border-[#F0C973] p-1 bg-white/95 shadow-xl hover:scale-105 transition-transform duration-300">
               <img
                 src="/logo.jpg"
-                alt="Afathar Shop Official Logo"
+                alt="Afatharshop Official Logo"
                 className="w-full h-full object-cover rounded-full"
               />
             </div>
@@ -38,10 +38,10 @@ export default function HeroBanner({ onSelectPreOrder }) {
           {/* CTA Buttons */}
           <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 relative z-10">
             <button
-              onClick={onSelectPreOrder}
+              onClick={onSelectSale || onSelectPreOrder}
               className="bg-[#F0C973] hover:bg-[#E5BC64] text-[#420C0E] font-bold text-xs sm:text-sm px-6 py-2.5 sm:py-3 rounded-lg shadow-md hover:scale-103 transition-all duration-150 cursor-pointer"
             >
-              Mulai Pre-Order
+              Lihat Katalog Sale
             </button>
 
             <button

@@ -89,11 +89,11 @@ export default function LoginPage({
         {/* Brand Header Logo */}
         <div className="flex flex-col items-center justify-center">
           <div className="w-12 h-12 rounded-full border border-[#D4AF37] overflow-hidden bg-white shadow-xs mb-1.5 flex items-center justify-center">
-            <img src="/logo.jpg" alt="AfatharShop Official" className="w-full h-full object-cover" />
+            <img src="/logo.jpg" alt="Afatharshop Official" className="w-full h-full object-cover" />
           </div>
           <div className="text-center">
             <h2 className="font-serif text-lg font-bold text-[#8B6A3E] tracking-wider leading-none">
-              AfatharShop
+              Afatharshop
             </h2>
             <p className="text-[10px] text-[#A6804A] tracking-widest uppercase mt-0.5 font-medium">
               Official
@@ -175,7 +175,7 @@ export default function LoginPage({
             <button
               type="button"
               onClick={() =>
-                alert('Silakan hubungi Admin WhatsApp Afathar Shop untuk reset password akun Anda.')
+                alert('Silakan hubungi Admin WhatsApp Afatharshop untuk reset password akun Anda.')
               }
               className="text-xs text-stone-600 hover:text-[#8B6A3E] font-medium transition cursor-pointer"
             >
