@@ -72,18 +72,24 @@ class LoginController extends Controller
 
         // 6. Respon sukses dengan payload user & token JWT
         return response()->json([
-            'success' => true,
-            'message' => 'Login Berhasil!',
-            'user'    => [
-                'id'        => $user->id,
-                'nama'      => $user->nama ?? $user->name,
-                'email'     => $user->email,
-                'role'      => $user->role,   // 'mitra', 'marketing', 'finance', 'owner'
-                'level'     => $user->level,  // 'DB All', 'Sub DB', 'Agen', 'Reseller', dll
-                'phone'     => $user->phone,
-                'is_active' => (bool) $user->is_active,
+            'success'      => true,
+            'message'      => 'Login Berhasil!',
+            'access_token' => $token,
+            'token'        => $token,
+            'user'         => [
+                'id'              => $user->id,
+                'mitra_id'        => $user->mitra_id,
+                'nama'            => $user->nama ?? $user->name,
+                'name'            => $user->nama ?? $user->name,
+                'email'           => $user->email,
+                'role'            => $user->role,   // 'mitra', 'marketing', 'finance', 'owner'
+                'level'           => $user->level,  // 'DB All', 'Sub DB', 'Agen', 'Reseller', dll
+                'phone'           => $user->phone,
+                'city'            => $user->city,
+                'avatar'          => $user->avatar,
+                'deposit_balance' => (float) $user->deposit_balance,
+                'is_active'       => (bool) $user->is_active,
             ],
-            'token'   => $token,
         ], 200);
     }
 }

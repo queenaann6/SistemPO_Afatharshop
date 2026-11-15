@@ -32,22 +32,26 @@ export default function OwnerTeamTab({
   setTeamModal = () => {},
   toggleTeam = () => {},
   deleteTeam = () => {},
+  toggleMitra = () => {},
   deleteMitra = () => {},
   mitraSearch = '',
   setMitraSearch = () => {},
   me = {},
   roleTone = DEFAULT_ROLE_TONE
 }) {
-  const filteredMitra = mitra.filter((m) => {
-    if (!mitraSearch.trim()) return true;
-    const q = mitraSearch.toLowerCase();
-    return (
-      m.name?.toLowerCase().includes(q) ||
-      m.email?.toLowerCase().includes(q) ||
-      m.phone?.toLowerCase().includes(q) ||
-      m.city?.toLowerCase().includes(q)
-    );
-  });
+  const pendingMitraCount = mitra.filter((m) => !m.active).length;
+  const filteredMitra = mitra
+    .filter((m) => {
+      if (!mitraSearch.trim()) return true;
+      const q = mitraSearch.toLowerCase();
+      return (
+        m.name?.toLowerCase().includes(q) ||
+        m.email?.toLowerCase().includes(q) ||
+        m.phone?.toLowerCase().includes(q) ||
+        m.city?.toLowerCase().includes(q)
+      );
+    })
+    .sort((a, b) => Number(a.active) - Number(b.active));
 
   return (
     <>
@@ -115,6 +119,11 @@ export default function OwnerTeamTab({
           }`}
         >
           Akun Mitra & Reseller ({mitra.length})
+          {pendingMitraCount > 0 && (
+            <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500 text-white">
+              {pendingMitraCount} ACC
+            </span>
+          )}
         </button>
       </div>
 
@@ -190,66 +199,97 @@ export default function OwnerTeamTab({
       )}
 
       {teamTab === 'mitra' && (
-        <Card
-          title="Akun Mitra & Reseller"
-          subtitle="Seluruh mitra pre-order yang terdaftar pada sistem"
-          action={
-            <SearchBox
-              value={mitraSearch}
-              onChange={setMitraSearch}
-              placeholder="Cari nama, email, kota..."
-            />
-          }
-        >
-          <TableWrap>
-            <thead className="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th className={TH}>Mitra</th>
-                <th className={TH}>Level</th>
-                <th className={TH}>No. HP / WA</th>
-                <th className={TH}>Kota / Domisili</th>
-                <th className={`${TH} text-right`}>Saldo Deposit</th>
-                <th className={`${TH} text-right`}>Aksi</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredMitra.map((m) => (
-                <tr key={m.id} className="hover:bg-gray-50/70">
-                  <td className={TD}>
-                    <p className="font-semibold text-gray-900">{m.name}</p>
-                    <p className="text-[10px] text-gray-400">{m.email || '—'}</p>
-                  </td>
-                  <td className={TD}>
-                    <Badge tone={levelTone(m.level)}>{normalizeLevel(m.level)}</Badge>
-                  </td>
-                  <td className={TD}>{m.phone || '—'}</td>
-                  <td className={TD}>{m.city || '—'}</td>
-                  <td className={`${TD} text-right font-bold text-emerald-700`}>
-                    {rp(m.depositBalance || m.balance || 0)}
-                  </td>
-                  <td className={`${TD} text-right`}>
-                    <Button
-                      size="xs"
-                      variant="dangerOutline"
-                      icon="trash"
-                      onClick={() => deleteMitra(m)}
-                      title="Hapus Akun Mitra"
-                    >
-                      Hapus Akun
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-              {filteredMitra.length === 0 && (
+        <>
+          {pendingMitraCount > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900">
+              <div>
+                <p className="font-bold">
+                  {pendingMitraCount} akun mitra menunggu ACC / aktivasi
+                </p>
+                <p className="text-[11px] text-amber-800 mt-0.5">
+                  Pendaftar baru belum dapat masuk ke sistem sebelum akun di-ACC dan diaktifkan.
+                </p>
+              </div>
+              <Badge tone="amber">{pendingMitraCount} Menunggu ACC</Badge>
+            </div>
+          )}
+
+          <Card
+            title="Akun Mitra & Reseller"
+            subtitle="Seluruh mitra pre-order yang terdaftar pada sistem"
+            action={
+              <SearchBox
+                value={mitraSearch}
+                onChange={setMitraSearch}
+                placeholder="Cari nama, email, kota..."
+              />
+            }
+          >
+            <TableWrap>
+              <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-xs text-gray-400">
-                    Tidak ada akun mitra pada pencarian ini.
-                  </td>
+                  <th className={TH}>Mitra</th>
+                  <th className={TH}>Level</th>
+                  <th className={TH}>No. HP / WA</th>
+                  <th className={TH}>Kota / Domisili</th>
+                  <th className={`${TH} text-right`}>Saldo Deposit</th>
+                  <th className={TH}>Status</th>
+                  <th className={`${TH} text-right`}>Aksi</th>
                 </tr>
-              )}
-            </tbody>
-          </TableWrap>
-        </Card>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filteredMitra.map((m) => (
+                  <tr key={m.id} className={!m.active ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'hover:bg-gray-50/70'}>
+                    <td className={TD}>
+                      <p className="font-semibold text-gray-900">{m.name}</p>
+                      <p className="text-[10px] text-gray-400">{m.email || '—'}</p>
+                    </td>
+                    <td className={TD}>
+                      <Badge tone={levelTone(m.level)}>{normalizeLevel(m.level)}</Badge>
+                    </td>
+                    <td className={TD}>{m.phone || '—'}</td>
+                    <td className={TD}>{m.city || '—'}</td>
+                    <td className={`${TD} text-right font-bold text-emerald-700`}>
+                      {rp(m.deposit ?? m.depositBalance ?? m.balance ?? 0)}
+                    </td>
+                    <td className={TD}>
+                      <Badge tone={m.active ? 'emerald' : 'amber'}>
+                        {m.active ? 'Aktif' : 'Menunggu ACC'}
+                      </Badge>
+                    </td>
+                    <td className={`${TD} text-right`}>
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button
+                          size="xs"
+                          variant={m.active ? 'outline' : 'primary'}
+                          onClick={() => toggleMitra(m)}
+                        >
+                          {m.active ? 'Nonaktifkan' : 'ACC / Aktifkan'}
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="dangerOutline"
+                          icon="trash"
+                          onClick={() => deleteMitra(m)}
+                          title="Hapus Akun Mitra"
+                        >
+                          Hapus
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {filteredMitra.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-12 text-center text-xs text-gray-400">
+                      Tidak ada akun mitra pada pencarian ini.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </TableWrap>
+          </Card>
+        </>
       )}
     </>
   );

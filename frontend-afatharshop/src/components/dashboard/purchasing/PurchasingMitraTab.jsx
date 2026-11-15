@@ -22,11 +22,14 @@ export default function PurchasingMitraTab({
   toggleMitra = () => {},
   deleteMitra = () => {}
 }) {
+  const pendingMitra = mitraRows.filter((m) => !m.active);
+  const sortedRows = [...mitraRows].sort((a, b) => Number(a.active) - Number(b.active));
+
   return (
     <>
       <PageHead
         title="Mitra & User"
-        desc="Buat akun mitra, atur level harga, dan pantau omzet serta piutang masing-masing mitra."
+        desc="Buat akun mitra, ACC pendaftaran baru, atur level harga, dan pantau omzet serta piutang masing-masing mitra."
         badge={<Badge tone="gray">{mitra.length} mitra</Badge>}
         actions={
           <Button icon="plus" onClick={() => setMitraModal({ mode: 'create', form: { ...blankMitra } })}>
@@ -34,6 +37,20 @@ export default function PurchasingMitraTab({
           </Button>
         }
       />
+
+      {pendingMitra.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900">
+          <div>
+            <p className="font-bold">
+              {pendingMitra.length} akun mitra menunggu ACC / aktivasi
+            </p>
+            <p className="text-[11px] text-amber-800 mt-0.5">
+              Pendaftar baru belum bisa login sebelum Anda klik tombol <strong>ACC / Aktifkan</strong> (atau atur level harga lewat Edit).
+            </p>
+          </div>
+          <Badge tone="amber">{pendingMitra.length} Menunggu ACC</Badge>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
         <MetricCard label="Total Mitra" value={mitra.length} sub={`${mitra.filter((m) => m.active).length} aktif`} tone="blue" icon="users" />
@@ -58,8 +75,8 @@ export default function PurchasingMitraTab({
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {mitraRows.map((m) => (
-              <tr key={m.id} className="hover:bg-gray-50/70">
+            {sortedRows.map((m) => (
+              <tr key={m.id} className={!m.active ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'hover:bg-gray-50/70'}>
                 <td className={TD}>
                   <button
                     type="button"
@@ -82,7 +99,9 @@ export default function PurchasingMitraTab({
                 </td>
                 <td className={`${TD} text-right`}>{rp(m.deposit)}</td>
                 <td className={TD}>
-                  <Badge tone={m.active ? 'emerald' : 'gray'}>{m.active ? 'Aktif' : 'Nonaktif'}</Badge>
+                  <Badge tone={m.active ? 'emerald' : 'amber'}>
+                    {m.active ? 'Aktif' : 'Menunggu ACC'}
+                  </Badge>
                 </td>
                 <td className={`${TD} text-right`}>
                   <div className="flex items-center justify-end gap-1.5">
@@ -98,7 +117,7 @@ export default function PurchasingMitraTab({
                       variant={m.active ? 'dangerOutline' : 'primary'}
                       onClick={() => toggleMitra(m)}
                     >
-                      {m.active ? 'Nonaktifkan' : 'Aktifkan'}
+                      {m.active ? 'Nonaktifkan' : 'ACC / Aktifkan'}
                     </Button>
                     <Button
                       size="xs"

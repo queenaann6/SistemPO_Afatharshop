@@ -168,6 +168,12 @@ export const api = {
     return data;
   },
 
+  forgotPassword: (payload) =>
+    request('/auth/forgot-password', { method: 'POST', body: payload, auth: false }),
+
+  resetPassword: (payload) =>
+    request('/auth/reset-password', { method: 'POST', body: payload, auth: false }),
+
   me: () => request('/auth/me'),
 
   updateProfile: (payload) =>
@@ -201,7 +207,7 @@ export const api = {
   couriers: () => request('/couriers', { auth: false }),
   bankAccounts: () => request('/bank-accounts', { auth: false }),
   batches: (params) => request(`/batches${buildQuery(params)}`, { auth: false }),
-  levels: () => request('/levels', { auth: false }),
+  levels: () => request('/levels'),
 
   // --- Transaksi ---
   orders: () => request('/orders'),
@@ -213,6 +219,8 @@ export const api = {
     request(`/orders/${id}`, { method: 'PUT', body: payload }),
   updateOrderAddress: (id, payload) =>
     request(`/orders/${id}/address`, { method: 'PATCH', body: payload }),
+  cancelOrder: (id, payload = {}) =>
+    request(`/orders/${id}/cancel`, { method: 'POST', body: payload }),
 
   // --- Keranjang Belanja (Cart) ---
   cart: {
@@ -252,7 +260,9 @@ export const api = {
     createAddress: (payload) => request('/my/addresses', { method: 'POST', body: payload }),
     updateAddress: (id, payload) =>
       request(`/my/addresses/${id}`, { method: 'PUT', body: payload }),
-    deleteAddress: (id) => request(`/my/addresses/${id}`, { method: 'DELETE' })
+    deleteAddress: (id) => request(`/my/addresses/${id}`, { method: 'DELETE' }),
+    cancelOrder: (id, payload = {}) =>
+      request(`/orders/${id}/cancel`, { method: 'POST', body: payload })
   },
 
   // --- Data lintas modul untuk dashboard owner/finance/marketing ---
@@ -260,6 +270,7 @@ export const api = {
     bootstrap: (options) => request('/management/bootstrap', options),
 
     orders: (options) => request('/management/orders', options),
+    trashedOrders: (options) => request('/management/orders/trashed', options),
     orderInvoice: (id, options) => request(`/management/orders/${id}/invoice`, options),
     invoice: (id, options) => request(`/management/invoices/${id}`, options),
     createOrder: (payload) => request('/management/orders', { method: 'POST', body: payload }),
@@ -269,6 +280,10 @@ export const api = {
       request(`/management/orders/${id}/invoice`, { method: 'PATCH', body: payload }),
     updateOrder: (id, payload) =>
       request(`/management/orders/${id}`, { method: 'PUT', body: payload }),
+    trashOrder: (id, payload = {}) =>
+      request(`/management/orders/${id}/trash`, { method: 'POST', body: payload }),
+    restoreOrder: (id) =>
+      request(`/management/orders/${id}/restore`, { method: 'POST' }),
     deleteOrder: (id) => request(`/management/orders/${id}`, { method: 'DELETE' }),
 
     batches: (options) => request('/management/batches', options),
@@ -342,21 +357,28 @@ export const api = {
     deleteCategory: (id) =>
       request(`/management/categories/${id}`, { method: 'DELETE' }),
 
-    bankAccounts: (options) => request('/management/master/bank-accounts', options),
+    bankAccounts: (options) => request('/management/bank-accounts', options),
     createBankAccount: (payload) =>
-      request('/management/master/bank-accounts', { method: 'POST', body: payload }),
+      request('/management/bank-accounts', { method: 'POST', body: payload }),
     updateBankAccount: (id, payload) =>
-      request(`/management/master/bank-accounts/${id}`, { method: 'PUT', body: payload }),
+      request(`/management/bank-accounts/${id}`, { method: 'PUT', body: payload }),
     deleteBankAccount: (id) =>
-      request(`/management/master/bank-accounts/${id}`, { method: 'DELETE' }),
+      request(`/management/bank-accounts/${id}`, { method: 'DELETE' }),
 
-    couriers: (options) => request('/management/master/couriers', options),
+    couriers: (options) => request('/management/couriers', options),
     createCourier: (payload) =>
-      request('/management/master/couriers', { method: 'POST', body: payload }),
+      request('/management/couriers', { method: 'POST', body: payload }),
     updateCourier: (id, payload) =>
-      request(`/management/master/couriers/${id}`, { method: 'PUT', body: payload }),
+      request(`/management/couriers/${id}`, { method: 'PUT', body: payload }),
     deleteCourier: (id) =>
-      request(`/management/master/couriers/${id}`, { method: 'DELETE' }),
+      request(`/management/couriers/${id}`, { method: 'DELETE' }),
+
+    reportSummary: (params) =>
+      request(`/management/reports/summary${buildQuery(params)}`),
+    reportProduction: (params) =>
+      request(`/management/reports/production${buildQuery(params)}`),
+    exportReport: (type = 'orders') =>
+      request(`/management/reports/export?type=${type}`),
 
     updateSettings: (payload) =>
       request('/management/settings', { method: 'PUT', body: payload }),

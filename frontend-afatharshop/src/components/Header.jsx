@@ -188,7 +188,7 @@ export default function Header({
                 >
                   <BellIcon className="w-5 h-5 sm:w-6 sm:h-6" />
                   {unreadCount > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 sm:min-w-4.5 sm:h-4.5 px-0.5 bg-[#F0C973] text-[#420C0E] text-[10px] font-extrabold rounded-full flex items-center justify-center border-2 border-[#6B1416] shadow-xs">
+                    <span className="absolute -top-0.5 -right-0.5 min-w-5 h-5 px-1 bg-[#F0C973] text-[#420C0E] text-[11px] font-extrabold rounded-full flex items-center justify-center border-2 border-[#6B1416] shadow-xs">
                       {unreadCount}
                     </span>
                   )}
@@ -196,42 +196,52 @@ export default function Header({
 
                 {/* Dropdown Notifikasi */}
                 {isNotifOpen && (
-                  <div className="fixed left-3 right-3 top-16 mt-2 sm:absolute sm:left-auto sm:right-0 sm:top-auto sm:mt-2.5 sm:w-80 bg-white rounded-2xl shadow-2xl border border-stone-100 overflow-hidden z-[60] text-stone-800 animate-in fade-in zoom-in-95 duration-150">
-                    <div className="px-4 py-3 bg-[#6B1416] text-white flex items-center justify-between">
+                  <div className="fixed inset-x-3 top-[68px] sm:inset-x-auto sm:absolute sm:right-0 sm:top-auto sm:mt-2.5 w-auto sm:w-[360px] md:w-[380px] max-w-[calc(100vw-1.5rem)] bg-white rounded-2xl shadow-2xl border border-stone-200 overflow-hidden z-[60] text-stone-800 animate-in fade-in zoom-in-95 duration-150">
+                    <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 bg-[#6B1416] text-white flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
-                        <BellIcon className="w-4 h-4 text-[#F0C973]" />
-                        <span className="font-bold text-xs tracking-wide">Pemberitahuan</span>
+                        <div className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center shrink-0">
+                          <BellIcon className="w-4 h-4 text-[#F0C973]" />
+                        </div>
+                        <span className="font-bold text-xs sm:text-[13px] tracking-wide">
+                          Pemberitahuan
+                        </span>
                       </div>
-                      <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">
-                        {unreadCount > 0 ? `${unreadCount} Baru` : 'Semua terbaca'}
+                      <span className="text-[10px] sm:text-[11px] bg-white/20 px-2.5 py-0.5 rounded-full font-semibold shrink-0">
+                        {unreadCount > 0 ? `${unreadCount} Baru` : 'Semua dibaca'}
                       </span>
                     </div>
 
-                    <div className="divide-y divide-stone-100 max-h-72 overflow-y-auto text-xs">
+                    <div className="divide-y divide-stone-100 max-h-[55vh] sm:max-h-[360px] overflow-y-auto">
                       {notifications.length === 0 && (
-                        <p className="p-6 text-center text-[11px] text-stone-400 italic">
-                          Tidak ada pemberitahuan.
-                        </p>
+                        <div className="px-4 py-8 text-center space-y-1">
+                          <p className="text-xs font-semibold text-stone-500">Belum ada pemberitahuan</p>
+                          <p className="text-[11px] text-stone-400">
+                            Notifikasi pesanan, pembayaran, dan akun akan muncul di sini.
+                          </p>
+                        </div>
                       )}
                       {notifications.map((notif) => {
-                        const dotTone =
-                          notif.tone === 'amber'
-                            ? 'bg-amber-500'
-                            : notif.tone === 'blue'
-                            ? 'bg-blue-500'
-                            : 'bg-emerald-500';
+                        const isRed = notif.tone === 'red' || notif.isRejected;
+                        const dotTone = isRed
+                          ? 'bg-rose-500'
+                          : notif.tone === 'amber'
+                          ? 'bg-amber-500'
+                          : notif.tone === 'blue'
+                          ? 'bg-blue-500'
+                          : 'bg-emerald-500';
+                        const unreadBg = isRed
+                          ? 'bg-rose-50/50 hover:bg-rose-50/80'
+                          : 'bg-amber-50/45 hover:bg-amber-50/80';
                         return (
-                          <button
+                          <div
                             key={notif.id}
-                            type="button"
                             onClick={() => {
-                              setIsNotifOpen(false);
-                              onNotificationClick && onNotificationClick(notif);
+                              if (!notif.read && onNotificationClick) {
+                                onNotificationClick(notif);
+                              }
                             }}
-                            className={`w-full text-left p-3.5 flex items-start gap-3 transition cursor-pointer ${
-                              notif.read
-                                ? 'bg-white hover:bg-stone-50'
-                                : 'bg-amber-50/40 hover:bg-amber-50/70'
+                            className={`w-full text-left px-3.5 py-3 sm:px-4 sm:py-3 flex items-start gap-2.5 sm:gap-3 transition ${
+                              notif.read ? 'bg-white hover:bg-stone-50' : `${unreadBg} cursor-pointer`
                             }`}
                           >
                             <div
@@ -239,53 +249,90 @@ export default function Header({
                                 notif.read ? 'bg-stone-300' : dotTone
                               }`}
                             />
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
+                            <div className="flex-1 min-w-0 space-y-1">
+                              <div className="flex items-start justify-between gap-2">
                                 <p
-                                  className={`text-[11px] ${
-                                    notif.read ? 'font-semibold text-stone-600' : 'font-bold text-stone-900'
+                                  className={`text-xs sm:text-[13px] leading-snug ${
+                                    notif.read ? 'font-semibold text-stone-700' : 'font-bold text-stone-900'
                                   }`}
                                 >
                                   {notif.title}
                                 </p>
-                                {!notif.read && (
-                                  <span className="text-[8px] font-extrabold uppercase tracking-wide text-[#6B1416] bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-full shrink-0">
-                                    Baru
-                                  </span>
-                                )}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {notif.isRejected && (
+                                    <span className="text-[9px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-full">
+                                      Ditolak
+                                    </span>
+                                  )}
+                                  {!notif.read && (
+                                    <span className="text-[9px] font-extrabold uppercase tracking-wide text-[#6B1416] bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-full">
+                                      Baru
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                              <p className="text-stone-500 text-[11px] mt-0.5 leading-relaxed">
-                                {notif.sub}
-                              </p>
-                              <div className="flex items-center justify-between mt-1 gap-2">
-                                <p className="text-[9px] text-stone-400">{notif.time}</p>
-                                <span className="text-[9px] font-semibold text-[#6B1416]">
-                                  {notif.read ? '✓ Terbaca' : 'Klik untuk buka ›'}
-                                </span>
+                              {notif.sub && (
+                                <p className="text-stone-600 text-[11px] sm:text-xs leading-relaxed">
+                                  {notif.sub}
+                                </p>
+                              )}
+                              <div className="flex items-center justify-between pt-0.5 gap-2">
+                                <p className="text-[10px] text-stone-400 font-medium">{notif.time}</p>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {notif.read ? (
+                                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                      ✓ Dibaca
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onNotificationClick && onNotificationClick(notif);
+                                      }}
+                                      className="text-[10px] font-bold text-white bg-[#6B1416] hover:bg-[#520C0E] px-2 py-0.5 rounded shadow-xs cursor-pointer transition"
+                                    >
+                                      Baca
+                                    </button>
+                                  )}
+                                  {!notif.isRejected && notif.target && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setIsNotifOpen(false);
+                                        onNotificationClick && onNotificationClick(notif, { navigate: true });
+                                      }}
+                                      className="text-[10px] font-bold text-[#6B1416] hover:underline px-1.5 py-0.5 rounded hover:bg-rose-50 cursor-pointer transition"
+                                    >
+                                      Lihat &rsaquo;
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
 
-                    <div className="p-2.5 bg-stone-50 border-t border-stone-100 flex items-center justify-between gap-2">
+                    <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 bg-stone-50 border-t border-stone-200 flex items-center justify-between gap-2">
                       {unreadCount > 0 ? (
                         <button
                           type="button"
                           onClick={() => onMarkAllRead && onMarkAllRead()}
-                          className="text-[11px] font-bold text-[#6B1416] hover:underline cursor-pointer flex items-center gap-1"
+                          className="text-[11px] sm:text-xs font-bold text-[#6B1416] hover:underline cursor-pointer flex items-center gap-1"
                         >
                           <CheckIcon className="w-3.5 h-3.5" />
                           Tandai semua dibaca
                         </button>
                       ) : (
-                        <span className="text-[10px] text-stone-400">Semua pemberitahuan terbaca</span>
+                        <span className="text-[11px] text-stone-400 font-medium">Semua dibaca</span>
                       )}
                       <button
                         type="button"
                         onClick={() => setIsNotifOpen(false)}
-                        className="text-[11px] font-semibold text-stone-500 hover:text-stone-800 cursor-pointer"
+                        className="text-[11px] sm:text-xs font-bold text-stone-600 hover:text-stone-900 px-2 py-1 rounded-lg hover:bg-stone-200/60 transition cursor-pointer"
                       >
                         Tutup
                       </button>

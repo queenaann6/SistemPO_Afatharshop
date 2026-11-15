@@ -14,8 +14,12 @@ class Payment extends Model
         'verified_by',
         'amount',
         'proof_url',
+        'method',
+        'bank_name',
+        'account_number',
         'status',
         'rejection_reason',
+        'note',
         'uploaded_at',
         'verified_at',
     ];
@@ -32,8 +36,12 @@ class Payment extends Model
         'account_number',
     ];
 
-    public function getMethodAttribute(): string
+    public function getMethodAttribute($value = null): string
     {
+        $raw = trim((string) ($value ?? ($this->attributes['method'] ?? '')));
+        if ($raw !== '') {
+            return $raw;
+        }
         $proof = strtoupper((string) ($this->proof_url ?? ''));
         if ($proof === 'DEPOSIT' || empty($this->proof_url)) {
             return 'deposit';
@@ -41,14 +49,22 @@ class Payment extends Model
         return 'transfer';
     }
 
-    public function getBankNameAttribute(): string
+    public function getBankNameAttribute($value = null): string
     {
-        return $this->getMethodAttribute() === 'deposit' ? 'Deposit' : 'Transfer Bank';
+        $raw = trim((string) ($value ?? ($this->attributes['bank_name'] ?? '')));
+        if ($raw !== '') {
+            return $raw;
+        }
+        return $this->method === 'deposit' ? 'Deposit' : 'Transfer Bank';
     }
 
-    public function getAccountNumberAttribute(): string
+    public function getAccountNumberAttribute($value = null): string
     {
-        return $this->getMethodAttribute() === 'deposit' ? 'Saldo Deposit' : '';
+        $raw = trim((string) ($value ?? ($this->attributes['account_number'] ?? '')));
+        if ($raw !== '') {
+            return $raw;
+        }
+        return $this->method === 'deposit' ? 'Saldo Deposit' : '';
     }
 
     public function invoice()

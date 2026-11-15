@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Badge,
   Button,
@@ -12,11 +12,17 @@ import {
   TH,
   TableWrap,
   addressText,
+  copyText,
   fmtDate,
   payTone,
   rp,
   sumBy
 } from '../poCore';
+import {
+  extractOrderShippingLabels,
+  formatAllShippingLabelsText,
+  openShippingLabelsPrintTab
+} from '../../../utils/printShippingLabel';
 
 export default function FinanceShippingCostTab({
   needOngkir = [],
@@ -26,6 +32,17 @@ export default function FinanceShippingCostTab({
   setOngkirModal = () => {},
   goTo = () => {}
 }) {
+  const [copiedInv, setCopiedInv] = useState('');
+  const handleCopyAddress = async (o) => {
+    const text = formatAllShippingLabelsText(o);
+    const ok = await copyText(text);
+    if (ok) {
+      setCopiedInv(o.invoice);
+      setTimeout(() => setCopiedInv((prev) => (prev === o.invoice ? '' : prev)), 2000);
+    } else if (typeof window !== 'undefined' && window.prompt) {
+      window.prompt('Salin teks label pengiriman (Ctrl+C):', text);
+    }
+  };
   return (
     <>
       <PageHead
@@ -94,9 +111,32 @@ export default function FinanceShippingCostTab({
                   <p className="text-gray-800">{o.produk}</p>
                   <p className="text-[10px] text-gray-400">{o.variant} · {o.qty} pcs</p>
                 </td>
-                <td className={`${TD} max-w-[260px] text-[11px] text-gray-600`}>{addressText(o)}</td>
+                <td className={`${TD} max-w-[260px] text-[11px] text-gray-600`}>
+                  <p>{addressText(o) || '—'}</p>
+                  {extractOrderShippingLabels(o).length > 1 && (
+                    <Badge tone="blue" className="mt-1">
+                      {extractOrderShippingLabels(o).length} alamat split
+                    </Badge>
+                  )}
+                </td>
                 <td className={`${TD} text-right`}>
-                  <div className="flex items-center justify-end gap-1.5">
+                  <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      icon={copiedInv === o.invoice ? 'check' : 'copy'}
+                      onClick={() => handleCopyAddress(o)}
+                    >
+                      {copiedInv === o.invoice ? 'Tersalin' : 'Salin'}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      icon="print"
+                      onClick={() => openShippingLabelsPrintTab(o)}
+                    >
+                      Label
+                    </Button>
                     <Button size="xs" variant="outline" icon="chat" onClick={() => openWA(o, 'ready')}>
                       WA
                     </Button>

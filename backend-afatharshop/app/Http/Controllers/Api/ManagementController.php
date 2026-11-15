@@ -26,7 +26,9 @@ use App\Models\ProductPrice;
 use App\Models\ProductVariant;
 use App\Models\Supplier;
 use App\Models\User;
+use App\Support\OrderSerializer;
 use App\Support\TerminPlan;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -64,6 +66,7 @@ class ManagementController extends Controller
             'message' => 'Snapshot data manajemen.',
             'data'    => [
                 'orders'           => $section(fn () => $this->orders()),
+                'trashed_orders'   => $section(fn () => $this->trashedOrders()),
                 'users'            => $section(fn () => $this->users()),
                 'products'         => $section(fn () => $this->products()),
                 'brands'           => $section(fn () => $this->brands()),
@@ -83,11 +86,13 @@ class ManagementController extends Controller
 
     public function orders(): JsonResponse
     {
-        $orders = Order::query()
+        $orders = Order::active()
             ->with([
                 'user',
                 'address',
                 'items.variant.product.brand',
+                'items.variant.product.batch',
+                'items.address',
                 'invoice.installments',
                 'invoice.payments',
             ])
@@ -102,9 +107,45 @@ class ManagementController extends Controller
         ]);
     }
 
+    public function trashedOrders(): JsonResponse
+    {
+        $orders = Order::trashedOnly()
+            ->with([
+                'user',
+                'address',
+                'items.variant.product.brand',
+                'items.variant.product.batch',
+                'items.address',
+                'invoice.installments',
+                'invoice.payments',
+            ])
+            ->orderByDesc('deleted_at')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Daftar pesanan di arsip terhapus.',
+            'total'   => $orders->count(),
+            'data'    => $orders->map(fn (Order $order) => $this->orderPayload($order))->values(),
+        ]);
+    }
+
+    private function findOrderByIdentifier($id, bool $activeOnly = false): ?Order
+    {
+        $query = $activeOnly ? Order::active() : Order::query();
+
+        return $query
+            ->where(function ($q) use ($id) {
+                $q->where('id', $id)
+                  ->orWhere('order_number', $id)
+                  ->orWhereHas('invoice', fn ($iq) => $iq->where('invoice_number', $id));
+            })
+            ->first();
+    }
+
     public function invoice(Request $request, string $id): JsonResponse
     {
-        $order = Order::query()
+        $order = Order::active()
             ->with([
                 'user',
                 'address',
@@ -187,6 +228,7 @@ class ManagementController extends Controller
     {
         $payments = Payment::query()
             ->with(['installment', 'verifier', 'invoice.order.user'])
+            ->whereHas('invoice.order', fn ($q) => $q->whereNull('deleted_at'))
             ->orderByDesc('uploaded_at')
             ->get();
 
@@ -203,11 +245,15 @@ class ManagementController extends Controller
                 'mitra_id'         => $order?->user_id,
                 'mitra_name'       => $order?->user?->nama,
                 'amount'           => (float) $payment->amount,
-                'stage'            => $payment->installment?->type,
+                'stage'            => $payment->installment?->type ?: ($payment->invoice_id ? 'ongkir' : null),
                 'installment_id'   => $payment->installment_id,
                 'status'           => $payment->status,
                 'status_label'     => $this->statusLabel($payment->status),
                 'proof_url'        => $payment->proof_url,
+                'method'           => $payment->method,
+                'bank_name'        => $payment->bank_name,
+                'account_number'   => $payment->account_number,
+                'note'             => $payment->note,
                 'rejection_reason' => $payment->rejection_reason,
                 'uploaded_at'      => optional($payment->uploaded_at)->toIso8601String(),
                 'verified_by'      => $payment->verifier?->nama,
@@ -965,18 +1011,42 @@ class ManagementController extends Controller
      */
     public function uploadFile(Request $request): JsonResponse
     {
+        $actor = auth('api')->user();
+        if (!$actor) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+        }
+
+        $isAdmin = in_array($actor->role ?? '', ['owner', 'finance', 'marketing'], true);
+
         $folder = in_array((string) $request->folder, ['proof', 'product', 'avatar', 'avatars'], true)
             ? (string) $request->folder
             : 'proof';
 
+        // Pelanggan/mitra hanya diizinkan mengunggah bukti bayar atau foto profil
+        if (!$isAdmin && !in_array($folder, ['proof', 'avatar', 'avatars'], true)) {
+            $folder = 'proof';
+        }
+
+        $rules = $isAdmin
+            ? 'required|file|mimes:jpg,jpeg,png,webp,gif,mp4,mov,webm|max:20480'
+            : 'required|file|mimes:jpg,jpeg,png,webp|max:5120';
+
         $validator = Validator::make($request->all(), [
-            'file' => 'required|file|mimes:jpg,jpeg,png,webp,gif,mp4,mov,webm|max:20480',
+            'file' => $rules,
+        ], [
+            'file.required' => 'Berkas wajib dipilih.',
+            'file.mimes'    => $isAdmin
+                ? 'Berkas harus berupa gambar (JPG, PNG, WEBP) atau video (MP4, WEBM).'
+                : 'Berkas harus berupa gambar JPG, PNG, atau WEBP.',
+            'file.max'      => $isAdmin
+                ? 'Ukuran berkas maksimal 20 MB.'
+                : 'Ukuran berkas bukti transfer / foto profil maksimal 5 MB.',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Berkas harus berupa gambar (JPG, PNG, WEBP) atau video (MP4, WEBM) maksimal 20 MB.',
+                'message' => $validator->errors()->first('file') ?: 'Validasi berkas gagal.',
                 'errors'  => $validator->errors(),
             ], 422);
         }
@@ -1275,112 +1345,7 @@ class ManagementController extends Controller
 
     private function orderPayload(Order $order): array
     {
-        $invoice = $order->invoice;
-
-        return [
-            'id'               => $order->id,
-            'order_number'     => $order->order_number,
-            'status'           => $order->status,
-            'production_status' => $order->production_status,
-            'courier_name'     => $order->courier_name,
-            'tracking_number'  => $order->tracking_number,
-            'notes'            => $order->notes,
-            'is_split_address' => (bool) $order->is_split_address,
-            'subtotal'         => (float) $order->subtotal,
-            'shipping_cost'    => (float) $order->shipping_cost,
-            'total_amount'     => (float) $order->total_amount,
-            'fee_mitra_total'  => (float) $order->items->sum('discount_nominal'),
-            'addon_total'      => (float) $order->items->sum('addon_nominal'),
-            'ordered_at'       => optional($order->ordered_at)->toIso8601String(),
-            'created_at'       => optional($order->created_at)->toIso8601String(),
-            'user'             => $order->user ? [
-                'id'     => $order->user->id,
-                'name'   => $order->user->nama,
-                'nama'   => $order->user->nama,
-                'email'  => $order->user->email,
-                'level'  => $order->user->level,
-                'role'   => $order->user->role,
-                'phone'  => $order->user->phone,
-                'city'   => $order->user->city,
-                'avatar' => $order->user->avatar,
-            ] : null,
-            'address'          => $order->address,
-            'items'            => $order->items->map(function ($item) {
-                // Baris lama hanya menyimpan satu kolom fee: nilai positif berarti
-                // addon, negatif berarti potongan harga.
-                $fee = (float) $item->fee;
-                $discount = (float) $item->discount_nominal > 0 ? (float) $item->discount_nominal : max(0, -$fee);
-                $addon = (float) $item->addon_nominal > 0 ? (float) $item->addon_nominal : max(0, $fee);
-
-                return [
-                'id'                => $item->id,
-                'address_id'        => $item->address_id,
-                'product_variant_id' => $item->product_variant_id,
-                'quantity'          => $item->quantity,
-                'unit_price'        => (float) $item->unit_price,
-                'fee'               => $fee,
-                'discount_nominal'  => $discount,
-                'addon_nominal'     => $addon,
-                'subtotal'          => (float) $item->subtotal,
-                'net_subtotal'      => round((float) $item->subtotal - $discount + $addon, 2),
-                'splits'            => $item->splits,
-                'variant'           => $item->variant ? [
-                    'id'        => $item->variant->id,
-                    'model'     => $item->variant->model,
-                    'size'      => $item->variant->size,
-                    'color'     => $item->variant->color,
-                    'sku'       => $item->variant->sku,
-                    'stock'     => $item->variant->stock,
-                    'product'   => $item->variant->product ? [
-                        'id'              => $item->variant->product->id,
-                        'brand_id'        => $item->variant->product->brand_id,
-                        'name'            => $item->variant->product->name,
-                        'image'           => $item->variant->product->image,
-                        'status'          => $item->variant->product->status,
-                        'min_dp_percent'  => $item->variant->product->min_dp_percent,
-                        'tutup_po'        => optional($item->variant->product->tutup_po)->toIso8601String(),
-                        'estimated_shipment' => optional($item->variant->product->estimated_shipment)->toDateString(),
-                        'brand'           => $item->variant->product->brand ? [
-                            'id'   => $item->variant->product->brand->id,
-                            'name' => $item->variant->product->brand->name,
-                            'logo' => $item->variant->product->brand->logo,
-                        ] : null,
-                    ] : null,
-                ] : null,
-                ];
-            })->values(),
-            'invoice'          => $invoice ? [
-                'id'                 => $invoice->id,
-                'invoice_number'     => $invoice->invoice_number,
-                'total_amount'       => (float) $invoice->total_amount,
-                'paid_amount'        => (float) $invoice->paid_amount,
-                'outstanding_amount' => (float) $invoice->outstanding_amount,
-                'status'             => $invoice->status,
-                'due_at'             => optional($invoice->due_at)->toIso8601String(),
-                'installments'       => $invoice->installments->map(fn ($installment) => [
-                    'id'              => $installment->id,
-                    'type'            => $installment->type,
-                    'sequence_number' => $installment->sequence_number,
-                    'amount'          => (float) $installment->amount,
-                    'paid_amount'     => (float) $installment->paid_amount,
-                    'status'          => $installment->status,
-                    'due_at'          => optional($installment->due_at)->toIso8601String(),
-                ])->values(),
-                'payments'           => $invoice->payments->map(fn (Payment $payment) => [
-                    'id'               => $payment->id,
-                    'installment_id'   => $payment->installment_id,
-                    'amount'           => (float) $payment->amount,
-                    'status'           => $payment->status,
-                    'proof_url'        => $payment->proof_url,
-                    'method'           => (strtoupper((string) $payment->proof_url) === 'DEPOSIT' || empty($payment->proof_url)) ? 'deposit' : 'transfer',
-                    'bank_name'        => (strtoupper((string) $payment->proof_url) === 'DEPOSIT' || empty($payment->proof_url)) ? 'Deposit' : 'Transfer Bank',
-                    'account_number'   => (strtoupper((string) $payment->proof_url) === 'DEPOSIT' || empty($payment->proof_url)) ? 'Saldo Deposit' : '',
-                    'rejection_reason' => $payment->rejection_reason,
-                    'uploaded_at'      => optional($payment->uploaded_at)->toIso8601String(),
-                    'verified_at'      => optional($payment->verified_at)->toIso8601String(),
-                ])->values(),
-            ] : null,
-        ];
+        return OrderSerializer::payload($order);
     }
 
     // =========================================================================
@@ -1563,6 +1528,7 @@ class ManagementController extends Controller
             }
             $user->level = $r === 'mitra' ? ($user->isMitra() ? $user->level : 'reseller') : $r;
         }
+        $wasActive = (bool) $user->is_active;
         if ($request->has('is_active')) {
             $user->is_active = $request->boolean('is_active');
         }
@@ -1599,7 +1565,17 @@ class ManagementController extends Controller
         }
         $user->save();
 
-        $this->logActivity('user.update', 'Pengguna', "Pengguna {$user->nama} ({$user->role}/{$user->level}) diperbarui");
+        if (!$wasActive && $user->is_active) {
+            $this->notify(
+                (int) $user->id,
+                'Akun Mitra Disetujui',
+                'Selamat! Pendaftaran akun Anda telah di-ACC oleh Admin. Anda sekarang dapat masuk dan melakukan PO.',
+                'success'
+            );
+            $this->logActivity('user.approve', 'Pengguna', "Akun {$user->nama} ({$user->role}/{$user->level}) di-ACC dan diaktifkan");
+        } else {
+            $this->logActivity('user.update', 'Pengguna', "Pengguna {$user->nama} ({$user->role}/{$user->level}) diperbarui");
+        }
 
         return response()->json([
             'success' => true,
@@ -1632,6 +1608,13 @@ class ManagementController extends Controller
                 'success' => false,
                 'message' => 'Anda tidak dapat menghapus akun Anda sendiri yang sedang aktif digunakan.'
             ], 400);
+        }
+
+        if ($user->role === 'owner') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Akun Owner tidak dapat dihapus demi keamanan sistem.'
+            ], 403);
         }
 
         $orderCount = $user->orders()->count();
@@ -2135,7 +2118,7 @@ class ManagementController extends Controller
             'notes' => 'nullable|string',
         ])->validate();
 
-        $order = Order::where('id', $id)->orWhere('order_number', $id)->first();
+        $order = $this->findOrderByIdentifier($id, true);
         if (!$order) {
             return response()->json(['success' => false, 'message' => 'Pesanan tidak ditemukan.'], 404);
         }
@@ -2264,7 +2247,7 @@ class ManagementController extends Controller
                 'fee' => round($line['addon_total'] - $line['discount'], 2),
                 'discount_nominal' => $line['discount'],
                 'addon_nominal' => $line['addon_total'],
-                'subtotal' => $line['gross'],
+                'subtotal' => $line['subtotal'],
             ];
 
             $item = $line['id'] !== null ? $existing->get($line['id']) : null;
@@ -2460,25 +2443,37 @@ class ManagementController extends Controller
             ->keyBy('id');
 
         $computedSubtotal = 0.0;
+        $resolvedLines = [];
         foreach ($request->items as $item) {
-            $addon = (float) ($item['addon_nominal'] ?? $item['addon'] ?? 0);
-            $computedSubtotal += ((float) $item['unit_price'] * (int) $item['quantity']) + $addon;
+            $amounts = OrderSerializer::resolveLineAmounts($item);
+            $computedSubtotal += $amounts['subtotal'];
+            $resolvedLines[] = array_merge($amounts, [
+                'product_variant_id' => $item['product_variant_id'],
+            ]);
         }
 
         $subtotal = (float) ($request->subtotal ?? $computedSubtotal);
         if ($computedSubtotal > 0 && abs($computedSubtotal - $subtotal) > 1) {
-            $subtotal = $computedSubtotal;
+            $subtotal = round($computedSubtotal, 2);
         }
 
         $shippingCost = (float) ($request->shipping_cost ?? $request->ongkir ?? 0);
         $totalAmount = (float) ($request->total_amount ?? ($subtotal + $shippingCost));
         if (abs(($subtotal + $shippingCost) - $totalAmount) > 1) {
-            $totalAmount = $subtotal + $shippingCost;
+            $totalAmount = round($subtotal + $shippingCost, 2);
         }
 
         $status = $request->input('status', 'Menunggu DP');
+        $marketingStatus = strtoupper(trim((string) $request->input(
+            'marketing_status',
+            stripos($status, 'menunggu acc') !== false ? 'PENDING' : 'ACC'
+        )));
+        $marketingBy = $request->input('marketing_by') ?? ($marketingStatus === 'ACC' ? (auth('api')->user()?->nama ?? 'Purchasing') : null);
+        $marketingAt = $marketingStatus === 'ACC'
+            ? ($request->filled('marketing_at') ? Carbon::parse($request->marketing_at) : now())
+            : null;
 
-        $order = DB::transaction(function () use ($request, $user, $status, $totalAmount, $subtotal, $shippingCost, $variants) {
+        $order = DB::transaction(function () use ($request, $user, $status, $marketingStatus, $marketingBy, $marketingAt, $totalAmount, $subtotal, $shippingCost, $variants, $resolvedLines) {
             $requestedOrderNumber = trim((string) ($request->order_number ?? $request->orderNo ?? ''));
             if ($requestedOrderNumber && !Order::where('order_number', $requestedOrderNumber)->exists()) {
                 $orderNumber = $requestedOrderNumber;
@@ -2491,7 +2486,11 @@ class ManagementController extends Controller
                 'address_id'       => $request->address_id,
                 'order_number'     => $orderNumber,
                 'status'           => $status,
-                'production_status'=> $request->input('production_status', 'Antrean'),
+                'marketing_status' => $marketingStatus,
+                'marketing_by'     => $marketingBy,
+                'marketing_at'     => $marketingAt,
+                'marketing_note'   => $request->input('marketing_note'),
+                'production_status'=> $request->input('production_status', 'Antrian'),
                 'courier_name'     => $request->courier_name ?: $request->ekspedisi,
                 'tracking_number'  => $request->tracking_number ?: $request->resi,
                 'notes'            => $request->notes,
@@ -2510,22 +2509,16 @@ class ManagementController extends Controller
                 'created_at' => now(),
             ]);
 
-            foreach ($request->items as $item) {
-                $qty = (int) $item['quantity'];
-                $unitPrice = (float) $item['unit_price'];
-                $fee = (float) ($item['fee'] ?? $item['feeNominal'] ?? $item['feeMitraNominal'] ?? 0);
-                $discount = (float) ($item['discount_nominal'] ?? $item['discountNominal'] ?? $fee);
-                $addon = (float) ($item['addon_nominal'] ?? $item['addon'] ?? 0);
-
+            foreach ($resolvedLines as $line) {
                 OrderItem::create([
                     'order_id'           => $order->id,
-                    'product_variant_id' => $item['product_variant_id'],
-                    'quantity'           => $qty,
-                    'unit_price'         => $unitPrice,
-                    'fee'                => $fee,
-                    'discount_nominal'   => $discount,
-                    'addon_nominal'      => $addon,
-                    'subtotal'           => round(($unitPrice * $qty) + $addon, 2),
+                    'product_variant_id' => $line['product_variant_id'],
+                    'quantity'           => $line['quantity'],
+                    'unit_price'         => $line['unit_price'],
+                    'fee'                => $line['fee'],
+                    'discount_nominal'   => $line['discount_nominal'],
+                    'addon_nominal'      => $line['addon_nominal'],
+                    'subtotal'           => $line['subtotal'],
                     'created_at'         => now(),
                 ]);
             }
@@ -2573,7 +2566,9 @@ class ManagementController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Pesanan berhasil dibuat.',
-            'data'    => $this->orderPayload($order),
+            'data'    => $this->orderPayload($order->fresh([
+                'user', 'address', 'items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments',
+            ])),
         ], 201);
     }
 
@@ -2589,13 +2584,7 @@ class ManagementController extends Controller
             return response()->json($orderData, $orderRes->getStatusCode());
         }
 
-        $order = Order::with([
-            'user',
-            'address',
-            'items.variant.product.brand',
-            'invoice.installments',
-            'invoice.payments',
-        ])->where('id', $id)->orWhere('order_number', $id)->first();
+        $order = $this->findOrderByIdentifier($id, true);
 
         return response()->json([
             'success' => true,
@@ -2609,12 +2598,7 @@ class ManagementController extends Controller
     // =========================================================================
     public function updateOrderStatus(Request $request, $id): JsonResponse
     {
-        $order = is_numeric($id)
-            ? Order::find($id)
-            : Order::where('order_number', $id)
-                ->orWhere('id', $id)
-                ->orWhereHas('invoice', fn ($q) => $q->where('invoice_number', $id))
-                ->first();
+        $order = $this->findOrderByIdentifier($id, true);
 
         if (!$order) {
             return response()->json(['success' => false, 'message' => 'Pesanan tidak ditemukan.'], 404);
@@ -2624,11 +2608,37 @@ class ManagementController extends Controller
         if ($request->filled('status')) {
             $order->status = trim((string) $request->status);
         }
+
+        $marketingStatus = strtoupper(trim((string) ($request->input('marketing_status') ?? $request->input('marketingStatus') ?? '')));
+        if ($marketingStatus !== '') {
+            $order->marketing_status = $marketingStatus;
+            if ($request->filled('marketing_by') || $request->filled('marketingBy')) {
+                $order->marketing_by = trim((string) ($request->input('marketing_by') ?? $request->input('marketingBy')));
+            } elseif (in_array($marketingStatus, ['ACC', 'TOLAK'], true)) {
+                $order->marketing_by = auth('api')->user()?->nama ?? $order->marketing_by;
+            }
+            if ($request->filled('marketing_at') || $request->filled('marketingAt')) {
+                $order->marketing_at = Carbon::parse($request->input('marketing_at') ?? $request->input('marketingAt'));
+            } elseif (in_array($marketingStatus, ['ACC', 'TOLAK'], true)) {
+                $order->marketing_at = now();
+            }
+            if ($marketingStatus === 'PENDING') {
+                $order->marketing_note = null;
+            }
+        }
+        if ($request->has('marketing_note') || $request->has('marketingNote')) {
+            $mNote = $request->input('marketing_note') ?? $request->input('marketingNote');
+            $order->marketing_note = $mNote !== '' ? $mNote : null;
+        }
+
         if ($request->filled('courier_name')) {
             $order->courier_name = trim((string) $request->courier_name);
         }
         if ($request->filled('tracking_number')) {
             $order->tracking_number = trim((string) $request->tracking_number);
+            $order->shipped_at = $request->filled('shipped_at') || $request->filled('shippedAt')
+                ? Carbon::parse($request->input('shipped_at') ?? $request->input('shippedAt'))
+                : ($order->shipped_at ?? now());
         }
         if ($request->has('production_status')) {
             $production = trim((string) $request->production_status);
@@ -2639,6 +2649,14 @@ class ManagementController extends Controller
                 ], 422);
             }
             $order->production_status = $production !== '' ? $production : null;
+            if ($production === 'Ready') {
+                $order->ready_at = $request->filled('ready_at') || $request->filled('readyAt')
+                    ? Carbon::parse($request->input('ready_at') ?? $request->input('readyAt'))
+                    : ($order->ready_at ?? now());
+            }
+        }
+        if ($request->filled('ready_at') || $request->filled('readyAt')) {
+            $order->ready_at = Carbon::parse($request->input('ready_at') ?? $request->input('readyAt'));
         }
         if ($request->has('notes')) {
             $order->notes = $request->notes;
@@ -2646,7 +2664,31 @@ class ManagementController extends Controller
         if ($request->has('shipping_cost')) {
             $shipping = max(0, (float) $request->shipping_cost);
             $order->shipping_cost = $shipping;
-            $order->total_amount = (float) $order->subtotal + $shipping;
+            $order->total_amount = round((float) $order->subtotal + $shipping, 2);
+            $order->ongkir_at = $request->filled('ongkir_at') || $request->filled('ongkirAt')
+                ? Carbon::parse($request->input('ongkir_at') ?? $request->input('ongkirAt'))
+                : ($order->ongkir_at ?? now());
+        }
+        if ($request->has('weight_kg') || $request->has('weight')) {
+            $rawWeight = $request->input('weight_kg') ?? $request->input('weight');
+            $order->weight_kg = $rawWeight !== '' && $rawWeight !== null ? max(0, (float) $rawWeight) : null;
+        }
+        if ($request->has('shipping_note') || $request->has('shippingNote')) {
+            $order->shipping_note = $request->input('shipping_note') ?? $request->input('shippingNote');
+        }
+        if ($request->filled('ongkir_at') || $request->filled('ongkirAt')) {
+            $order->ongkir_at = Carbon::parse($request->input('ongkir_at') ?? $request->input('ongkirAt'));
+        }
+        if ($request->filled('shipped_at') || $request->filled('shippedAt')) {
+            $order->shipped_at = Carbon::parse($request->input('shipped_at') ?? $request->input('shippedAt'));
+        }
+        if ($request->filled('received_at') || $request->filled('receivedAt')) {
+            $order->received_at = Carbon::parse($request->input('received_at') ?? $request->input('receivedAt'));
+        } elseif (strcasecmp((string) $order->status, 'Selesai') === 0 && !$order->received_at) {
+            $order->received_at = now();
+        }
+        if (strcasecmp((string) $order->status, 'Dikirim') === 0 && !$order->shipped_at) {
+            $order->shipped_at = now();
         }
         $order->save();
 
@@ -2723,6 +2765,16 @@ class ManagementController extends Controller
                         'verified_by' => auth('api')->id(),
                         'verified_at' => now(),
                     ]);
+            } elseif (in_array($ongkirStatusReq, ['TOLAK', 'DITOLAK'], true)) {
+                Payment::where('invoice_id', $invoice->id)
+                    ->whereNull('installment_id')
+                    ->where('status', 'menunggu_verifikasi')
+                    ->update([
+                        'status'           => 'ditolak',
+                        'rejection_reason' => $request->input('note') ?? 'Ditolak Finance',
+                        'verified_by'      => auth('api')->id(),
+                        'verified_at'      => now(),
+                    ]);
             }
 
             // Saldo invoice dihitung dengan satu rumus yang sama seperti
@@ -2730,6 +2782,7 @@ class ManagementController extends Controller
             $this->syncInvoiceTotals($invoice);
             if ($invoice->status === 'lunas' && in_array($order->status, ['Menunggu Pelunasan + Ongkir', 'Menunggu Pelunasan', 'Menunggu Pembayaran Sisa Pelunasan + Ongkir'], true)) {
                 $order->status = 'Siap Kirim';
+                $order->ready_at = $order->ready_at ?? now();
                 $order->save();
             }
         }
@@ -2764,14 +2817,57 @@ class ManagementController extends Controller
         ]);
     }
 
+    public function trashOrder(Request $request, $id): JsonResponse
+    {
+        $order = $this->findOrderByIdentifier($id, true);
+        if (!$order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Pesanan tidak ditemukan atau sudah berada di arsip terhapus.',
+            ], 404);
+        }
+
+        $order->deleted_at = now();
+        $order->deleted_by = $request->input('deleted_by') ?? auth('api')->user()?->nama ?? 'Purchasing';
+        $order->delete_reason = $request->input('delete_reason') ?? $request->input('reason') ?? null;
+        $order->save();
+
+        $this->logActivity('order.trash', 'Penjualan', "Pesanan {$order->order_number} dipindahkan ke arsip terhapus" . ($order->delete_reason ? " ({$order->delete_reason})" : ''));
+
+        return response()->json([
+            'success' => true,
+            'message' => "Pesanan {$order->order_number} dipindahkan ke Penjualan Terhapus.",
+            'data'    => $this->orderPayload($order->fresh(['user', 'address', 'items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments'])),
+        ]);
+    }
+
+    public function restoreOrder($id): JsonResponse
+    {
+        $order = $this->findOrderByIdentifier($id, false);
+        if (!$order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Pesanan tidak ditemukan.',
+            ], 404);
+        }
+
+        $order->deleted_at = null;
+        $order->deleted_by = null;
+        $order->delete_reason = null;
+        $order->save();
+
+        $this->logActivity('order.restore', 'Penjualan', "Pesanan {$order->order_number} dipulihkan dari arsip terhapus");
+
+        return response()->json([
+            'success' => true,
+            'message' => "Pesanan {$order->order_number} berhasil dipulihkan.",
+            'data'    => $this->orderPayload($order->fresh(['user', 'address', 'items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments'])),
+        ]);
+    }
+
     public function destroyOrder($id): JsonResponse
     {
-        $order = is_numeric($id)
-            ? Order::find($id)
-            : Order::where('order_number', $id)
-                ->orWhere('id', $id)
-                ->orWhereHas('invoice', fn ($q) => $q->where('invoice_number', $id))
-                ->first();
+        $order = $this->findOrderByIdentifier($id, false);
         if (!$order) {
             return response()->json([
                 'success' => false,
@@ -2802,47 +2898,37 @@ class ManagementController extends Controller
         ]);
     }
 
-    // =========================================================================
-    // 5. PAYMENT VERIFICATION (Finance ACC Bukti Bayar)
-    // =========================================================================
-    public function storePayment(Request $request): JsonResponse
+    private function resolveInvoiceForPayment(Request $request): ?Invoice
     {
-        $validator = Validator::make($request->all(), [
-            'amount' => 'required|numeric|min:1',
-        ]);
-        if ($validator->fails()) {
-            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
-        }
-
-        $invoiceId = $request->invoice_id;
+        $invoiceId = is_numeric($request->invoice_id) ? (int) $request->invoice_id : null;
         if (!$invoiceId && $request->filled('order_id')) {
-            $ord = Order::find($request->order_id);
+            $rawOrderId = trim((string) $request->order_id);
+            $ord = is_numeric($rawOrderId)
+                ? Order::active()->find((int) $rawOrderId)
+                : Order::active()->where('order_number', $rawOrderId)->first();
             $invoiceId = $ord?->invoice?->id;
         }
         if (!$invoiceId && $request->filled('order_number')) {
-            $ord = Order::where('order_number', trim((string) $request->order_number))->first();
+            $ord = Order::active()->where('order_number', trim((string) $request->order_number))->first();
             $invoiceId = $ord?->invoice?->id;
         }
         if (!$invoiceId && $request->filled('invoice_number')) {
-            $invoiceId = Invoice::where('invoice_number', trim((string) $request->invoice_number))->value('id');
+            $invoiceId = Invoice::where('invoice_number', trim((string) $request->invoice_number))
+                ->whereHas('order', fn ($q) => $q->whereNull('deleted_at'))
+                ->value('id');
         }
 
-        $invoice = Invoice::find($invoiceId);
-        if (!$invoice) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invoice tidak ditemukan. Kirim invoice_id, invoice_number, order_id, atau order_number yang benar.',
-            ], 422);
+        if (!$invoiceId) {
+            return null;
         }
 
-        $actor = auth('api')->user();
-        if ($actor && $actor->isMitra() && (int) $invoice->order?->user_id !== (int) $actor->id) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Bukti bayar hanya bisa diunggah untuk pesanan kamu sendiri.',
-            ], 422);
-        }
+        return Invoice::with('order')
+            ->whereHas('order', fn ($q) => $q->whereNull('deleted_at'))
+            ->find($invoiceId);
+    }
 
+    private function resolveInstallmentForInvoice(Invoice $invoice, Request $request): array
+    {
         $installment = null;
         $stageInput = strtolower(trim((string) $request->input('stage', '')));
         $isOngkirPayment = ($stageInput === 'ongkir' || str_contains($stageInput, 'ongkir'));
@@ -2850,12 +2936,12 @@ class ManagementController extends Controller
         if ($request->filled('installment_id')) {
             $installment = Installment::where('invoice_id', $invoice->id)->find($request->installment_id);
             if (!$installment) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Cicilan tidak ditemukan pada invoice ini.',
-                ], 422);
+                return [null, $isOngkirPayment, 'Cicilan tidak ditemukan pada invoice ini.'];
             }
-        } elseif (!$isOngkirPayment) {
+            return [$installment, false, null];
+        }
+
+        if (!$isOngkirPayment) {
             $type = $this->installmentType((string) $request->input('stage', ''));
             if ($type) {
                 $installment = Installment::where('invoice_id', $invoice->id)
@@ -2870,11 +2956,126 @@ class ManagementController extends Controller
                     ->orderBy('sequence_number')
                     ->first();
                 if (!$installment) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => "Tahap pembayaran {$type} belum tersedia pada invoice {$invoice->invoice_number}.",
-                    ], 422);
+                    return [null, false, "Tahap pembayaran {$type} belum tersedia pada invoice {$invoice->invoice_number}."];
                 }
+            }
+        }
+
+        return [$installment, $isOngkirPayment, null];
+    }
+
+    private function resolvePaymentBankMeta(Request $request, string $defaultMethod = 'transfer'): array
+    {
+        $bankName = trim((string) ($request->input('bank_name') ?? $request->input('bank') ?? ''));
+        $accountNumber = trim((string) ($request->input('account_number') ?? $request->input('bank_account') ?? ''));
+        if ($request->filled('bank_account_id') && ($bankName === '' || $accountNumber === '')) {
+            $acc = BankAccount::find($request->bank_account_id);
+            if ($acc) {
+                if ($bankName === '') {
+                    $bankName = trim((string) $acc->bank_name);
+                }
+                if ($accountNumber === '') {
+                    $accountNumber = trim((string) $acc->account_number);
+                }
+            }
+        }
+
+        $method = trim((string) $request->input('method', ''));
+        if ($method === '') {
+            $method = $defaultMethod;
+        }
+
+        return [
+            'method'         => $method,
+            'bank_name'      => $bankName !== '' ? $bankName : ($method === 'deposit' ? 'Deposit' : 'Transfer Bank'),
+            'account_number' => $accountNumber !== '' ? $accountNumber : ($method === 'deposit' ? 'Saldo Deposit' : ''),
+            'note'           => $request->input('note'),
+        ];
+    }
+
+    private function advanceOrderLifecycleAfterPayment(Invoice $invoice, ?Installment $installment, int $actorId, string $sourceLabel): void
+    {
+        $order = $invoice->order;
+        if (!$order) {
+            return;
+        }
+
+        $isDpStage = $installment ? $installment->type === 'dp' : false;
+        if ($isDpStage && in_array($order->status, ['Menunggu DP', 'Menunggu ACC Marketing', 'Open', 'Menunggu Pembayaran DP'], true)) {
+            $order->status = 'Produksi';
+            if (empty($order->production_status) || $order->production_status === 'Antrian') {
+                $order->production_status = 'Produksi';
+            }
+            $order->save();
+            OrderStatusHistory::create([
+                'order_id'   => $order->id,
+                'status'     => 'Produksi',
+                'note'       => "DP {$sourceLabel}",
+                'changed_by' => $actorId,
+                'created_at' => now(),
+            ]);
+        }
+
+        if ($invoice->outstanding_amount <= 0 && in_array($order->status, ['Menunggu Pelunasan + Ongkir', 'Menunggu Pelunasan', 'Menunggu Pembayaran Sisa Pelunasan + Ongkir'], true)) {
+            $order->status = 'Siap Kirim';
+            $order->ready_at = $order->ready_at ?? now();
+            $order->save();
+            OrderStatusHistory::create([
+                'order_id'   => $order->id,
+                'status'     => 'Siap Kirim',
+                'note'       => "Pelunasan & ongkir {$sourceLabel}. Siap dikirim.",
+                'changed_by' => $actorId,
+                'created_at' => now(),
+            ]);
+        }
+    }
+
+    // =========================================================================
+    // 5. PAYMENT VERIFICATION (Finance ACC Bukti Bayar)
+    // =========================================================================
+    public function storePayment(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'amount' => 'required|numeric|min:1',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'errors' => $validator->errors()], 422);
+        }
+
+        $invoice = $this->resolveInvoiceForPayment($request);
+        if (!$invoice) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invoice tidak ditemukan. Kirim invoice_id, invoice_number, order_id, atau order_number yang benar.',
+            ], 422);
+        }
+
+        $actor = auth('api')->user();
+        if (!$actor) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+        }
+        $isAdminFinance = in_array($actor->role ?? '', ['owner', 'finance'], true);
+        if (!$isAdminFinance && (int) $invoice->order?->user_id !== (int) $actor->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Bukti bayar hanya bisa diunggah untuk pesanan kamu sendiri.',
+            ], 403);
+        }
+
+        [$installment, $isOngkirPayment, $stageErr] = $this->resolveInstallmentForInvoice($invoice, $request);
+        if ($stageErr !== null) {
+            return response()->json(['success' => false, 'message' => $stageErr], 422);
+        }
+
+        $bankMeta = $this->resolvePaymentBankMeta($request, 'transfer');
+
+        $uploadedAt = now();
+        $rawDate = $request->input('uploaded_at') ?? $request->input('transferred_at') ?? $request->input('date');
+        if ($rawDate) {
+            try {
+                $uploadedAt = \Carbon\Carbon::parse((string) $rawDate);
+            } catch (\Throwable $e) {
+                $uploadedAt = now();
             }
         }
 
@@ -2882,24 +3083,33 @@ class ManagementController extends Controller
             'invoice_id'       => $invoice->id,
             'installment_id'   => $installment?->id,
             'amount'           => (float) $request->amount,
-            'proof_url'        => $request->proof_url ?? '',
+            'proof_url'        => (string) ($request->proof_url ?? ''),
+            'method'           => $bankMeta['method'],
+            'bank_name'        => $bankMeta['bank_name'],
+            'account_number'   => $bankMeta['account_number'],
+            'note'             => $bankMeta['note'],
             'status'           => 'menunggu_verifikasi',
             'rejection_reason' => null,
-            'uploaded_at'      => now(),
+            'uploaded_at'      => $uploadedAt,
         ]);
 
         $paymentLabel = $isOngkirPayment
             ? 'Ongkos Kirim'
             : ($installment ? 'Cicilan ' . $installment->type : 'Pembayaran');
         $this->logActivity('payment.upload', 'Pembayaran', "Bukti bayar {$paymentLabel} Rp " . number_format($payment->amount, 0, ',', '.') . " untuk invoice {$invoice->invoice_number}");
-        foreach (User::query()->where('level', 'finance')->pluck('id') as $financeId) {
+        foreach (User::query()->where('level', 'finance')->where('is_active', true)->pluck('id') as $financeId) {
             $this->notify((int) $financeId, "Bukti bayar {$paymentLabel} baru menunggu verifikasi", "{$invoice->invoice_number}: Rp " . number_format($payment->amount, 0, ',', '.'), 'payment');
         }
+
+        $freshOrder = $invoice->order
+            ? $invoice->order->fresh(['user', 'address', 'items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments'])
+            : null;
 
         return response()->json([
             'success' => true,
             'message' => 'Bukti pembayaran berhasil diunggah ke database.',
             'data'    => $payment->fresh(['installment', 'invoice.order']),
+            'order'   => $freshOrder ? $this->orderPayload($freshOrder) : null,
         ], 201);
     }
 
@@ -2923,14 +3133,7 @@ class ManagementController extends Controller
             ], 403);
         }
 
-        $invoice = Invoice::query()
-            ->where('invoice_number', trim((string) ($request->invoice_number ?? '')))
-            ->orWhereHas('order', function ($q) use ($request) {
-                $q->where('order_number', trim((string) ($request->order_number ?? '')));
-            })
-            ->with('order')
-            ->first();
-
+        $invoice = $this->resolveInvoiceForPayment($request);
         if (!$invoice) {
             return response()->json([
                 'success' => false,
@@ -2944,32 +3147,15 @@ class ManagementController extends Controller
             ], 422);
         }
 
-        $installment = null;
-        if ($request->filled('installment_id')) {
-            $installment = Installment::where('invoice_id', $invoice->id)->find($request->installment_id);
-            if (!$installment) {
-                return response()->json(['success' => false, 'message' => 'Cicilan tidak ditemukan pada invoice ini.'], 422);
-            }
-        } else {
-            $type = $this->installmentType((string) $request->input('stage', ''));
-            if ($type) {
-                $installment = Installment::where('invoice_id', $invoice->id)
-                    ->where(function ($q) use ($type) {
-                        if ($type === 'cicilan') {
-                            $q->where('type', 'like', 'cicilan%');
-                        } else {
-                            $q->where('type', $type);
-                        }
-                    })
-                    ->orderByRaw("case when status = 'lunas' then 1 else 0 end")
-                    ->orderBy('sequence_number')
-                    ->first();
-            }
+        [$installment, $isOngkirPayment, $stageErr] = $this->resolveInstallmentForInvoice($invoice, $request);
+        if ($stageErr !== null) {
+            return response()->json(['success' => false, 'message' => $stageErr], 422);
         }
 
         $amount = (float) $request->amount;
+        $stageLabel = $isOngkirPayment ? 'ongkir' : ($installment?->type ?: 'tagihan');
 
-        return DB::transaction(function () use ($request, $actor, $invoice, $installment, $amount) {
+        return DB::transaction(function () use ($request, $actor, $invoice, $installment, $isOngkirPayment, $amount, $stageLabel) {
             $user = User::where('id', $actor->id)->lockForUpdate()->first();
             $balanceBefore = (float) $user->deposit_balance;
             if ($balanceBefore < $amount) {
@@ -2981,6 +3167,10 @@ class ManagementController extends Controller
                 'installment_id'   => $installment?->id,
                 'amount'           => $amount,
                 'proof_url'        => 'DEPOSIT',
+                'method'           => 'deposit',
+                'bank_name'        => 'Deposit',
+                'account_number'   => 'Saldo Deposit',
+                'note'             => $request->input('note'),
                 'status'           => 'disetujui',
                 'rejection_reason' => null,
                 'uploaded_at'      => now(),
@@ -3004,7 +3194,7 @@ class ManagementController extends Controller
                 'status'          => 'disetujui',
                 'reference_type'  => 'invoice',
                 'reference_id'    => $invoice->id,
-                'description'     => 'Pelunasan ' . ($installment?->type ?: 'tagihan') . " invoice {$invoice->invoice_number} via saldo deposit",
+                'description'     => "Pelunasan {$stageLabel} invoice {$invoice->invoice_number} via saldo deposit",
                 'balance_before'  => $balanceBefore,
                 'balance_after'   => $balanceBefore - $amount,
                 'verified_by'     => $user->id,
@@ -3015,29 +3205,7 @@ class ManagementController extends Controller
             $user->deposit_balance = $balanceBefore - $amount;
             $user->save();
 
-            $order = $invoice->order;
-            if ($order && in_array($order->status, ['Menunggu DP', 'Menunggu ACC Marketing', 'Open', 'Menunggu Pembayaran DP'], true)) {
-                $order->status = 'Produksi';
-                $order->save();
-                OrderStatusHistory::create([
-                    'order_id'   => $order->id,
-                    'status'     => 'Produksi',
-                    'note'       => 'DP dibayar memakai saldo deposit',
-                    'changed_by' => $user->id,
-                    'created_at' => now(),
-                ]);
-            }
-            if ($order && $invoice->outstanding_amount <= 0 && in_array($order->status, ['Menunggu Pelunasan + Ongkir', 'Menunggu Pelunasan', 'Menunggu Pembayaran Sisa Pelunasan + Ongkir'], true)) {
-                $order->status = 'Siap Kirim';
-                $order->save();
-                OrderStatusHistory::create([
-                    'order_id'   => $order->id,
-                    'status'     => 'Siap Kirim',
-                    'note'       => 'Pelunasan selesai via saldo deposit. Siap dikirim.',
-                    'changed_by' => $user->id,
-                    'created_at' => now(),
-                ]);
-            }
+            $this->advanceOrderLifecycleAfterPayment($invoice, $installment, (int) $user->id, 'dibayar memakai saldo deposit');
 
             foreach (User::query()->where('level', 'owner')->pluck('id') as $ownerId) {
                 $this->notify(
@@ -3051,8 +3219,10 @@ class ManagementController extends Controller
             $this->logActivity(
                 'payment.deposit_offset',
                 'Pembayaran',
-                "{$user->nama} melunasan invoice {$invoice->invoice_number} Rp " . number_format($amount, 0, ',', '.') . ' dari saldo deposit'
+                "{$user->nama} melunasi invoice {$invoice->invoice_number} Rp " . number_format($amount, 0, ',', '.') . ' dari saldo deposit'
             );
+
+            $freshOrder = $invoice->order ? $invoice->order->fresh(['user', 'address', 'items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments']) : null;
 
             return response()->json([
                 'success' => true,
@@ -3060,7 +3230,8 @@ class ManagementController extends Controller
                 'data'    => [
                     'payment'         => $payment->fresh(['installment', 'invoice.order']),
                     'deposit_balance' => (float) $user->deposit_balance,
-                    'stage'           => $installment?->type,
+                    'stage'           => $isOngkirPayment ? 'ongkir' : $installment?->type,
+                    'order'           => $freshOrder ? $this->orderPayload($freshOrder) : null,
                 ],
             ], 201);
         });
@@ -3087,6 +3258,8 @@ class ManagementController extends Controller
         $payment->verified_at = now();
         $payment->save();
 
+        $order = $payment->invoice?->order;
+
         if ($isApproved) {
             if ($payment->installment) {
                 $payment->installment->status = 'lunas';
@@ -3095,30 +3268,12 @@ class ManagementController extends Controller
             }
             if ($payment->invoice) {
                 $this->syncInvoiceTotals($payment->invoice);
-
-                $order = $payment->invoice->order;
-                if ($order && in_array($order->status, ['Menunggu DP', 'Menunggu ACC Marketing', 'Open', 'Menunggu Pembayaran DP'], true)) {
-                    $order->status = 'Produksi';
-                    $order->save();
-                    OrderStatusHistory::create([
-                        'order_id'   => $order->id,
-                        'status'     => 'Produksi',
-                        'note'       => 'DP terverifikasi Finance',
-                        'changed_by' => $payment->verified_by,
-                        'created_at' => now(),
-                    ]);
-                }
-                if ($order && $payment->invoice->outstanding_amount <= 0 && in_array($order->status, ['Menunggu Pelunasan + Ongkir', 'Menunggu Pelunasan', 'Menunggu Pembayaran Sisa Pelunasan + Ongkir'], true)) {
-                    $order->status = 'Siap Kirim';
-                    $order->save();
-                    OrderStatusHistory::create([
-                        'order_id'   => $order->id,
-                        'status'     => 'Siap Kirim',
-                        'note'       => 'Pelunasan dan ongkir terverifikasi Finance. Siap dikirim.',
-                        'changed_by' => $payment->verified_by,
-                        'created_at' => now(),
-                    ]);
-                }
+                $this->advanceOrderLifecycleAfterPayment(
+                    $payment->invoice,
+                    $payment->installment,
+                    (int) ($payment->verified_by ?? auth('api')->id()),
+                    'terverifikasi Finance'
+                );
 
                 if ($order?->user_id) {
                     $this->notify(
@@ -3130,7 +3285,6 @@ class ManagementController extends Controller
                 }
             }
         } else {
-            $order = $payment->invoice?->order;
             if ($order?->user_id) {
                 $this->notify(
                     (int) $order->user_id,
@@ -3143,10 +3297,14 @@ class ManagementController extends Controller
 
         $this->logActivity('payment.verify', 'Pembayaran', 'Pembayaran #' . $payment->id . ' ' . $this->statusLabel($payment->status));
 
+        $freshPayment = $payment->fresh(['installment', 'invoice.order']);
+        $freshOrder = $order ? $order->fresh(['user', 'address', 'items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments']) : null;
+
         return response()->json([
             'success' => true,
             'message' => 'Pembayaran berhasil diverifikasi (' . $this->statusLabel($payment->status) . ').',
-            'data'    => $payment->fresh(['installment', 'invoice.order']),
+            'data'    => $freshPayment,
+            'order'   => $freshOrder ? $this->orderPayload($freshOrder) : null,
         ]);
     }
 
@@ -3163,32 +3321,58 @@ class ManagementController extends Controller
         }
 
         $actor = auth('api')->user();
-        $targetId = $actor->isMitra() ? $actor->id : ($request->user_id ?? $actor->id);
-        $user = User::find($targetId);
+        if (!$actor) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+        }
+        $isAdminFinance = in_array($actor->role ?? '', ['owner', 'finance'], true);
+        $rawTargetId = $isAdminFinance ? ($request->user_id ?? $actor->id) : $actor->id;
+        if (is_string($rawTargetId) && preg_match('/^[a-z]+-(\d+)$/i', trim($rawTargetId), $m)) {
+            $rawTargetId = $m[1];
+        }
+        $user = is_numeric($rawTargetId) ? User::find((int) $rawTargetId) : null;
         if (!$user) {
             return response()->json(['success' => false, 'message' => 'Mitra tidak ditemukan.'], 422);
+        }
+
+        try {
+            $bankAccountId = $this->resolveMasterRef(BankAccount::class, $request->bank_account_id, 'bank_account_id');
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
+        $createdAt = now();
+        $rawDate = $request->input('date') ?? $request->input('created_at');
+        if ($rawDate) {
+            try {
+                $createdAt = \Carbon\Carbon::parse((string) $rawDate);
+            } catch (\Throwable $e) {
+                $createdAt = now();
+            }
         }
 
         $balanceBefore = (float) $user->deposit_balance;
 
         $deposit = DepositTransaction::create([
             'user_id'         => $user->id,
-            'bank_account_id' => $this->resolveMasterRef(BankAccount::class, $request->bank_account_id, 'bank_account_id'),
+            'bank_account_id' => $bankAccountId,
             'type'            => 'deposit',
             'amount'          => (float) $request->amount,
-            'proof_url'       => $request->proof_url ?? '',
+            'proof_url'       => (string) ($request->proof_url ?? ''),
             'status'          => 'menunggu_verifikasi',
             'description'     => $request->description ?? 'Pengajuan deposit mitra',
             'balance_before'  => $balanceBefore,
             'balance_after'   => $balanceBefore,
-            'created_at'      => now(),
+            'created_at'      => $createdAt,
         ]);
 
         $this->logActivity('deposit.create', 'Deposit', "Mitra {$user->nama} mengajukan deposit Rp " . number_format($deposit->amount, 0, ',', '.'));
 
-        $owners = User::query()->where('level', 'owner')->pluck('id');
-        foreach ($owners as $ownerId) {
-            $this->notify($ownerId, 'Deposit baru menunggu verifikasi', "{$user->nama} mengajukan deposit Rp " . number_format($deposit->amount, 0, ',', '.'), 'deposit');
+        $verifiers = User::query()
+            ->whereIn('level', ['owner', 'finance'])
+            ->where('is_active', true)
+            ->pluck('id');
+        foreach ($verifiers as $verifierId) {
+            $this->notify($verifierId, 'Deposit baru menunggu verifikasi', "{$user->nama} mengajukan deposit Rp " . number_format($deposit->amount, 0, ',', '.'), 'deposit');
         }
 
         return response()->json([
@@ -3987,5 +4171,229 @@ class ManagementController extends Controller
             'is_read'    => false,
             'created_at' => now(),
         ]);
+    }
+
+    // =========================================================================
+    // 7. LAPORAN, REKAP PRODUKSI & EKSPOR DATA
+    // =========================================================================
+
+    public function reportSummary(Request $request): JsonResponse
+    {
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+
+        $orderQuery = Order::active();
+        $paymentQuery = Payment::query()->where('status', 'disetujui');
+
+        if ($startDate) {
+            $orderQuery->whereDate('created_at', '>=', $startDate);
+            $paymentQuery->whereDate('created_at', '>=', $startDate);
+        }
+        if ($endDate) {
+            $orderQuery->whereDate('created_at', '<=', $endDate);
+            $paymentQuery->whereDate('created_at', '<=', $endDate);
+        }
+
+        $totalOrders = (clone $orderQuery)->count();
+        $totalOmzet = (float) (clone $orderQuery)->where('status', '!=', 'batal')->where('status', '!=', 'Dibatalkan')->sum('total_amount');
+        $totalPaid = (float) (clone $paymentQuery)->sum('amount');
+        $totalOutstanding = max(0, $totalOmzet - $totalPaid);
+
+        $statusCounts = (clone $orderQuery)
+            ->select('status', DB::raw('count(*) as count'))
+            ->groupBy('status')
+            ->pluck('count', 'status')
+            ->toArray();
+
+        $brandRekap = OrderItem::query()
+            ->join('orders', 'order_items.order_id', '=', 'orders.id')
+            ->join('product_variants', 'order_items.product_variant_id', '=', 'product_variants.id')
+            ->join('products', 'product_variants.product_id', '=', 'products.id')
+            ->leftJoin('brands', 'products.brand_id', '=', 'brands.id')
+            ->whereNull('orders.deleted_at')
+            ->where('orders.status', '!=', 'batal')
+            ->where('orders.status', '!=', 'Dibatalkan')
+            ->when($startDate, fn ($q) => $q->whereDate('orders.created_at', '>=', $startDate))
+            ->when($endDate, fn ($q) => $q->whereDate('orders.created_at', '<=', $endDate))
+            ->select(
+                DB::raw('COALESCE(brands.name, "Tanpa Brand") as brand_name'),
+                DB::raw('COUNT(DISTINCT orders.id) as total_orders'),
+                DB::raw('SUM(order_items.quantity) as total_qty'),
+                DB::raw('SUM(order_items.subtotal) as total_omzet')
+            )
+            ->groupBy('brand_name')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Ringkasan laporan penjualan berhasil dimuat.',
+            'data'    => [
+                'total_orders'      => $totalOrders,
+                'total_omzet'       => $totalOmzet,
+                'total_paid'        => $totalPaid,
+                'total_outstanding' => $totalOutstanding,
+                'status_breakdown'  => $statusCounts,
+                'brand_breakdown'   => $brandRekap,
+            ],
+        ]);
+    }
+
+    public function reportProduction(Request $request): JsonResponse
+    {
+        $batchId = $request->input('batch_id');
+
+        $batches = PoBatch::query()
+            ->when($batchId, fn ($q) => $q->where('id', $batchId))
+            ->with(['products.variants'])
+            ->orderByDesc('id')
+            ->get();
+
+        $data = $batches->map(function ($batch) {
+            $productIds = $batch->products->pluck('id')->toArray();
+
+            $variantSummary = OrderItem::query()
+                ->join('orders', 'order_items.order_id', '=', 'orders.id')
+                ->join('product_variants', 'order_items.product_variant_id', '=', 'product_variants.id')
+                ->whereIn('product_variants.product_id', $productIds)
+                ->whereNull('orders.deleted_at')
+                ->where('orders.status', '!=', 'batal')
+                ->where('orders.status', '!=', 'Dibatalkan')
+                ->select(
+                    'product_variants.id as variant_id',
+                    'product_variants.product_id',
+                    'product_variants.sku',
+                    'product_variants.color',
+                    'product_variants.size',
+                    DB::raw('SUM(order_items.quantity) as total_ordered_qty')
+                )
+                ->groupBy('product_variants.id', 'product_variants.product_id', 'product_variants.sku', 'product_variants.color', 'product_variants.size')
+                ->get();
+
+            $orderProductionStatuses = Order::active()
+                ->whereHas('items.variant.product', fn ($q) => $q->where('po_batch_id', $batch->id))
+                ->select('production_status', DB::raw('count(*) as count'), DB::raw('SUM(total_amount) as total_amount'))
+                ->groupBy('production_status')
+                ->get();
+
+            return [
+                'batch_id'            => $batch->id,
+                'batch_name'          => $batch->name,
+                'start_date'          => $batch->start_date,
+                'end_date'            => $batch->end_date,
+                'estimated_delivery'  => $batch->estimated_delivery ?? $batch->target_date ?? null,
+                'total_products'      => $batch->products->count(),
+                'total_ordered_items' => (int) $variantSummary->sum('total_ordered_qty'),
+                'variant_summary'     => $variantSummary,
+                'production_statuses' => $orderProductionStatuses,
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Rekap produksi batch PO berhasil dimuat.',
+            'total'   => $data->count(),
+            'data'    => $data,
+        ]);
+    }
+
+    public function exportReport(Request $request)
+    {
+        $type = strtolower((string) $request->input('type', 'orders'));
+        $filename = 'export_' . $type . '_' . now()->format('Ymd_His') . '.csv';
+
+        $headers = [
+            'Content-Type'        => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
+        ];
+
+        $callback = function () use ($type) {
+            $handle = fopen('php://output', 'w');
+            fputs($handle, "\xEF\xBB\xBF");
+
+            if ($type === 'production') {
+                fputcsv($handle, ['No. Pesanan', 'Tanggal Pesan', 'Batch', 'Nama Produk', 'Warna', 'Ukuran', 'Qty', 'Status Produksi', 'Status Pesanan']);
+                $items = OrderItem::query()
+                    ->join('orders', 'order_items.order_id', '=', 'orders.id')
+                    ->join('product_variants', 'order_items.product_variant_id', '=', 'product_variants.id')
+                    ->join('products', 'product_variants.product_id', '=', 'products.id')
+                    ->leftJoin('po_batches', 'products.po_batch_id', '=', 'po_batches.id')
+                    ->whereNull('orders.deleted_at')
+                    ->select(
+                        'orders.order_number',
+                        'orders.created_at',
+                        'po_batches.name as batch_name',
+                        'products.name as product_name',
+                        'product_variants.color',
+                        'product_variants.size',
+                        'order_items.quantity',
+                        'orders.production_status',
+                        'orders.status as order_status'
+                    )
+                    ->orderBy('orders.id', 'desc')
+                    ->cursor();
+
+                foreach ($items as $row) {
+                    fputcsv($handle, [
+                        $row->order_number,
+                        $row->created_at ? \Carbon\Carbon::parse($row->created_at)->format('Y-m-d H:i') : '-',
+                        $row->batch_name ?? '-',
+                        $row->product_name ?? '-',
+                        $row->color ?? '-',
+                        $row->size ?? '-',
+                        $row->quantity,
+                        $row->production_status ?? '-',
+                        $row->order_status,
+                    ]);
+                }
+            } elseif ($type === 'finance' || $type === 'omzet') {
+                fputcsv($handle, ['No. Invoice', 'No. Pesanan', 'Nama Mitra', 'Total Tagihan', 'Sudah Dibayar', 'Sisa Tagihan', 'Status Tagihan', 'Tanggal']);
+                $invoices = Invoice::query()
+                    ->with(['order.user'])
+                    ->whereHas('order', fn ($q) => $q->whereNull('deleted_at'))
+                    ->orderBy('id', 'desc')
+                    ->cursor();
+
+                foreach ($invoices as $inv) {
+                    fputcsv($handle, [
+                        $inv->invoice_number,
+                        $inv->order?->order_number ?? '-',
+                        $inv->order?->user?->nama ?? $inv->order?->user?->name ?? 'Mitra',
+                        $inv->total_amount,
+                        $inv->paid_amount,
+                        $inv->outstanding_amount,
+                        $inv->status,
+                        $inv->created_at ? \Carbon\Carbon::parse($inv->created_at)->format('Y-m-d H:i') : '-',
+                    ]);
+                }
+            } else {
+                fputcsv($handle, ['No. Pesanan', 'Tanggal', 'Nama Mitra', 'Kota', 'Total Qty', 'Subtotal', 'Ongkir', 'Total Tagihan', 'Status Pesanan', 'Status Produksi']);
+                $orders = Order::active()
+                    ->with(['user', 'items'])
+                    ->orderBy('id', 'desc')
+                    ->cursor();
+
+                foreach ($orders as $ord) {
+                    fputcsv($handle, [
+                        $ord->order_number,
+                        $ord->created_at ? \Carbon\Carbon::parse($ord->created_at)->format('Y-m-d H:i') : '-',
+                        $ord->user?->nama ?? $ord->user?->name ?? '-',
+                        $ord->user?->city ?? '-',
+                        $ord->items->sum('quantity'),
+                        $ord->subtotal,
+                        $ord->shipping_cost,
+                        $ord->total_amount,
+                        $ord->status,
+                        $ord->production_status ?? '-',
+                    ]);
+                }
+            }
+
+            fclose($handle);
+        };
+
+        return response()->stream($callback, 200, $headers);
     }
 }

@@ -14,7 +14,13 @@ return new class extends Migration
     {
         // Ubah status pada order_status_histories menjadi VARCHAR(100) agar
         // dapat menampung seluruh alur status pesanan (Siap Kirim, Selesai, dsb).
-        DB::statement("ALTER TABLE `order_status_histories` MODIFY `status` VARCHAR(100) NOT NULL");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE `order_status_histories` MODIFY `status` VARCHAR(100) NOT NULL");
+        } elseif (Schema::hasTable('order_status_histories') && Schema::hasColumn('order_status_histories', 'status')) {
+            Schema::table('order_status_histories', function (Blueprint $table) {
+                $table->string('status', 100)->change();
+            });
+        }
     }
 
     /**
@@ -22,6 +28,8 @@ return new class extends Migration
      */
     public function down(): void
     {
-        DB::statement("ALTER TABLE `order_status_histories` MODIFY `status` ENUM('Open', 'Produksi', 'Pengisian Alamat', 'Menunggu Pengiriman', 'Update Resi', 'Terkirim') NOT NULL");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE `order_status_histories` MODIFY `status` ENUM('Open', 'Produksi', 'Pengisian Alamat', 'Menunggu Pengiriman', 'Update Resi', 'Terkirim') NOT NULL");
+        }
     }
 };

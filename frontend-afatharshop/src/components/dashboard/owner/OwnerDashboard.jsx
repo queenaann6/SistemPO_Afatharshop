@@ -161,16 +161,25 @@ export default function OwnerDashboard({
 
   useEffect(() => {
     let cancelled = false;
-    api.management
-      .activityLogs()
-      .then((res) => {
-        if (!cancelled && Array.isArray(res?.data) && res.data.length > 0) {
-          setRemoteAuditLogs(res.data);
-        }
-      })
-      .catch(() => {});
+    const loadLogs = () => {
+      api.management
+        .activityLogs()
+        .then((res) => {
+          if (!cancelled && Array.isArray(res?.data)) {
+            setRemoteAuditLogs(res.data);
+          }
+        })
+        .catch(() => {});
+    };
+    loadLogs();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') loadLogs();
+    }, 30000);
+    window.addEventListener('focus', loadLogs);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', loadLogs);
     };
   }, []);
 
@@ -609,7 +618,13 @@ export default function OwnerDashboard({
         group: 'kinerja',
         label: 'Tim & Kinerja',
         children: [
-          { id: 'tim', label: 'Tim & Akses', title: 'Manajemen Tim & Hak Akses', icon: 'users' },
+          {
+            id: 'tim',
+            label: 'Tim & Akses',
+            title: 'Manajemen Tim & Hak Akses',
+            icon: 'users',
+            badge: mitra.filter((m) => !m.active).length || null
+          },
           { id: 'kinerja', label: 'Kinerja Tim', title: 'Kinerja Tim Admin', icon: 'spark' }
         ]
       },
@@ -807,6 +822,18 @@ export default function OwnerDashboard({
         toast(`Akun ${u.name} berhasil dihapus.`, 'warning');
       }
     });
+  };
+
+  const toggleMitra = async (m) => {
+    const targetId = dbId(m);
+    if (!targetId) return notOnServer(`Mitra ${m.name}`);
+    try {
+      await api.management.updateUser(targetId, { is_active: !m.active });
+    } catch (err) {
+      return serverFail(err, `Mengubah status mitra ${m.name}`);
+    }
+    commitMitra((prev) => prev.map((x) => (x.id === m.id ? { ...x, active: !x.active } : x)));
+    toast(`${m.name} ${m.active ? 'dinonaktifkan' : 'di-ACC dan diaktifkan'}.`);
   };
 
   const deleteMitra = (m) => {
@@ -1223,6 +1250,7 @@ export default function OwnerDashboard({
             setTeamModal={setTeamModal}
             toggleTeam={toggleTeam}
             deleteTeam={deleteTeam}
+            toggleMitra={toggleMitra}
             deleteMitra={deleteMitra}
             mitraSearch={mitraSearch}
             setMitraSearch={setMitraSearch}

@@ -266,17 +266,6 @@ export default function ProductDetailPage({
                 ))}
               </div>
 
-              {/* Download Catalog PDF Button */}
-              <button
-                onClick={() =>
-                  alert('Mempersiapkan materi promosi HD dan panduan PO untuk mitra...')
-                }
-                className="w-full py-2.5 px-4 rounded-xl bg-[#2D1B36] hover:bg-[#3E244B] text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
-              >
-                <span>☁</span>
-                <span>Download Gambar Katalog & Panduan PO</span>
-              </button>
-
               {/* Store Profile Card */}
               <div className="bg-stone-50 border border-stone-200 rounded-xl p-3.5 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">

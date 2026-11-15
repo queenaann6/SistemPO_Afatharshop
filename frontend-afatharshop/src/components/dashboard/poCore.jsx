@@ -10,6 +10,12 @@ import React, {
 } from 'react';
 import Footer from '../Footer';
 import { DEFAULT_DP_PCT, stageRowsOf, defaultStagePcts, stageLabelFor } from '../../utils/terminScheme';
+import {
+  extractOrderShippingLabels,
+  formatAllShippingLabelsText,
+  formatShippingLabelText,
+  openShippingLabelsPrintTab
+} from '../../utils/printShippingLabel';
 
 /* ============================================================================
    PO CORE — model status, helper, komponen UI, shell & data demo
@@ -258,12 +264,55 @@ export const escapeHtml = (v) =>
     .replace(/"/g, '&quot;');
 
 export const copyText = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
+  const str = String(text ?? '');
+  if (!str) return false;
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(str);
+      return true;
+    } catch {
+      // Lanjut ke fallback textarea + execCommand di bawah
+    }
   }
+
+  if (typeof document !== 'undefined') {
+    let textarea = null;
+    try {
+      const prevActive = document.activeElement;
+      textarea = document.createElement('textarea');
+      textarea.value = str;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.top = '0';
+      textarea.style.left = '-9999px';
+      textarea.style.width = '2em';
+      textarea.style.height = '2em';
+      textarea.style.opacity = '0';
+      textarea.style.fontSize = '16px';
+      document.body.appendChild(textarea);
+      textarea.focus({ preventScroll: true });
+      textarea.select();
+      textarea.setSelectionRange(0, str.length);
+      const copied = document.execCommand('copy');
+      if (prevActive && typeof prevActive.focus === 'function') {
+        try {
+          prevActive.focus({ preventScroll: true });
+        } catch {
+          // ignore
+        }
+      }
+      if (copied) return true;
+    } catch {
+      // ignore fallback error
+    } finally {
+      if (textarea && textarea.parentNode) {
+        textarea.parentNode.removeChild(textarea);
+      }
+    }
+  }
+
+  return false;
 };
 
 export const waLink = (phone, text) =>
@@ -393,17 +442,27 @@ export const orderPatchToServer = (patch = {}) => {
   };
 
   put('status', patch.status);
+  put('marketing_status', patch.marketingStatus);
+  put('marketing_by', patch.marketingBy);
+  put('marketing_at', patch.marketingAt);
+  if (patch.marketingNote !== undefined) body.marketing_note = patch.marketingNote ?? '';
   put('production_status', patch.productionStatus);
+  put('ready_at', patch.readyAt);
   put('courier_name', patch.ekspedisi ?? patch.courier_name);
   put('tracking_number', patch.resi ?? patch.tracking_number);
   put('shipping_cost', patch.ongkir);
-  put('notes', patch.notes ?? patch.note);
+  put('weight_kg', patch.weight !== undefined && patch.weight !== '' ? parseFloat(String(patch.weight).replace(/[^\d.]/g, '')) || 0 : undefined);
+  if (patch.shippingNote !== undefined) body.shipping_note = patch.shippingNote ?? '';
+  put('ongkir_at', patch.ongkirAt);
+  put('shipped_at', patch.shippedAt);
+  put('received_at', patch.receivedAt);
+  if (patch.notes !== undefined) body.notes = patch.notes ?? '';
   put('dpStatus', patch.dpStatus);
   put('pelunasanStatus', patch.pelunasanStatus);
   put('ongkirStatus', patch.ongkirStatus);
   put('addressConfirmed', patch.addressConfirmed);
   put('addressSubmitted', patch.addressSubmitted);
-  put('note', patch.note || patch.rejectionNote || patch.dpNote || patch.pelunasanNote);
+  put('note', patch.note || patch.rejectionNote || patch.dpNote || patch.pelunasanNote || patch.marketingNote);
 
   return body;
 };
@@ -1999,22 +2058,27 @@ function PaymentPlanCard({ order }) {
 }
 
 export function OrderDrawer({ order, onClose, actions, onProof, printInvoice }) {
+  const [copiedKey, setCopiedKey] = useState('');
+  const [manualCopyText, setManualCopyText] = useState('');
   if (!order) return null;
   const next = nextAction(order);
   const st = stageMeta(orderStage(order));
 
   const orderItems = order._projectMeta?.items || [];
   const splitGroups = splitAddressGroups(order);
-  const mainRemainder = orderItems
-    .map((item) => {
-      const allocated = (item.splits || []).reduce(
-        (sum, sp) => sum + (Number(sp.qty) || 0),
-        0
-      );
-      const qty = Math.max(0, (Number(item.qty) || 1) - allocated);
-      return qty > 0 ? { item, qty } : null;
-    })
-    .filter(Boolean);
+  const shippingLabels = extractOrderShippingLabels(order);
+  const hasAnyAddress = hasAddress(order) || splitGroups.length > 0;
+
+  const handleCopyLabel = async (key, text) => {
+    const ok = await copyText(text);
+    if (ok) {
+      setManualCopyText('');
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((prev) => (prev === key ? '' : prev)), 2000);
+    } else {
+      setManualCopyText(text);
+    }
+  };
 
   return (
     <Drawer
@@ -2029,6 +2093,24 @@ export function OrderDrawer({ order, onClose, actions, onProof, printInvoice }) 
       width="max-w-2xl"
       footer={
         <>
+          {hasAnyAddress && (
+            <>
+              <Button
+                variant="outline"
+                icon={copiedKey === 'all' ? 'check' : 'copy'}
+                onClick={() => handleCopyLabel('all', formatAllShippingLabelsText(order))}
+              >
+                {copiedKey === 'all' ? 'Alamat Tersalin' : shippingLabels.length > 1 ? `Salin Semua Alamat (${shippingLabels.length})` : 'Salin Alamat'}
+              </Button>
+              <Button
+                variant="outline"
+                icon="print"
+                onClick={() => openShippingLabelsPrintTab(order)}
+              >
+                Cetak Label
+              </Button>
+            </>
+          )}
           {printInvoice && (
             <Button variant="outline" icon="print" onClick={() => printInvoice(order)}>
               Cetak Invoice
@@ -2109,11 +2191,20 @@ export function OrderDrawer({ order, onClose, actions, onProof, printInvoice }) 
 
       <div className="grid sm:grid-cols-2 gap-3">
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1.5">Alamat Pengiriman</p>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1.5">Alamat Pengiriman Utama</p>
           {hasAddress(order) ? (
             <>
-              <p className="text-xs font-semibold text-gray-900">{order.address.recipient}</p>
-              <p className="text-[11px] text-gray-600 leading-relaxed mt-0.5">{addressText(order)}</p>
+              <p className="text-xs font-semibold text-gray-900">
+                {order.addressObject?.recipient || order.address?.recipient || order.mitraName}
+              </p>
+              {(order.addressObject?.phone || order.address?.phone || order.phone) && (
+                <p className="text-[11px] font-medium text-gray-700 mt-0.5">
+                  HP: {order.addressObject?.phone || order.address?.phone || order.phone}
+                </p>
+              )}
+              <p className="text-[11px] text-gray-600 leading-relaxed mt-0.5">
+                {order.addressObject?.address || addressText(order)}
+              </p>
             </>
           ) : (
             <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
@@ -2144,97 +2235,128 @@ export function OrderDrawer({ order, onClose, actions, onProof, printInvoice }) 
         </div>
       </div>
 
-      {splitGroups.length > 0 && (
+      {hasAnyAddress && shippingLabels.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
-              Pengiriman per Alamat
-            </p>
-            <span className="text-[10px] text-gray-400">
-              {splitGroups.length} alamat tambahan
-            </span>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
+                Label Alamat & Pengiriman ({shippingLabels.length} alamat)
+              </p>
+              <p className="text-[10px] text-gray-400">
+                Format siap salin & cetak untuk packing (Penerima, HP, Alamat, Pengirim, Orderan)
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                size="xs"
+                variant="outline"
+                icon={copiedKey === 'all-card' ? 'check' : 'copy'}
+                onClick={() => handleCopyLabel('all-card', formatAllShippingLabelsText(order))}
+              >
+                {copiedKey === 'all-card' ? 'Tersalin' : shippingLabels.length > 1 ? 'Salin Semua' : 'Salin'}
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                icon="print"
+                onClick={() => openShippingLabelsPrintTab(order)}
+              >
+                Cetak Label
+              </Button>
+            </div>
           </div>
 
-          {mainRemainder.length > 0 && (
-            <div className="rounded-lg border border-gray-200 bg-gray-50 p-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-[11px] font-bold text-gray-800">
-                  Alamat Utama — {order.address?.recipient || order.mitraName}
-                </p>
-                <span className="text-[10px] font-semibold text-gray-500">
-                  Ekspedisi: {order.ekspedisi || '—'}
-                </span>
-              </div>
-              <div className="mt-1 space-y-0.5">
-                {mainRemainder.map(({ item, qty }) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between gap-2 text-[10px]"
-                  >
-                    <span className="text-gray-600">
-                      {item.title} — {item.variant}
+          <div className="space-y-2.5">
+            {shippingLabels.map((label) => (
+              <div
+                key={label.key}
+                className="rounded-lg border border-gray-200 bg-gray-50/60 p-3 space-y-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200/80 pb-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] font-bold text-gray-900">{label.labelTitle}</span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-700">
+                      {label.courier || '—'}
                     </span>
-                    <span className="font-bold text-gray-800">{qty}x</span>
                   </div>
-                ))}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyLabel(label.key, formatShippingLabelText(label))}
+                      className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 cursor-pointer"
+                    >
+                      <Icon name={copiedKey === label.key ? 'check' : 'copy'} className="w-3 h-3" />
+                      {copiedKey === label.key ? 'Tersalin' : 'Salin'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openShippingLabelsPrintTab(order, label.key)}
+                      className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 cursor-pointer"
+                    >
+                      <Icon name="print" className="w-3 h-3" />
+                      Cetak
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-2.5 text-[11px]">
+                  <div className="space-y-0.5">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Penerima</p>
+                    <p className="font-bold text-gray-900">{label.recipientName}</p>
+                    <p className="text-gray-700 font-medium">HP: {label.recipientPhone}</p>
+                    <p className="text-gray-600 leading-relaxed">{label.recipientAddress}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">Pengirim</p>
+                    <p className="font-bold text-gray-900">{label.senderName}</p>
+                    <p className="text-gray-700 font-medium">HP: {label.senderPhone}</p>
+                    {label.senderNotes && (
+                      <p className="text-amber-700 text-[10px] mt-0.5">Catatan: {label.senderNotes}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="border-t border-gray-200/80 pt-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400 mb-1">Orderan</p>
+                  <div className="space-y-0.5">
+                    {label.items.map((it, i) => (
+                      <div key={i} className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="text-gray-700">
+                          {it.title}
+                          {it.variant ? ` (${it.variant})` : ''}
+                        </span>
+                        <span className="font-bold text-gray-900 shrink-0">{it.qty} pcs</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
+            ))}
+          </div>
+
+          {manualCopyText && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-bold text-amber-900">
+                  Browser membatasi salin otomatis — silakan blok & tekan Ctrl+C:
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setManualCopyText('')}
+                  className="text-[10px] font-bold text-amber-800 hover:underline cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
+              <textarea
+                readOnly
+                value={manualCopyText}
+                rows={6}
+                onFocus={(e) => e.target.select()}
+                className="w-full rounded border border-amber-300 bg-white p-2 text-[11px] font-mono text-gray-800"
+              />
             </div>
           )}
-
-          {splitGroups.map((group, idx) => {
-            const dropship = group.rows.find(
-              (row) => row.split.senderName || row.split.senderPhone
-            );
-            return (
-              <div
-                key={String(group.address?.id ?? idx)}
-                className="rounded-lg border border-gray-200 p-2.5 space-y-1.5"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[11px] font-bold text-gray-800">
-                    {group.address?.recipient || group.address?.name || 'Penerima'}
-                  </p>
-                  <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
-                      group.courier?.name
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-amber-50 text-amber-700 border-amber-200'
-                    }`}
-                  >
-                    {group.courier?.name || 'Belum ada jasa kirim'}
-                  </span>
-                </div>
-                <p className="text-[10px] text-gray-500 leading-relaxed">
-                  {group.address?.address}
-                </p>
-                {group.address?.phone && (
-                  <p className="text-[10px] text-gray-500">{group.address.phone}</p>
-                )}
-                <div className="mt-1 space-y-0.5">
-                  {group.rows.map(({ item, split }) => (
-                    <div
-                      key={split.id}
-                      className="flex items-center justify-between gap-2 text-[10px]"
-                    >
-                      <span className="text-gray-600">
-                        {item.title} — {item.variant}
-                      </span>
-                      <span className="font-bold text-gray-800">
-                        {split.qty}x{split.weight ? ` · ${split.weight} g` : ''}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                {dropship && (
-                  <p className="text-[10px] text-amber-700">
-                    Dropship: {dropship.split.senderName || '—'}
-                    {dropship.split.senderPhone ? ` (${dropship.split.senderPhone})` : ''}
-                    {dropship.split.senderNotes ? ` — "${dropship.split.senderNotes}"` : ''}
-                  </p>
-                )}
-              </div>
-            );
-          })}
         </div>
       )}
 
@@ -2296,6 +2418,7 @@ export function DashboardShell({
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [readNotifIds, setReadNotifIds] = useState([]);
   const [openGroups, setOpenGroups] = useState(() => {
     const o = {};
     menus.forEach((m) => {
@@ -2305,7 +2428,12 @@ export function DashboardShell({
   });
 
   const activeItem = findMenuItem(menus, activeMenu);
-  const notifCount = notifications.filter((n) => n.unread !== false).length;
+  const readSet = useMemo(() => new Set(readNotifIds), [readNotifIds]);
+  const notifCount = notifications.filter((n) => n.unread !== false && !readSet.has(n.id)).length;
+  const markNotifRead = (id) =>
+    setReadNotifIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  const markAllNotifRead = () =>
+    setReadNotifIds((prev) => [...new Set([...prev, ...notifications.map((n) => n.id)])]);
 
   const sideBg = darkSidebar ? 'bg-[#111827] border-gray-800' : 'bg-white border-gray-200';
   const sideText = darkSidebar ? 'text-gray-300' : 'text-gray-700';
@@ -2526,11 +2654,12 @@ export function DashboardShell({
                 <button
                   type="button"
                   onClick={() => setNotifOpen(!notifOpen)}
-                  className="relative w-9 h-9 rounded-lg bg-white border border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-50"
+                  className="relative w-9 h-9 rounded-lg bg-white border border-gray-200 flex items-center justify-center text-gray-600 hover:bg-gray-50 cursor-pointer"
+                  title="Pemberitahuan & Notifikasi"
                 >
                   <Icon name="bell" className="w-4 h-4" />
                   {notifCount > 0 && (
-                    <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-rose-600 text-white rounded-full text-[9px] font-bold flex items-center justify-center">
+                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-rose-600 text-white rounded-full text-[10px] font-bold flex items-center justify-center">
                       {notifCount}
                     </span>
                   )}
@@ -2538,32 +2667,124 @@ export function DashboardShell({
                 {notifOpen && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setNotifOpen(false)} />
-                    <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden">
-                      <div className="px-3.5 py-2.5 border-b border-gray-100 flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-gray-800">Pemberitahuan</span>
-                        <span className="text-[9px] font-semibold text-gray-400 uppercase">{notifCount} baru</span>
+                    <div className="fixed inset-x-3 top-[132px] sm:inset-x-auto sm:absolute sm:right-0 sm:top-auto sm:mt-2 w-auto sm:w-[360px] md:w-[380px] max-w-[calc(100vw-1.5rem)] bg-white rounded-2xl shadow-2xl border border-gray-200 z-50 overflow-hidden">
+                      <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 bg-gray-900 text-white flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Icon name="bell" className="w-4 h-4 text-amber-300" />
+                          <span className="text-xs sm:text-[13px] font-bold">Pemberitahuan</span>
+                        </div>
+                        <span className="text-[10px] sm:text-[11px] font-semibold bg-white/15 px-2.5 py-0.5 rounded-full">
+                          {notifCount > 0 ? `${notifCount} Baru` : 'Semua dibaca'}
+                        </span>
                       </div>
-                      <div className="max-h-72 overflow-y-auto divide-y divide-gray-50">
+                      <div className="max-h-[55vh] sm:max-h-[360px] overflow-y-auto divide-y divide-gray-100">
                         {notifications.length === 0 && (
-                          <p className="px-4 py-8 text-center text-[11px] text-gray-400">Tidak ada pemberitahuan.</p>
+                          <div className="px-4 py-8 text-center space-y-1">
+                            <p className="text-xs font-semibold text-gray-500">Tidak ada pemberitahuan</p>
+                            <p className="text-[11px] text-gray-400">Semua aktivitas dan antrean sudah terkendali.</p>
+                          </div>
                         )}
-                        {notifications.map((n) => (
+                        {notifications.map((n) => {
+                          const isRead = n.unread === false || readSet.has(n.id);
+                          const isRejected =
+                            n.tone === 'red' ||
+                            String(n.title || '').toLowerCase().includes('ditolak') ||
+                            String(n.sub || '').toLowerCase().includes('ditolak');
+                          return (
+                            <div
+                              key={n.id}
+                              onClick={() => markNotifRead(n.id)}
+                              className={`px-3.5 py-3 sm:px-4 flex items-start gap-2.5 sm:gap-3 transition cursor-pointer ${
+                                isRead ? 'bg-white hover:bg-gray-50' : 'bg-amber-50/40 hover:bg-amber-50/70'
+                              }`}
+                            >
+                              <span
+                                className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                                  isRead
+                                    ? 'bg-gray-300'
+                                    : n.tone === 'red'
+                                    ? 'bg-rose-500'
+                                    : n.tone === 'amber'
+                                    ? 'bg-amber-500'
+                                    : n.tone === 'blue'
+                                    ? 'bg-sky-500'
+                                    : 'bg-emerald-500'
+                                }`}
+                              />
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="flex items-start justify-between gap-2">
+                                  <span
+                                    className={`block text-xs sm:text-[13px] leading-snug ${
+                                      isRead ? 'font-semibold text-gray-600' : 'font-bold text-gray-900'
+                                    }`}
+                                  >
+                                    {n.title}
+                                  </span>
+                                  {!isRead && (
+                                    <span className="text-[9px] font-bold uppercase text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded-full shrink-0">
+                                      Baru
+                                    </span>
+                                  )}
+                                </div>
+                                {n.sub && (
+                                  <span className="block text-[11px] sm:text-xs text-gray-600 leading-relaxed">{n.sub}</span>
+                                )}
+                                <div className="flex items-center justify-end gap-1.5 pt-0.5">
+                                  {isRead ? (
+                                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                      ✓ Dibaca
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        markNotifRead(n.id);
+                                      }}
+                                      className="text-[10px] font-bold text-white bg-gray-900 hover:bg-gray-800 px-2 py-0.5 rounded cursor-pointer transition"
+                                    >
+                                      Baca
+                                    </button>
+                                  )}
+                                  {n.onClick && !isRejected && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        markNotifRead(n.id);
+                                        n.onClick();
+                                        setNotifOpen(false);
+                                      }}
+                                      className="text-[10px] sm:text-[11px] font-bold text-sky-700 hover:underline px-1.5 py-0.5 rounded hover:bg-sky-50 cursor-pointer transition"
+                                    >
+                                      Lihat &rsaquo;
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="px-3.5 py-2.5 sm:px-4 sm:py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between gap-2">
+                        {notifCount > 0 ? (
                           <button
-                            key={n.id}
                             type="button"
-                            onClick={() => {
-                              if (n.onClick) n.onClick();
-                              setNotifOpen(false);
-                            }}
-                            className="w-full text-left px-3.5 py-2.5 hover:bg-gray-50 flex gap-2.5"
+                            onClick={markAllNotifRead}
+                            className="text-[11px] sm:text-xs font-bold text-gray-800 hover:underline cursor-pointer"
                           >
-                            <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${n.tone === 'red' ? 'bg-rose-500' : n.tone === 'amber' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-                            <span className="min-w-0">
-                              <span className="block text-[11px] font-semibold text-gray-800 leading-snug">{n.title}</span>
-                              {n.sub && <span className="block text-[10px] text-gray-500 mt-0.5">{n.sub}</span>}
-                            </span>
+                            Tandai semua dibaca
                           </button>
-                        ))}
+                        ) : (
+                          <span className="text-[11px] text-gray-400">Semua terbaca</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setNotifOpen(false)}
+                          className="text-[11px] sm:text-xs font-semibold text-gray-600 hover:text-gray-900 cursor-pointer"
+                        >
+                          Tutup
+                        </button>
                       </div>
                     </div>
                   </>

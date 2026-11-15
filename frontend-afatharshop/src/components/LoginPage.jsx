@@ -135,7 +135,7 @@ export default function LoginPage({
                 setValidationError('');
               }}
               className="w-full text-xs px-3.5 py-3 rounded-lg bg-[#EEF4FF] border border-blue-100 text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-1 focus:ring-blue-300 transition"
-              placeholder="Misal: 08123456789, atau nama@email.com"
+              placeholder="Misal : mail@afatharshop.com"
             />
             <p className="text-[10px] text-stone-400 pt-0.5">
               Masukkan email terdaftar Anda

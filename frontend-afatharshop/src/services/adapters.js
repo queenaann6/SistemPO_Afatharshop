@@ -452,9 +452,9 @@ const resolveProjectStatus = (rawStatus, { paid, invoiceLunas, dpStage, isReady,
 
   if (/batal|tolak/.test(text)) return 'Batal';
   if (/menunggu\s*acc/.test(text)) return 'Menunggu ACC Admin';
-  if (invoiceLunas || (/lunas/.test(text) && !text.includes('belum') && !text.includes('pelunasan'))) return 'Lunas (Siap Kirim)';
   if (/selesai/.test(text)) return 'Selesai';
   if (/dikirim|terkirim/.test(text)) return 'Dikirim';
+  if (/siap\s*kirim/.test(text) || invoiceLunas || (/lunas/.test(text) && !text.includes('belum') && !text.includes('pelunasan'))) return 'Lunas (Siap Kirim)';
   if (/pelunasan/.test(text)) return 'Menunggu Pelunasan + Ongkir';
   if (/ongkir/.test(text)) return 'Menunggu Input Ongkir';
   if (/alamat/.test(text) || text.includes('ready') || isReady) return 'Menunggu Alamat Mitra';
@@ -498,23 +498,18 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
 
   const stageStatus = (row) => {
     if (!row) return PAY_STATUS.none;
+    const byInstallment = normalizePaymentStatus(row.status);
+    if (byInstallment === 'ACC' || toNumber(row.paid_amount) > 0) return 'ACC';
+
     const related = payments.filter(
       (payment) => Number(payment.installment_id) === Number(row.id)
     );
-    if (related.some((payment) => normalizePaymentStatus(payment.status) === 'Ditolak')) {
-      return 'Ditolak';
+    const lastPay = related[related.length - 1] || null;
+    if (lastPay) {
+      const lastStatus = normalizePaymentStatus(lastPay.status);
+      if (lastStatus !== 'Belum') return lastStatus;
     }
-    const byInstallment = normalizePaymentStatus(row.status);
-    if (byInstallment !== 'Belum') return byInstallment;
-    if (toNumber(row.paid_amount) > 0) return 'ACC';
-    if (
-      related.some(
-        (payment) => normalizePaymentStatus(payment.status) === 'Menunggu Verifikasi'
-      )
-    ) {
-      return 'Menunggu Verifikasi';
-    }
-    return 'Belum';
+    return byInstallment;
   };
 
   // Bukti bayar tersimpan di baris payments; unggahan tahap ongkir tidak punya
@@ -553,12 +548,20 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     ? Boolean(order.atur_sebelum_kirim)
     : (!shipping || shipping === 0 || String(order.courier_name || '').toLowerCase().includes('sebelum'));
   const hasOngkir = !aturSebelumKirim && shipping > 0;
+  const statusLower = String(order.status || '').toLowerCase();
   const isAddressSubmitted = Boolean(
     order.address_id &&
       (hasOngkir ||
-        String(order.status || '').toLowerCase().includes('ongkir') ||
-        String(order.status || '').toLowerCase().includes('pelunasan') ||
-        String(order.status || '').toLowerCase().includes('siap'))
+        order.ongkir_at ||
+        order.shipped_at ||
+        order.received_at ||
+        order.tracking_number ||
+        statusLower.includes('ongkir') ||
+        statusLower.includes('pelunasan') ||
+        statusLower.includes('siap') ||
+        statusLower.includes('dikirim') ||
+        statusLower.includes('terkirim') ||
+        statusLower.includes('selesai'))
   );
 
   const status = resolveProjectStatus(order.status, {
@@ -602,12 +605,29 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
 
   const mappedItems = items.map((item, index) => {
     const qty = toNumber(item.quantity, 1);
-    const gross = toNumber(item.subtotal, toNumber(item.unit_price) * qty);
+    const unitPrice = toNumber(item.unit_price);
     const fee = toNumber(item.fee);
     // Baris tua tidak punya kolom diskon/addon: fee negatif = potongan,
     // fee positif = biaya tambahan.
     const discountNominal = toNumber(item.discount_nominal) || Math.max(0, -fee);
     const addonNominal = toNumber(item.addon_nominal) || Math.max(0, fee);
+    const netSubtotal = Math.max(
+      0,
+      Math.round(
+        item.net_subtotal !== undefined && item.net_subtotal !== null
+          ? toNumber(item.net_subtotal)
+          : toNumber(item.subtotal, unitPrice * qty - discountNominal + addonNominal)
+      )
+    );
+    const isLegacyNetUnitPrice =
+      discountNominal > 0 &&
+      Math.abs(unitPrice * qty + addonNominal - netSubtotal) <= 2 &&
+      Math.abs(unitPrice * qty - discountNominal + addonNominal - netSubtotal) > 2;
+    const effectiveGrossPrice =
+      isLegacyNetUnitPrice && qty > 0
+        ? Math.round((unitPrice * qty + discountNominal) / qty)
+        : unitPrice;
+    const gross = effectiveGrossPrice * qty;
     return {
       id: item.id ?? index + 1,
       variantId: item.variant?.id ?? item.product_variant_id ?? null,
@@ -622,18 +642,14 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
       color: item.variant?.color || '',
       model: item.variant?.model || '',
       size: item.variant?.size || '',
-      price: toNumber(item.unit_price),
+      price: effectiveGrossPrice,
       qty,
       fee,
       discountNominal,
       discountPct: gross > 0 ? Math.round((discountNominal / gross) * 100) : 0,
       addon: qty > 0 ? Math.round(addonNominal / qty) : 0,
       addonNominal,
-      // Nilai bersih yang ditagih untuk baris ini: gross - diskon + addon.
-      subtotal: Math.max(
-        0,
-        Math.round(toNumber(item.net_subtotal) || gross - discountNominal + addonNominal)
-      ),
+      subtotal: netSubtotal,
       image: mediaUrl(item.variant?.product?.image || product.image) || FALLBACK_IMAGE
     };
   });
@@ -651,7 +667,7 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     invoiceNumber: order.invoice?.invoice_number || '',
     dbStatus: order.status || '',
     productionStatus: order.production_status || (isReady ? 'Ready' : (paid > 0 || stageStatus(dpRow) === 'ACC') ? 'Produksi' : 'Antrian'),
-    readyAt: isReady ? (order.updated_at || order.ordered_at) : '',
+    readyAt: order.ready_at || (isReady ? (order.updated_at || order.ordered_at) : ''),
     addressConfirmed: isAddressSubmitted,
     addressSubmitted: isAddressSubmitted,
     trackingNumber: order.tracking_number || '',
@@ -676,8 +692,19 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
         : orderRejected
           ? MARKETING_REJECTED
           : MARKETING_ACC),
+    marketingBy: order.marketing_by || '',
+    marketingAt: order.marketing_at || '',
+    marketingNote: order.marketing_note || '',
     subtotal,
     ongkir: aturSebelumKirim ? 0 : shipping,
+    weight: order.weight_kg !== null && order.weight_kg !== undefined ? toNumber(order.weight_kg) : '',
+    shippingNote: order.shipping_note || '',
+    ongkirAt: order.ongkir_at || '',
+    shippedAt: order.shipped_at || '',
+    receivedAt: order.received_at || '',
+    deletedAt: order.deleted_at || '',
+    deletedBy: order.deleted_by || '',
+    deleteReason: order.delete_reason || '',
     total,
     paidAmount: paid,
     dpStatus: orderRejected ? 'Ditolak' : stageStatus(dpRow),
@@ -689,23 +716,26 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     dpPaymentId: dpPayment?.id ?? null,
     pelunasanPaymentId: pelunasanPayment?.id ?? null,
     ongkirPaymentId: stagelessPayment?.id ?? null,
+    dpNote: dpPayment?.rejection_reason || dpPayment?.note || order.dpNote || '',
+    pelunasanNote: pelunasanPayment?.rejection_reason || pelunasanPayment?.note || order.pelunasanNote || '',
+    ongkirNote: stagelessPayment?.rejection_reason || stagelessPayment?.note || order.ongkirNote || '',
     isDpDeposit: isDpDep,
-    dpBank: isDpDep ? 'Deposit' : (order.dpBank || ''),
-    dpBankAccount: isDpDep ? 'Saldo Deposit' : (order.dpBankAccount || ''),
+    dpBank: isDpDep ? 'Deposit' : (dpPayment?.bank_name || order.dpBank || ''),
+    dpBankAccount: isDpDep ? 'Saldo Deposit' : (dpPayment?.account_number || order.dpBankAccount || ''),
     dpVerifiedAt: dpPayment?.verified_at || order.dpVerifiedAt,
     dpSubmittedAt: dpPayment?.uploaded_at || dpPayment?.created_at || order.dpSubmittedAt,
     dpPaidAt: dpDateVal,
     dpDate: dpDateVal,
     isPelunasanDeposit: isPelunasanDep,
-    pelunasanBank: isPelunasanDep ? 'Deposit' : (order.pelunasanBank || ''),
-    pelunasanBankAccount: isPelunasanDep ? 'Saldo Deposit' : (order.pelunasanBankAccount || ''),
+    pelunasanBank: isPelunasanDep ? 'Deposit' : (pelunasanPayment?.bank_name || order.pelunasanBank || ''),
+    pelunasanBankAccount: isPelunasanDep ? 'Saldo Deposit' : (pelunasanPayment?.account_number || order.pelunasanBankAccount || ''),
     pelunasanVerifiedAt: pelunasanPayment?.verified_at || order.pelunasanVerifiedAt,
     pelunasanSubmittedAt: pelunasanPayment?.uploaded_at || pelunasanPayment?.created_at || order.pelunasanSubmittedAt,
     pelunasanPaidAt: pelunasanDateVal,
     pelunasanDate: pelunasanDateVal,
     isOngkirDeposit: isOngkirDep,
-    ongkirBank: isOngkirDep ? 'Deposit' : (order.ongkirBank || ''),
-    ongkirBankAccount: isOngkirDep ? 'Saldo Deposit' : (order.ongkirBankAccount || ''),
+    ongkirBank: isOngkirDep ? 'Deposit' : (stagelessPayment?.bank_name || order.ongkirBank || ''),
+    ongkirBankAccount: isOngkirDep ? 'Saldo Deposit' : (stagelessPayment?.account_number || order.ongkirBankAccount || ''),
     ongkirVerifiedAt: stagelessPayment?.verified_at || order.ongkirVerifiedAt,
     ongkirSubmittedAt: stagelessPayment?.uploaded_at || stagelessPayment?.created_at || order.ongkirSubmittedAt,
     ongkirPaidAt: ongkirDateVal,
@@ -778,29 +808,43 @@ export const buildOrderPayload = (order, items = []) => {
   const itemPayload = (Array.isArray(items) ? items : []).map((item) => {
     const variantId = Number(item.variantId);
     const productId = Number(item.productId ?? item.product_id ?? item.backendId ?? item.id);
-    const fee = toNumber(item.feeNominal ?? item.fee);
-    const discountNominal = toNumber(item.discountNominal ?? fee);
-    const addonNominal = toNumber(item.addonTotal ?? item.addon);
+    const qty = Math.max(1, toNumber(item.qty, 1));
+    const feePerUnit = toNumber(item.feeNominal ?? 0);
+    const netPrice = toNumber(item.price);
+    const basePrice = toNumber(item.basePrice);
+    const discountNominal = toNumber(item.discountNominal, feePerUnit * qty);
+    const grossUnitPrice =
+      basePrice > 0 ? basePrice : (discountNominal > 0 ? netPrice + Math.round(discountNominal / qty) : netPrice);
+    const addonNominal = toNumber(item.addonTotal ?? (toNumber(item.addon) * qty));
+    const subtotalLine = Math.max(
+      0,
+      Math.round(
+        item.subtotal !== undefined && item.subtotal !== null
+          ? toNumber(item.subtotal)
+          : grossUnitPrice * qty - discountNominal + addonNominal
+      )
+    );
+    const addressId = Number(item.addressId ?? item.address_id);
     return {
       product_variant_id:
         Number.isInteger(variantId) && variantId > 0 ? variantId : null,
       product_id:
         Number.isInteger(productId) && productId > 0 ? productId : null,
-      quantity: Math.max(1, toNumber(item.qty, 1)),
-      unit_price: toNumber(item.price),
-      fee,
+      quantity: qty,
+      unit_price: grossUnitPrice,
+      fee: addonNominal - discountNominal,
       discount_nominal: discountNominal,
       addon_nominal: addonNominal,
+      subtotal: subtotalLine,
+      address_id: Number.isInteger(addressId) && addressId > 0 ? addressId : undefined,
+      splits: Array.isArray(item.splits) && item.splits.length ? item.splits : undefined,
       model: item.model || item.selectedModel || undefined,
       size: item.size || item.selectedSize || undefined,
       color: item.color || item.selectedColor || undefined
     };
   });
 
-  const itemsTotal = itemPayload.reduce(
-    (sum, item) => sum + (item.unit_price * item.quantity) + (item.addon_nominal || 0),
-    0
-  );
+  const itemsTotal = itemPayload.reduce((sum, item) => sum + (item.subtotal || 0), 0);
   const subtotal = itemsTotal || toNumber(order.total);
 
   const addressId = Number(order.addressId);
@@ -926,11 +970,11 @@ export const mapPaymentToLedger = (payment) => ({
   ref: payment.order_number || payment.invoice_number || '-',
   mitraName: payment.mitra_name || '',
   nominal: toNumber(payment.amount),
-  bank: '-',
+  bank: payment.bank_name || '-',
   by: payment.verified_by || '',
   status: normalizePaymentStatus(payment.status),
   proof: mediaUrl(payment.proof_url),
-  note: payment.rejection_reason || ''
+  note: payment.rejection_reason || payment.note || ''
 });
 
 const PREQ_LABEL = {
@@ -1037,7 +1081,17 @@ const NOTIF_TONE = {
   seed_catalog: 'amber',
   seed_finance: 'amber',
   seed_marketing: 'amber',
-  seed_shipment: 'blue'
+  seed_shipment: 'blue',
+  warning: 'red',
+  danger: 'red',
+  error: 'red',
+  rejected: 'red',
+  success: 'emerald',
+  order: 'emerald',
+  payment: 'blue',
+  info: 'blue',
+  deposit: 'amber',
+  finance: 'amber'
 };
 
 const NOTIF_TARGET = {
@@ -1047,15 +1101,28 @@ const NOTIF_TARGET = {
   seed_payment: 'tagihan'
 };
 
-export const mapNotificationToHeader = (notification) => ({
-  id: String(notification.id),
-  title: notification.title || 'Pemberitahuan',
-  sub: notification.message || '',
-  time: timeAgo(notification.created_at),
-  tone: NOTIF_TONE[notification.type] || 'emerald',
-  read: Boolean(notification.is_read),
-  target: NOTIF_TARGET[notification.type] || 'dashboard'
-});
+export const mapNotificationToHeader = (notification) => {
+  const title = notification.title || 'Pemberitahuan';
+  const sub = notification.message || '';
+  const type = String(notification.type || '').toLowerCase();
+  const isRejected =
+    type === 'warning' ||
+    type === 'danger' ||
+    type === 'error' ||
+    type === 'rejected' ||
+    title.toLowerCase().includes('ditolak') ||
+    sub.toLowerCase().includes('ditolak');
+  return {
+    id: String(notification.id),
+    title,
+    sub,
+    time: timeAgo(notification.created_at),
+    tone: isRejected ? 'red' : NOTIF_TONE[type] || 'emerald',
+    read: Boolean(notification.is_read),
+    isRejected,
+    target: isRejected ? '' : NOTIF_TARGET[type] || 'dashboard'
+  };
+};
 
 export const mapAddressToBook = (address) => {
   const parts = [

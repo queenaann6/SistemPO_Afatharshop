@@ -246,6 +246,9 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
         .filter((b) => b.active !== false && b.bank)
         .map((b) => ({
           id: String(b.backendId ?? b.id ?? ''),
+          bankName: b.bank,
+          accountNo: b.accountNo || '',
+          holder: b.holder || '',
           label: `${b.bank} — ${b.accountNo} (a.n ${b.holder})`
         })),
     [adminBankAccounts]
@@ -253,8 +256,9 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
 
   const userBalance = Number(String(currentUser?.balance || '').replace(/[^0-9]/g, '')) || 0;
   const fileInputRef = useRef(null);
-  const chosenBankLabel =
-    bankOptions.find((b) => b.label === payBank)?.label || bankOptions[0]?.label || '';
+  const chosenBankObj =
+    bankOptions.find((b) => b.label === payBank) || bankOptions[0] || null;
+  const chosenBankLabel = chosenBankObj?.label || '';
 
   const installmentIdForBill = (bill) => {
     if (bill?.installmentId !== undefined && bill?.installmentId !== null) {
@@ -358,8 +362,11 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
         billTitle: bill.title,
         amount: bill.amount,
         billType: bill.billType,
-        depositTransactionId: row?.data?.payment?.id ?? null,
-        depositBalance: row?.data?.deposit_balance ?? null
+        installmentId: installmentIdForBill(bill),
+        paymentId: row?.data?.payment?.id ?? row?.data?.id ?? null,
+        depositTransactionId: row?.data?.payment?.id ?? row?.data?.id ?? null,
+        depositBalance: row?.data?.deposit_balance ?? row?.deposit_balance ?? null,
+        serverOrder: row?.data?.order ?? row?.order ?? null
       });
 
       setPaySuccess(true);
@@ -397,30 +404,28 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
     setPayError('');
     try {
       let proofPath = '';
-      if (tokenStore.get()) {
-        try {
-          const uploaded = await api.management.uploadFile(payProofFile, 'proof');
-          proofPath = uploaded?.data?.path || '';
-        } catch (upErr) {
-          console.warn('Gagal upload berkas ke endpoint server, lanjut simpan lokal:', upErr);
-        }
-      }
-
       let payment = {};
-      if (proofPath && tokenStore.get()) {
-        try {
-          const row = await api.my.uploadPayment({
-            order_number: bill.orderNo,
-            invoice_number: bill.order?.invoiceNumber || '',
-            installment_id: installmentIdForBill(bill),
-            stage: bill.billType,
-            amount: bill.amount,
-            proof_url: proofPath
-          });
-          payment = row?.data || {};
-        } catch (payErr) {
-          console.warn('Gagal simpan pembayaran ke database backend:', payErr);
+      let payRowData = null;
+      if (tokenStore.get()) {
+        const uploaded = await api.uploadFile(payProofFile, 'proof');
+        proofPath = uploaded?.data?.path || '';
+        if (!proofPath) {
+          throw new Error('Upload bukti pembayaran tidak mengembalikan path berkas.');
         }
+
+        const row = await api.my.uploadPayment({
+          order_number: bill.orderNo,
+          invoice_number: bill.order?.invoiceNumber || '',
+          installment_id: installmentIdForBill(bill),
+          stage: bill.billType,
+          amount: bill.amount,
+          bank_name: chosenBankObj?.bankName || chosenBankLabel,
+          account_number: chosenBankObj?.accountNo || '',
+          note: bill.notes || 'Pembayaran Tagihan',
+          proof_url: proofPath
+        });
+        payRowData = row?.data || row || {};
+        payment = payRowData?.payment || payRowData || {};
       }
 
       const displayProof = proofPath ? mediaUrl(proofPath) : payProofPreview;
@@ -432,7 +437,7 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
                 ...b,
                 status: 'Menunggu Verifikasi Finance',
                 proof: displayProof,
-                bank: chosenBankLabel,
+                bank: chosenBankObj?.bankName || chosenBankLabel,
                 paidDate: todayDate
               }
             : b
@@ -441,15 +446,20 @@ export default function MitraBillsTab({ orders = [], currentUser, adminBankAccou
 
       onUploadPayment?.({
         id: payment.id ?? Date.now(),
+        paymentId: payment.id ?? null,
         orderNo: bill.orderNo,
         mitraName: currentUser?.name || 'Mitra',
         title: bill.title,
         nominal: bill.amount,
-        bank: chosenBankLabel,
+        bank: chosenBankObj?.bankName || chosenBankLabel,
+        bankAccount: chosenBankObj?.accountNo || '',
         note: bill.notes || 'Pembayaran Tagihan',
         image: displayProof,
         date: todayDate,
-        status: 'Menunggu Validasi'
+        status: 'Menunggu Validasi',
+        installmentId: installmentIdForBill(bill),
+        stage: bill.billType,
+        serverOrder: payRowData?.order ?? null
       });
 
       setPaySuccess(true);

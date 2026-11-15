@@ -37,6 +37,8 @@ Route::get('/login', fn () => response()->json([
 Route::prefix('auth')->group(function () {
     Route::post('login', [AuthController::class, 'login'])->middleware('throttle:20,1');
     Route::post('register', [AuthController::class, 'register'])->middleware('throttle:10,1');
+    Route::post('forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:30,1');
+    Route::post('reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:30,1');
 
     Route::middleware('auth:api')->group(function () {
         Route::get('me', [AuthController::class, 'me']);
@@ -72,16 +74,18 @@ Route::get('couriers', [CourierController::class, 'index']);
 Route::get('bank-accounts', [BankAccountController::class, 'index']);
 Route::get('batches', [ProductController::class, 'batches']);
 
-Route::get('levels', [LevelController::class, 'index']);
-Route::get('levels/{id}', [LevelController::class, 'show'])->whereNumber('id');
-
 /*
 |--------------------------------------------------------------------------
 | Transaksi & data mitra (wajib login)
 |--------------------------------------------------------------------------
 */
 Route::middleware('auth:api')->group(function () {
-    Route::post('uploads', [ManagementController::class, 'uploadFile']);
+    // Unggah bukti transfer & foto profil dengan batas kecepatan (throttle)
+    Route::post('uploads', [ManagementController::class, 'uploadFile'])->middleware('throttle:20,1');
+
+    // Daftar tingkat harga mitra (dilindungi agar struktur diskon tidak bocor ke publik)
+    Route::get('levels', [LevelController::class, 'index']);
+    Route::get('levels/{id}', [LevelController::class, 'show'])->whereNumber('id');
 
     Route::get('orders', [OrderController::class, 'index']);
     Route::post('orders', [OrderController::class, 'store'])->middleware('throttle:20,1');
@@ -90,6 +94,7 @@ Route::middleware('auth:api')->group(function () {
     Route::get('invoices/{id}', [OrderController::class, 'invoice']);
     Route::put('orders/{id}', [OrderController::class, 'update']);
     Route::patch('orders/{id}/address', [OrderController::class, 'updateAddress']);
+    Route::post('orders/{id}/cancel', [OrderController::class, 'cancelOrder']);
 
     // Keranjang belanja mitra terikat akun
     Route::get('cart', [CartController::class, 'index']);
@@ -113,6 +118,7 @@ Route::middleware('auth:api')->group(function () {
         Route::get('payments', [MitraDataController::class, 'payments']);
         Route::post('payments', [ManagementController::class, 'storePayment']);
         Route::post('payments/deposit', [ManagementController::class, 'payWithDeposit']);
+        Route::post('orders/{id}/cancel', [OrderController::class, 'cancelOrder']);
         Route::get('notifications', [MitraDataController::class, 'notifications']);
         Route::patch('notifications/read', [MitraDataController::class, 'markNotificationsAsRead']);
 
@@ -125,77 +131,61 @@ Route::middleware('auth:api')->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| Data manajemen (dibagi per role)
+| Data manajemen (dibagi ketat per role & tingkat risiko)
 |--------------------------------------------------------------------------
 */
 Route::prefix('management')->middleware('auth:api')->group(function () {
 
-    // Owner, finance, marketing
+    // 1. Owner, finance, marketing (Akses operasional bersama)
     Route::middleware('role:owner,finance,marketing')->group(function () {
         Route::get('bootstrap', [ManagementController::class, 'bootstrap']);
         Route::get('orders', [ManagementController::class, 'orders']);
+        Route::get('orders/trashed', [ManagementController::class, 'trashedOrders']);
         Route::get('orders/{id}/invoice', [ManagementController::class, 'invoice']);
         Route::get('invoices/{id}', [ManagementController::class, 'invoice']);
         Route::post('orders', [ManagementController::class, 'storeOrder']);
         Route::patch('orders/{id}/status', [ManagementController::class, 'updateOrderStatus']);
         Route::patch('orders/{id}/invoice', [ManagementController::class, 'updateOrderInvoice']);
+        Route::post('orders/{id}/trash', [ManagementController::class, 'trashOrder']);
+        Route::post('orders/{id}/restore', [ManagementController::class, 'restoreOrder']);
         Route::put('orders/{id}', [ManagementController::class, 'updateOrder']);
-        Route::delete('orders/{id}', [ManagementController::class, 'destroyOrder']);
 
         Route::get('batches', [ManagementController::class, 'batches']);
         Route::post('batches', [ManagementController::class, 'storeBatch']);
         Route::put('batches/{id}', [ManagementController::class, 'updateBatch']);
-        Route::delete('batches/{id}', [ManagementController::class, 'destroyBatch']);
 
         Route::get('products', [ManagementController::class, 'products']);
         Route::post('products', [ManagementController::class, 'storeProduct']);
         Route::put('products/{id}', [ManagementController::class, 'updateProduct']);
-        Route::delete('products/{id}', [ManagementController::class, 'destroyProduct']);
 
         Route::get('suppliers', [ManagementController::class, 'suppliers']);
         Route::post('suppliers', [ManagementController::class, 'storeSupplier']);
         Route::put('suppliers/{id}', [ManagementController::class, 'updateSupplier']);
-        Route::delete('suppliers/{id}', [ManagementController::class, 'destroySupplier']);
 
         Route::get('brands', [ManagementController::class, 'brands']);
         Route::post('brands', [ManagementController::class, 'storeBrand']);
         Route::put('brands/{id}', [ManagementController::class, 'updateBrand']);
-        Route::delete('brands/{id}', [ManagementController::class, 'destroyBrand']);
 
         Route::get('categories', [ManagementController::class, 'categories']);
         Route::post('categories', [ManagementController::class, 'storeCategory']);
         Route::put('categories/{id}', [ManagementController::class, 'updateCategory']);
-        Route::delete('categories/{id}', [ManagementController::class, 'destroyCategory']);
 
-        Route::get('master/bank-accounts', [ManagementController::class, 'bankAccounts']);
-        Route::post('master/bank-accounts', [ManagementController::class, 'storeBankAccount']);
-        Route::put('master/bank-accounts/{id}', [ManagementController::class, 'updateBankAccount']);
-        Route::delete('master/bank-accounts/{id}', [ManagementController::class, 'destroyBankAccount']);
-        Route::get('bank-accounts', [ManagementController::class, 'bankAccounts']);
-        Route::post('bank-accounts', [ManagementController::class, 'storeBankAccount']);
-        Route::put('bank-accounts/{id}', [ManagementController::class, 'updateBankAccount']);
-        Route::delete('bank-accounts/{id}', [ManagementController::class, 'destroyBankAccount']);
-
-        Route::get('master/couriers', [ManagementController::class, 'couriers']);
-        Route::post('master/couriers', [ManagementController::class, 'storeCourier']);
-        Route::put('master/couriers/{id}', [ManagementController::class, 'updateCourier']);
-        Route::delete('master/couriers/{id}', [ManagementController::class, 'destroyCourier']);
+        // Master kurir operasional pengiriman
         Route::get('couriers', [ManagementController::class, 'couriers']);
         Route::post('couriers', [ManagementController::class, 'storeCourier']);
         Route::put('couriers/{id}', [ManagementController::class, 'updateCourier']);
         Route::delete('couriers/{id}', [ManagementController::class, 'destroyCourier']);
 
-        Route::post('uploads', [ManagementController::class, 'uploadFile']);
-
         Route::get('settings', [ManagementController::class, 'settings']);
-        Route::put('settings', [ManagementController::class, 'updateSettings']);
 
-        // Pencatatan bukti oleh tim purchasing/finance; verifikasi tetap milik owner & finance.
+        // Pengguna: marketing & finance hanya boleh melihat data (Read-only)
+        Route::get('users', [ManagementController::class, 'users']);
+
+        // Pencatatan pengajuan bukti bayar & deposit
         Route::post('deposits', [ManagementController::class, 'storeDeposit']);
         Route::post('payments', [ManagementController::class, 'storePayment']);
 
-        // Purchasing mengajukan & me-review pengajuan bayar; keputusan owner/divalidasi transfer
-        // dijaga di controller sesuai peran pemanggil.
+        // Pengajuan dana ke vendor / operasional
         Route::get('payment-requests', [ManagementController::class, 'paymentRequests']);
         Route::post('payment-requests', [ManagementController::class, 'storePaymentRequest']);
         Route::patch('payment-requests/{id}', [ManagementController::class, 'updatePaymentRequest']);
@@ -203,10 +193,21 @@ Route::prefix('management')->middleware('auth:api')->group(function () {
 
         Route::get('notifications', [ManagementController::class, 'notifications']);
         Route::patch('notifications/read', [ManagementController::class, 'markNotificationsAsRead']);
+
+        // Endpoint laporan & rekap produksi
+        Route::get('reports/summary', [ManagementController::class, 'reportSummary']);
+        Route::get('reports/production', [ManagementController::class, 'reportProduction']);
     });
 
-    // Data keuangan: owner & finance
+    // 2. Data keuangan & rekening tujuan transfer: owner & finance saja
     Route::middleware('role:owner,finance')->group(function () {
+        Route::get('bank-accounts', [ManagementController::class, 'bankAccounts']);
+        Route::post('bank-accounts', [ManagementController::class, 'storeBankAccount']);
+        Route::put('bank-accounts/{id}', [ManagementController::class, 'updateBankAccount']);
+        Route::delete('bank-accounts/{id}', [ManagementController::class, 'destroyBankAccount']);
+
+        Route::put('settings', [ManagementController::class, 'updateSettings']);
+
         Route::get('deposits', [ManagementController::class, 'deposits']);
         Route::patch('deposits/{id}/verify', [ManagementController::class, 'verifyDeposit']);
         Route::delete('deposits/{id}', [ManagementController::class, 'destroyDeposit']);
@@ -214,18 +215,27 @@ Route::prefix('management')->middleware('auth:api')->group(function () {
         Route::get('payments', [ManagementController::class, 'payments']);
         Route::patch('payments/{id}/verify', [ManagementController::class, 'verifyPayment']);
         Route::delete('payments/{id}', [ManagementController::class, 'destroyPayment']);
+
+        // Ekspor data laporan
+        Route::get('reports/export', [ManagementController::class, 'exportReport']);
     });
 
-    // Manajemen Pengguna (Tim & Mitra): owner, marketing, finance
-    Route::middleware('role:owner,marketing,finance')->group(function () {
-        Route::get('users', [ManagementController::class, 'users']);
+    // 3. Hak hapus data kritis & pengelolaan akun pengguna: owner saja
+    Route::middleware('role:owner')->group(function () {
+        // Hapus permanen data master & pesanan
+        Route::delete('orders/{id}', [ManagementController::class, 'destroyOrder']);
+        Route::delete('batches/{id}', [ManagementController::class, 'destroyBatch']);
+        Route::delete('products/{id}', [ManagementController::class, 'destroyProduct']);
+        Route::delete('brands/{id}', [ManagementController::class, 'destroyBrand']);
+        Route::delete('suppliers/{id}', [ManagementController::class, 'destroySupplier']);
+        Route::delete('categories/{id}', [ManagementController::class, 'destroyCategory']);
+
+        // Pengelolaan Akun (Tambah, Ubah, Hapus) mutlak milik Owner
         Route::post('users', [ManagementController::class, 'storeUser']);
         Route::put('users/{id}', [ManagementController::class, 'updateUser']);
         Route::delete('users/{id}', [ManagementController::class, 'destroyUser']);
-    });
 
-    // Data sensitif: owner saja
-    Route::middleware('role:owner')->group(function () {
+        // Audit jejak aktivitas
         Route::get('activity-logs', [ManagementController::class, 'activityLogs']);
         Route::delete('activity-logs/{id}', [ManagementController::class, 'destroyActivityLog']);
         Route::delete('activity-logs', [ManagementController::class, 'clearActivityLogs']);

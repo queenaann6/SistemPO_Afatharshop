@@ -121,28 +121,20 @@ export default function MitraDepositTab({ currentUser, onDepositSubmit, adminBan
     setIsSubmitting(true);
     try {
       let proofPath = '';
-      if (tokenStore.get()) {
-        try {
-          const uploaded = await api.management.uploadFile(proofFile, 'proof');
-          proofPath = uploaded?.data?.path || '';
-        } catch (upErr) {
-          console.warn('Gagal upload bukti deposit ke server, lanjut simpan lokal:', upErr);
-        }
-      }
-
       let row = null;
-      if (proofPath && tokenStore.get()) {
-        try {
-          const created = await api.my.createDeposit({
-            bank_account_id: currentBankObj.id,
-            amount,
-            proof_url: proofPath,
-            description: notes || 'Pengajuan deposit saldo reseller'
-          });
-          row = created?.data;
-        } catch (crErr) {
-          console.warn('Gagal simpan deposit ke database backend:', crErr);
+      if (tokenStore.get()) {
+        const uploaded = await api.uploadFile(proofFile, 'proof');
+        proofPath = uploaded?.data?.path || '';
+        if (!proofPath) {
+          throw new Error('Unggah bukti transfer ke server tidak mengembalikan URL/path berkas.');
         }
+        const created = await api.my.createDeposit({
+          bank_account_id: currentBankObj.id,
+          amount,
+          proof_url: proofPath,
+          description: notes || 'Pengajuan deposit saldo reseller'
+        });
+        row = created?.data;
       }
 
       const displayProof = proofPath ? mediaUrl(proofPath) : proofImage;

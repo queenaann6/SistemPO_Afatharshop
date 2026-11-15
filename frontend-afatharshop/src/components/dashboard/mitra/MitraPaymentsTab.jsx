@@ -27,11 +27,18 @@ export default function MitraPaymentsTab({ orders = [], payments: paymentsProp =
     return (list || []).map((p) => {
       const isAcc = p.status === 'disetujui' || p.status === 'ACC' || p.status === 'lunas';
       const isTolak = p.status === 'ditolak';
+      const stageRaw = String(p.stage || 'pembayaran').toLowerCase();
       return {
         id: `pay-server-${p.id}`,
+        dedupeKey: `${stageRaw}|${String(p.order_number || '').trim()}`,
         inv: p.invoice_number || p.order_number || `PAY-${p.id}`,
-        title: `${(p.stage || 'Pembayaran').toUpperCase()} — ${p.order_number || 'Pesanan PO'}`,
-        method: 'Transfer Bank',
+        title: `${stageRaw.toUpperCase()} — ${p.order_number || 'Pesanan PO'}`,
+        method:
+          p.method === 'deposit' || String(p.bank_name || '').toLowerCase() === 'deposit'
+            ? 'Saldo Deposit'
+            : p.bank_name
+              ? `Transfer ${p.bank_name}`
+              : 'Transfer Bank',
         amount: Number(p.amount) || 0,
         status: isAcc ? 'Berhasil Diverifikasi' : isTolak ? `Ditolak: ${p.rejection_reason || 'Bukti tidak sesuai'}` : 'Menunggu Validasi',
         proofImage: p.proof_url ? mediaUrl(p.proof_url) : null,
@@ -44,29 +51,46 @@ export default function MitraPaymentsTab({ orders = [], payments: paymentsProp =
   const dynamicOrderPayments = useMemo(() => {
     const items = [];
     (orders || []).forEach((ord) => {
-      if (ord.dpProof) {
+      const ordKey = String(ord.orderNo || ord.invoice || ord.id || '').trim();
+      if (ord.dpProof || ord.isDpDeposit) {
         items.push({
-          id: `pay-dp-${ord.orderNo || ord.id}`,
+          id: `pay-dp-${ordKey}`,
+          dedupeKey: `dp|${ordKey}`,
           inv: ord.orderNo || ord.id,
           title: `DP — ${ord.title}`,
-          method: 'Transfer',
+          method: ord.isDpDeposit ? 'Saldo Deposit' : (ord.dpBank ? `Transfer ${ord.dpBank}` : 'Transfer'),
           amount: ord.dpNominal || 0,
-          status: ord.dpStatus === 'ACC' || ord.dpStatus === 'Lunas' ? 'Berhasil Diverifikasi' : 'Menunggu Validasi',
-          proofImage: ord.dpProof,
-          date: ord.dpVerifiedAt || ord.date || 'Hari ini',
+          status: ord.dpStatus === 'ACC' || ord.dpStatus === 'Lunas' ? 'Berhasil Diverifikasi' : ord.dpStatus === 'Tolak' || ord.dpStatus === 'Ditolak' ? 'Ditolak' : 'Menunggu Validasi',
+          proofImage: ord.dpProof || null,
+          date: ord.dpVerifiedAt || ord.dpSubmittedAt || ord.date || 'Hari ini',
           rawDate: ord.date || ''
         });
       }
-      if (ord.pelunasanProof) {
+      if (ord.pelunasanProof || ord.isPelunasanDeposit) {
         items.push({
-          id: `pay-pel-${ord.orderNo || ord.id}`,
+          id: `pay-pel-${ordKey}`,
+          dedupeKey: `pelunasan|${ordKey}`,
           inv: ord.orderNo || ord.id,
           title: `Pelunasan — ${ord.title}`,
-          method: 'Transfer',
+          method: ord.isPelunasanDeposit ? 'Saldo Deposit' : (ord.pelunasanBank ? `Transfer ${ord.pelunasanBank}` : 'Transfer'),
           amount: ord.pelunasanNominal || 0,
-          status: ord.pelunasanStatus === 'ACC' || ord.pelunasanStatus === 'Lunas' ? 'Berhasil Diverifikasi' : 'Menunggu Validasi',
-          proofImage: ord.pelunasanProof,
-          date: ord.pelunasanVerifiedAt || ord.date || 'Hari ini',
+          status: ord.pelunasanStatus === 'ACC' || ord.pelunasanStatus === 'Lunas' ? 'Berhasil Diverifikasi' : ord.pelunasanStatus === 'Tolak' || ord.pelunasanStatus === 'Ditolak' ? 'Ditolak' : 'Menunggu Validasi',
+          proofImage: ord.pelunasanProof || null,
+          date: ord.pelunasanVerifiedAt || ord.pelunasanSubmittedAt || ord.date || 'Hari ini',
+          rawDate: ord.date || ''
+        });
+      }
+      if (ord.ongkirProof || ord.isOngkirDeposit) {
+        items.push({
+          id: `pay-ong-${ordKey}`,
+          dedupeKey: `ongkir|${ordKey}`,
+          inv: ord.orderNo || ord.id,
+          title: `Ongkir — ${ord.title}`,
+          method: ord.isOngkirDeposit ? 'Saldo Deposit' : (ord.ongkirBank ? `Transfer ${ord.ongkirBank}` : 'Transfer'),
+          amount: ord.ongkir || ord.ongkirNominal || 0,
+          status: ord.ongkirStatus === 'ACC' || ord.ongkirStatus === 'Lunas' ? 'Berhasil Diverifikasi' : ord.ongkirStatus === 'Tolak' || ord.ongkirStatus === 'Ditolak' ? 'Ditolak' : 'Menunggu Validasi',
+          proofImage: ord.ongkirProof || null,
+          date: ord.ongkirVerifiedAt || ord.ongkirSubmittedAt || ord.date || 'Hari ini',
           rawDate: ord.date || ''
         });
       }
@@ -76,16 +100,17 @@ export default function MitraPaymentsTab({ orders = [], payments: paymentsProp =
 
   const combinedPayments = useMemo(() => {
     if (normalizedRemote.length > 0) {
-      // Prioritaskan data resmi dari server
-      const seen = new Set();
+      // Prioritaskan data resmi dari server dan deduplikasi berdasarkan (stage + order_number)
+      const seenKeys = new Set();
       const list = [];
       normalizedRemote.forEach((p) => {
-        seen.add(p.id);
+        if (p.dedupeKey) seenKeys.add(p.dedupeKey);
         list.push(p);
       });
-      // Masukkan local yang belum tercakup di server jika ada
       dynamicOrderPayments.forEach((p) => {
-        if (!seen.has(p.id)) list.push(p);
+        if (!p.dedupeKey || !seenKeys.has(p.dedupeKey)) {
+          list.push(p);
+        }
       });
       return list;
     }

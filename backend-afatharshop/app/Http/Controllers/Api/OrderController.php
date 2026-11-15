@@ -14,6 +14,8 @@ use App\Models\OrderStatusHistory;
 use App\Models\Payment;
 use App\Models\Product;
 use App\Models\ProductVariant;
+use App\Models\User;
+use App\Support\OrderSerializer;
 use App\Support\TerminPlan;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -29,10 +31,13 @@ class OrderController extends Controller
     {
         $user = $request->user('api');
 
-        $orders = Order::with(['items.variant.product.brand', 'items.variant.product.batch', 'invoice.installments', 'invoice.payments', 'address', 'user'])
+        $orders = Order::active()
+            ->with(['items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments', 'address', 'user'])
             ->where('user_id', $user->id)
             ->orderByDesc('id')
-            ->get();
+            ->get()
+            ->map(fn (Order $order) => OrderSerializer::payload($order))
+            ->values();
 
         return response()->json([
             'success' => true,
@@ -43,16 +48,28 @@ class OrderController extends Controller
     }
 
     /**
-     * Detail satu pesanan PO (hanya milik user login).
+     * Detail satu pesanan PO (hanya milik user login atau admin).
      */
     public function show(Request $request, string $id)
     {
-        $order = Order::with(['items.variant.product.brand', 'items.variant.product.batch', 'invoice.installments', 'invoice.payments', 'address', 'user'])
-            ->where('user_id', $request->user('api')->id)
+        $user = $request->user('api') ?? auth('api')->user();
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+        }
+
+        $isAdmin = in_array($user->role ?? '', ['owner', 'finance', 'marketing'], true);
+
+        $query = Order::active()
+            ->with(['items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments', 'address', 'user'])
             ->where(function ($q) use ($id) {
                 $q->where('id', $id)->orWhere('order_number', $id);
-            })
-            ->first();
+            });
+
+        if (!$isAdmin) {
+            $query->where('user_id', $user->id);
+        }
+
+        $order = $query->first();
 
         if (!$order) {
             return response()->json([
@@ -63,7 +80,7 @@ class OrderController extends Controller
 
         return response()->json([
             'success' => true,
-            'data'    => $order,
+            'data'    => OrderSerializer::payload($order),
         ], 200);
     }
 
@@ -72,24 +89,30 @@ class OrderController extends Controller
      */
     public function invoice(Request $request, string $id)
     {
-        $user = $request->user('api');
+        $user = $request->user('api') ?? auth('api')->user();
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+        }
 
-        $order = Order::with([
-            'items.variant.product.brand',
-            'items.variant.product.batch',
-            'items.address',
-            'invoice.installments',
-            'invoice.payments',
-            'address',
-            'user'
-        ])
+        $isAdmin = in_array($user->role ?? '', ['owner', 'finance', 'marketing'], true);
+
+        $order = Order::active()
+            ->with([
+                'items.variant.product.brand',
+                'items.variant.product.batch',
+                'items.address',
+                'invoice.installments',
+                'invoice.payments',
+                'address',
+                'user'
+            ])
             ->where(function ($q) use ($id) {
                 $q->where('id', $id)
                   ->orWhere('order_number', $id)
                   ->orWhereHas('invoice', fn ($iq) => $iq->where('id', $id)->orWhere('invoice_number', $id));
             });
 
-        if ($user && !in_array($user->role ?? '', ['owner', 'finance', 'marketing'], true)) {
+        if (!$isAdmin) {
             $order->where('user_id', $user->id);
         }
 
@@ -105,7 +128,93 @@ class OrderController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Detail invoice berhasil dimuat.',
-            'data'    => $result,
+            'data'    => OrderSerializer::payload($result),
+        ], 200);
+    }
+
+    /**
+     * Pembatalan pesanan PO oleh pelanggan (mitra).
+     */
+    public function cancelOrder(Request $request, string $id)
+    {
+        $user = $request->user('api') ?? auth('api')->user();
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+        }
+
+        $isAdmin = in_array($user->role ?? '', ['owner', 'finance', 'marketing'], true);
+
+        $query = Order::active()
+            ->with(['invoice.installments', 'invoice.payments'])
+            ->where(function ($q) use ($id) {
+                $q->where('id', $id)->orWhere('order_number', $id);
+            });
+
+        if (!$isAdmin) {
+            $query->where('user_id', $user->id);
+        }
+
+        $order = $query->first();
+
+        if (!$order) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Pesanan tidak ditemukan.',
+            ], 404);
+        }
+
+        $currentStatus = strtolower(trim((string) $order->status));
+        $cancellableStatuses = [
+            'open',
+            'menunggu acc marketing',
+            'draft',
+            'menunggu dp',
+            'menunggu pembayaran dp',
+        ];
+
+        // Cegah pembatalan mandiri jika sudah ada bukti pembayaran yang diverifikasi/disetujui
+        $hasApprovedPayment = $order->payments()->where('payments.status', 'disetujui')->exists();
+        if ($hasApprovedPayment && !$isAdmin) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Pesanan dengan pembayaran yang sudah disetujui tidak dapat dibatalkan secara mandiri. Silakan hubungi CS/Admin.',
+            ], 422);
+        }
+
+        if (!in_array($currentStatus, $cancellableStatuses, true) && !$isAdmin) {
+            return response()->json([
+                'success' => false,
+                'message' => "Pesanan dengan status '{$order->status}' tidak dapat dibatalkan.",
+            ], 422);
+        }
+
+        $cancelReason = trim((string) ($request->input('reason') ?? $request->input('cancel_reason') ?? 'Dibatalkan oleh pelanggan'));
+
+        DB::transaction(function () use ($order, $user, $cancelReason) {
+            $order->status = 'Dibatalkan';
+            $order->marketing_status = 'REJECTED';
+            $order->save();
+
+            if ($order->invoice) {
+                $order->invoice->status = 'batal';
+                $order->invoice->save();
+            }
+
+            OrderStatusHistory::create([
+                'order_id'   => $order->id,
+                'status'     => 'Dibatalkan',
+                'note'       => $cancelReason,
+                'changed_by' => $user->id,
+                'created_at' => now(),
+            ]);
+        });
+
+        $fresh = $order->fresh(['items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments', 'address', 'user']);
+
+        return response()->json([
+            'success' => true,
+            'message' => "Pesanan {$order->order_number} berhasil dibatalkan.",
+            'data'    => OrderSerializer::payload($fresh),
         ], 200);
     }
 
@@ -176,6 +285,7 @@ class OrderController extends Controller
             'items.*.fee'                => 'nullable|numeric',
             'items.*.discount_nominal'   => 'nullable|numeric',
             'items.*.addon_nominal'      => 'nullable|numeric',
+            'items.*.subtotal'           => 'nullable|numeric|min:0',
         ]);
 
         if ($validator->fails()) {
@@ -231,30 +341,49 @@ class OrderController extends Controller
         $shippingCost = (float) ($request->shipping_cost ?? 0);
 
         $computedSubtotal = 0.0;
+        $resolvedLines = [];
+        $hasAnySplit = (bool) $request->input('is_split_address', false);
         foreach ($request->items as $item) {
-            $addon = (float) ($item['addon_nominal'] ?? $item['addon'] ?? 0);
-            $computedSubtotal += (float) $item['unit_price'] * (int) $item['quantity'] + $addon;
+            $amounts = OrderSerializer::resolveLineAmounts($item);
+            $computedSubtotal += $amounts['subtotal'];
+            $splits = $item['splits'] ?? null;
+            $splitsJson = (is_array($splits) && count($splits) > 0) ? json_encode($splits) : null;
+            if ($splitsJson !== null) {
+                $hasAnySplit = true;
+            }
+            $itemAddressId = $item['address_id'] ?? $item['addressId'] ?? null;
+            if (!$itemAddressId && is_array($splits) && !empty($splits[0]['address']['id'])) {
+                $itemAddressId = (int) $splits[0]['address']['id'];
+            }
+            $resolvedLines[] = array_merge($amounts, [
+                'product_variant_id' => $item['product_variant_id'],
+                'address_id'         => $itemAddressId ? (int) $itemAddressId : null,
+                'splits_data'        => $splitsJson,
+            ]);
         }
 
         if ($computedSubtotal > 0 && abs($computedSubtotal - $subtotal) > 1) {
-            $subtotal = $computedSubtotal;
+            $subtotal = round($computedSubtotal, 2);
         }
 
         if (abs(($subtotal + $shippingCost) - $totalAmount) > 1) {
-            $totalAmount = $subtotal + $shippingCost;
+            $totalAmount = round($subtotal + $shippingCost, 2);
         }
 
         $status = $request->input('status', 'Menunggu ACC Marketing');
+        $marketingStatus = strtoupper(trim((string) $request->input('marketing_status', 'PENDING')));
 
-        $createdOrder = DB::transaction(function () use ($request, $user, $status, $totalAmount, $subtotal, $shippingCost, $variants) {
+        $createdOrder = DB::transaction(function () use ($request, $user, $status, $marketingStatus, $totalAmount, $subtotal, $shippingCost, $variants, $resolvedLines, $hasAnySplit) {
             $order = Order::create([
                 'user_id'          => $user->id,
                 'address_id'       => $request->address_id,
                 'order_number'     => 'PO-' . date('Ymd') . '-' . strtoupper(Str::random(5)),
                 'status'           => $status,
+                'marketing_status' => $marketingStatus,
+                'production_status'=> 'Antrian',
                 'courier_name'     => $request->courier_name ?: ($request->input('atur_sebelum_kirim', true) ? 'Ditentukan Sebelum Pengiriman' : null),
                 'notes'            => $request->notes,
-                'is_split_address' => (bool) $request->input('is_split_address', false),
+                'is_split_address' => $hasAnySplit,
                 'subtotal'         => $subtotal,
                 'shipping_cost'    => $shippingCost,
                 'total_amount'     => $totalAmount,
@@ -269,22 +398,18 @@ class OrderController extends Controller
                 'created_at' => now(),
             ]);
 
-            foreach ($request->items as $item) {
-                $qty = (int) $item['quantity'];
-                $unitPrice = (float) $item['unit_price'];
-                $fee = (float) ($item['fee'] ?? $item['feeNominal'] ?? 0);
-                $discount = (float) ($item['discount_nominal'] ?? $fee);
-                $addon = (float) ($item['addon_nominal'] ?? $item['addon'] ?? 0);
-
+            foreach ($resolvedLines as $line) {
                 OrderItem::create([
                     'order_id'           => $order->id,
-                    'product_variant_id' => $item['product_variant_id'],
-                    'quantity'           => $qty,
-                    'unit_price'         => $unitPrice,
-                    'fee'                => $fee,
-                    'discount_nominal'   => $discount,
-                    'addon_nominal'      => $addon,
-                    'subtotal'           => round(($unitPrice * $qty) + $addon, 2),
+                    'address_id'         => $line['address_id'],
+                    'product_variant_id' => $line['product_variant_id'],
+                    'quantity'           => $line['quantity'],
+                    'unit_price'         => $line['unit_price'],
+                    'fee'                => $line['fee'],
+                    'discount_nominal'   => $line['discount_nominal'],
+                    'addon_nominal'      => $line['addon_nominal'],
+                    'subtotal'           => $line['subtotal'],
+                    'splits_data'        => $line['splits_data'],
                     'created_at'         => now(),
                 ]);
             }
@@ -326,13 +451,13 @@ class OrderController extends Controller
                 }
             }
 
-            return $order->load(['items.variant.product.brand', 'invoice.installments', 'invoice.payments', 'address', 'user']);
+            return $order->load(['items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments', 'address', 'user']);
         });
 
         return response()->json([
             'success' => true,
             'message' => 'Pesanan PO berhasil disimpan.',
-            'data'    => $createdOrder,
+            'data'    => OrderSerializer::payload($createdOrder),
         ], 201);
     }
 
@@ -342,7 +467,8 @@ class OrderController extends Controller
     public function updateAddress(Request $request, string $id)
     {
         $user = $request->user('api');
-        $order = Order::where('user_id', $user->id)
+        $order = Order::active()
+            ->where('user_id', $user->id)
             ->where(function ($q) use ($id) {
                 $q->where('id', $id)->orWhere('order_number', $id);
             })
@@ -423,7 +549,7 @@ class OrderController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Alamat pengiriman berhasil dikonfirmasi. Menunggu input ongkir Admin.',
-            'data'    => $order->load(['items.variant.product.brand', 'invoice.installments', 'invoice.payments', 'address', 'user']),
+            'data'    => OrderSerializer::payload($order->fresh(['items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments', 'address', 'user'])),
         ], 200);
     }
 
@@ -433,7 +559,12 @@ class OrderController extends Controller
     public function update(Request $request, string $id)
     {
         $user = $request->user('api') ?? auth('api')->user();
-        $order = Order::with(['items.variant.product', 'invoice.installments', 'invoice.payments'])
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+        }
+
+        $order = Order::active()
+            ->with(['items.variant.product', 'invoice.installments', 'invoice.payments'])
             ->where(function ($q) use ($id) {
                 $q->where('id', $id)->orWhere('order_number', $id);
             })
@@ -446,7 +577,8 @@ class OrderController extends Controller
             ], 404);
         }
 
-        if ($user && method_exists($user, 'isMitra') && $user->isMitra() && (int) $order->user_id !== (int) $user->id) {
+        $isAdmin = in_array($user->role ?? '', ['owner', 'finance', 'marketing'], true);
+        if (!$isAdmin && (int) $order->user_id !== (int) $user->id) {
             return response()->json([
                 'success' => false,
                 'message' => 'Anda tidak memiliki hak untuk mengubah pesanan ini.',
@@ -482,7 +614,8 @@ class OrderController extends Controller
         if ($request->has('is_split_address')) {
             $order->is_split_address = (bool) $request->is_split_address;
         }
-        if ($request->has('shipping_cost')) {
+        // Hanya admin/tim operasional yang berhak mengubah ongkos kirim secara manual
+        if ($isAdmin && $request->has('shipping_cost')) {
             $order->shipping_cost = max(0, (float) $request->shipping_cost);
         }
 
@@ -541,7 +674,9 @@ class OrderController extends Controller
                 }
 
                 $qty = max(1, (int) ($item['quantity'] ?? $item['qty'] ?? 1));
-                $unitPrice = (float) ($item['unit_price'] ?? $item['price'] ?? $variant?->price ?? 0);
+                $unitPrice = $isAdmin
+                    ? (float) ($item['unit_price'] ?? $item['price'] ?? $variant?->price ?? 0)
+                    : (float) ($variant?->price ?? 0);
                 $fee = (float) ($item['fee'] ?? $item['feeNominal'] ?? 0);
                 $discountNominal = (float) ($item['discount_nominal'] ?? $item['discountNominal'] ?? 0);
                 $addonNominal = (float) ($item['addon_nominal'] ?? $item['addonNominal'] ?? 0);
@@ -635,12 +770,12 @@ class OrderController extends Controller
             $order->save();
         }
 
-        $fresh = $order->fresh(['items.variant.product.brand', 'items.address', 'invoice.installments', 'invoice.payments', 'address', 'user']);
+        $fresh = $order->fresh(['items.variant.product.brand', 'items.variant.product.batch', 'items.address', 'invoice.installments', 'invoice.payments', 'address', 'user']);
 
         return response()->json([
             'success' => true,
             'message' => "Pesanan {$order->order_number} berhasil diperbarui.",
-            'data'    => $fresh,
+            'data'    => OrderSerializer::payload($fresh),
         ], 200);
     }
 }

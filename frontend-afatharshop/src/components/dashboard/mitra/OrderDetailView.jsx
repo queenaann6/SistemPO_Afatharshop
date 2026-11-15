@@ -124,10 +124,11 @@ export default function OrderDetailView({
 
   // Identitas pengirim pada label dropship (nama toko, telepon, catatan).
   // Hanya bisa disunting selama alamat belum terkunci oleh konfirmasi.
+  const firstSavedSplit = (order?.items || []).flatMap((it) => it.splits || []).find((s) => s?.senderName || s?.senderPhone);
   const [senderIdentity, setSenderIdentity] = useState({
-    name: order?.senderName || currentUser?.name || 'Afatharshop',
-    phone: order?.senderPhone || currentUser?.phone || '',
-    notes: order?.senderNotes || ''
+    name: order?.senderName || firstSavedSplit?.senderName || currentUser?.name || 'Afatharshop',
+    phone: order?.senderPhone || firstSavedSplit?.senderPhone || currentUser?.phone || '',
+    notes: order?.senderNotes || firstSavedSplit?.senderNotes || ''
   });
   const [isEditingSender, setIsEditingSender] = useState(false);
 
@@ -251,23 +252,55 @@ export default function OrderDetailView({
 
   const handleSaveSenderIdentity = () => {
     if (!senderIdentity.name.trim()) return;
+    const nextName = senderIdentity.name.trim();
+    const nextPhone = senderIdentity.phone.trim();
+    const nextNotes = senderIdentity.notes.trim();
+    const courierObj = selectedCourier
+      ? { id: selectedCourier.toLowerCase().replace(/[^a-z0-9]+/g, '_'), name: selectedCourier }
+      : null;
+
+    const nextItems = items.map((item) => {
+      const existingSplits = Array.isArray(item.splits) ? item.splits : [];
+      if (existingSplits.length > 0) {
+        return {
+          ...item,
+          splits: existingSplits.map((s) => ({
+            ...s,
+            senderName: nextName,
+            senderPhone: nextPhone || s.senderPhone,
+            senderNotes: nextNotes
+          }))
+        };
+      }
+      if (primaryAddress) {
+        const qty = Number(item.qty) || 1;
+        return {
+          ...item,
+          splits: [
+            {
+              id: Date.now() + Math.floor(Math.random() * 1000),
+              address: primaryAddress,
+              qty,
+              weight: qty * (Number(item.unitWeight) || 300),
+              senderName: nextName,
+              senderPhone: nextPhone,
+              senderNotes: nextNotes,
+              courier: courierObj
+            }
+          ]
+        };
+      }
+      return item;
+    });
+
+    setItems(nextItems);
     onUpdateOrder?.({
-      senderName: senderIdentity.name.trim(),
-      senderPhone: senderIdentity.phone.trim(),
-      senderNotes: senderIdentity.notes.trim(),
+      senderName: nextName,
+      senderPhone: nextPhone,
+      senderNotes: nextNotes,
+      items: nextItems,
       invoice: orderInvoice || order?.orderNo || order?.id
     });
-    setItems((prev) =>
-      prev.map((item) => ({
-        ...item,
-        splits: (item.splits || []).map((s) => ({
-          ...s,
-          senderName: senderIdentity.name.trim(),
-          senderPhone: senderIdentity.phone.trim() || s.senderPhone,
-          senderNotes: senderIdentity.notes.trim()
-        }))
-      }))
-    );
     setIsEditingSender(false);
     setNotification('Identitas pengirim pada label dropship diperbarui.');
     setTimeout(() => setNotification(''), 3500);
@@ -906,9 +939,10 @@ export default function OrderDetailView({
     const todayDate = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 
     // Potong saldo deposit di server terlebih dahulu agar saldo tidak double-spend
+    let payRes = null;
     if (tokenStore.get()) {
       try {
-        await api.my.payWithDeposit({
+        payRes = await api.my.payWithDeposit({
           order_number: order?.orderNo || order?.invoice || (order?.id ? String(order.id) : ''),
           invoice_number: order?.invoiceNumber || '',
           installment_id: instId || undefined,
@@ -921,13 +955,21 @@ export default function OrderDetailView({
       }
     }
 
+    const resData = payRes?.data || payRes || {};
+    const depPaymentId = resData?.payment?.id ?? resData?.id ?? null;
+    const nextBalance = resData?.deposit_balance ?? payRes?.deposit_balance ?? null;
+    const serverOrder = resData?.order ?? payRes?.order ?? null;
+
     if (onPayWithDeposit) {
       onPayWithDeposit({
         orderNo: orderNum,
         billTitle: proofStage?.displayName || proofStage?.label || proofTitle || (isOngkir ? 'Ongkos Kirim' : isDp ? 'DP PO' : isPelunasan ? 'Pelunasan PO' : 'Cicilan PO'),
         amount: amountToPay,
         billType: stageKey,
-        installmentId: instId
+        installmentId: instId,
+        paymentId: depPaymentId,
+        depositBalance: nextBalance,
+        serverOrder
       });
     }
 
@@ -955,6 +997,7 @@ export default function OrderDetailView({
           ongkirVerifiedAt: todayDate,
           ongkirPaidAt: todayDate,
           ongkirDate: todayDate,
+          ongkirPaymentId: depPaymentId,
           isOngkirDeposit: true
         });
       } else if (isDp) {
@@ -967,6 +1010,7 @@ export default function OrderDetailView({
           dpVerifiedAt: todayDate,
           dpPaidAt: todayDate,
           dpDate: todayDate,
+          dpPaymentId: depPaymentId,
           isDpDeposit: true
         });
       } else if (isPelunasan) {
@@ -979,6 +1023,7 @@ export default function OrderDetailView({
           pelunasanVerifiedAt: todayDate,
           pelunasanPaidAt: todayDate,
           pelunasanDate: todayDate,
+          pelunasanPaymentId: depPaymentId,
           isPelunasanDeposit: true
         });
       } else {
@@ -1037,42 +1082,63 @@ export default function OrderDetailView({
           ? order?.pelunasanInstallmentId
           : undefined));
 
+    const selectedBankItem = bankAccountsList.find(
+      (b) =>
+        proofBank === b.name ||
+        proofBank === `${b.bank} : ${b.accountNo} (a.n ${b.holder})` ||
+        (b.bank && b.accountNo && String(proofBank || '').includes(b.bank) && String(proofBank || '').includes(b.accountNo))
+    );
+    let uploadedPaymentId = null;
+    let serverOrder = null;
+
     // Unggah bukti transfer ke API backend jika token aktif
     if (proofFileObj && tokenStore.get()) {
       try {
-        const uploadRes = await api.management.uploadFile(proofFileObj, 'proof');
+        const uploadRes = await api.uploadFile(proofFileObj, 'proof');
         const serverPath = uploadRes?.data?.path || '';
-        if (serverPath) {
-          finalProofUrl = mediaUrl(serverPath);
-
-          await api.my.uploadPayment({
-            order_number: order?.orderNo || order?.invoice || (order?.id ? String(order.id) : ''),
-            invoice_number: order?.invoiceNumber || '',
-            installment_id: instId || undefined,
-            stage: stageKey,
-            amount: parseInt(proofAmount || '0', 10),
-            proof_url: serverPath
-          });
+        if (!serverPath) {
+          throw new Error('Server tidak mengembalikan path file bukti transfer.');
         }
+        finalProofUrl = mediaUrl(serverPath);
+
+        const payRes = await api.my.uploadPayment({
+          order_number: order?.orderNo || order?.invoice || (order?.id ? String(order.id) : ''),
+          invoice_number: order?.invoiceNumber || '',
+          installment_id: instId || undefined,
+          stage: stageKey,
+          amount: parseInt(proofAmount || '0', 10),
+          bank_name: selectedBankItem?.bank || proofBank,
+          account_number: selectedBankItem?.accountNo || '',
+          note: proofNote || '',
+          proof_url: serverPath
+        });
+        const payData = payRes?.data || payRes || {};
+        uploadedPaymentId = payData?.payment?.id ?? payData?.id ?? null;
+        serverOrder = payData?.order ?? payRes?.order ?? null;
       } catch (err) {
-        console.warn('Gagal sinkronisasi bukti pembayaran ke API backend:', err);
+        setIsUploadingProof(false);
+        alert(`Gagal mengirim bukti pembayaran ke server: ${err?.message || 'Silakan coba lagi.'}`);
+        return;
       }
     }
 
     if (onUploadPayment) {
       onUploadPayment({
-        id: Date.now(),
+        id: uploadedPaymentId ?? Date.now(),
+        paymentId: uploadedPaymentId,
         orderNo: order?.orderNo || order?.invoice || (order?.id ? String(order.id) : '-'),
         mitraName: currentUser?.name || buyerName || 'Mitra',
         title: proofTitle || (isOngkir ? 'Ongkos Kirim' : 'Pembayaran Termin PO'),
         nominal: parseInt(proofAmount || '0', 10),
-        bank: proofBank,
+        bank: selectedBankItem?.bank || proofBank,
+        bankAccount: selectedBankItem?.accountNo || '',
         note: proofNote,
         image: finalProofUrl,
         date: new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
         status: 'Menunggu Validasi',
         installmentId: instId ?? null,
-        stage: stageKey
+        stage: stageKey,
+        serverOrder
       });
     }
 

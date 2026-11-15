@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api, { mediaUrl } from '../../../services/api';
-import { dbId, mapBrandToCore, mapSupplier, normalizeLevel } from '../../../services/adapters';
+import { dbId, mapBrandToCore, mapOrderToProjectOrder, mapSupplier, normalizeLevel } from '../../../services/adapters';
+import { projectOrderToCore } from '../projectBridge';
 import { DEFAULT_DP_PCT, defaultStagePcts, dpPercentFor } from '../../../utils/terminScheme';
 import ProductCatalogModal from '../ProductCatalogModal';
 import BankAccountModal from '../BankAccountModal';
@@ -200,6 +201,7 @@ export default function PurchasingDashboard({
   categories: categoriesProp,
   deposits: depositsProp,
   settings: settingsProp,
+  deletedOrders: deletedOrdersProp,
   onChangeOrders,
   onChangeProducts,
   onChangeBrands,
@@ -209,6 +211,7 @@ export default function PurchasingDashboard({
   onChangePaymentRequests,
   onChangeDeposits,
   onChangeSettings,
+  onChangeDeletedOrders,
   onChangeCategories,
   onChangeBankAccounts,
   onChangeCouriers,
@@ -248,26 +251,33 @@ export default function PurchasingDashboard({
   );
   const [deposits, commitDeposits] = useDataState(depositsProp, seed.deposits, onChangeDeposits);
   const [settings, commitSettings] = useDataState(settingsProp, seed.settings, onChangeSettings);
-  const [deletedOrders, setDeletedOrders] = useState(() => {
+  const [deletedOrders, commitDeletedOrders] = useDataState(
+    deletedOrdersProp,
+    [],
+    onChangeDeletedOrders
+  );
+
+  useEffect(() => {
+    if (deletedOrdersProp !== undefined) return;
     try {
       const saved = localStorage.getItem('afathar_deleted_orders');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) commitDeletedOrders(parsed);
       }
     } catch (e) {
       console.warn('Gagal memuat arsip penjualan terhapus dari storage:', e);
     }
-    return seed.deletedOrders || [];
-  });
+  }, []);
 
   useEffect(() => {
+    if (deletedOrdersProp !== undefined) return;
     try {
       localStorage.setItem('afathar_deleted_orders', JSON.stringify(deletedOrders));
     } catch (e) {
       console.warn('Gagal menyimpan arsip penjualan terhapus ke storage:', e);
     }
-  }, [deletedOrders]);
+  }, [deletedOrders, deletedOrdersProp]);
 
   const [detailInvoice, setDetailInvoice] = useState(null);
   const [productOrderId, setProductOrderId] = useState(null);
@@ -325,6 +335,17 @@ export default function PurchasingDashboard({
     proof: '',
     proofFile: null
   });
+  const [isSubmittingProof, setIsSubmittingProof] = useState(false);
+  const [proofInputKey, setProofInputKey] = useState(0);
+
+  useEffect(() => {
+    const activeBanks = (bankAccounts || []).filter((b) => b.active !== false);
+    if (!activeBanks.length) return;
+    setProofForm((prev) => {
+      const valid = activeBanks.some((b) => String(b.id) === String(prev.bankId));
+      return valid ? prev : { ...prev, bankId: activeBanks[0].id };
+    });
+  }, [bankAccounts]);
 
   // Pengajuan pembayaran
   const [prFilter, setPrFilter] = useState('all');
@@ -676,7 +697,13 @@ export default function PurchasingDashboard({
         group: 'sdm',
         label: 'Mitra & Tim',
         children: [
-          { id: 'mitra', label: 'Mitra & User', title: 'Data Mitra & User', icon: 'users' },
+          {
+            id: 'mitra',
+            label: 'Mitra & User',
+            title: 'Data Mitra & User',
+            icon: 'users',
+            badge: mitra.filter((m) => !m.active).length || null
+          },
           { id: 'tim', label: 'Tim Admin', title: 'Manajemen Tim Admin', icon: 'shield' }
         ]
       },
@@ -810,7 +837,11 @@ export default function PurchasingDashboard({
   };
 
   const reopenOrder = async (o) => {
-    const ok = await patchOrder(o.invoice, { marketingStatus: MKT.PENDING, marketingNote: '' });
+    const ok = await patchOrder(o.invoice, {
+      marketingStatus: MKT.PENDING,
+      marketingNote: '',
+      status: 'Menunggu ACC Marketing'
+    });
     if (!ok) return;
     adjustQuota(o, num(o.qty));
     toast(`${o.invoice} dibuka kembali untuk direview.`);
@@ -844,9 +875,17 @@ export default function PurchasingDashboard({
       placeholder: 'Contoh: duplikat pesanan / dibatalkan mitra',
       confirmLabel: 'Hapus pesanan',
       danger: true,
-      onSubmit: (reason) => {
+      onSubmit: async (reason) => {
+        const targetId = dbId(o) || (num(o.id) > 0 ? num(o.id) : null) || o.invoice;
+        if (targetId) {
+          try {
+            await api.management.trashOrder(targetId, { reason, deleted_by: me.name });
+          } catch (err) {
+            return serverFail(err, `Menghapus pesanan ${o.invoice}`);
+          }
+        }
         commitOrders((prev) => prev.filter((x) => x.invoice !== o.invoice));
-        setDeletedOrders((prev) => [
+        commitDeletedOrders((prev) => [
           { ...o, deletedAt: todayISO(), deletedBy: me.name, deleteReason: reason },
           ...prev
         ]);
@@ -857,10 +896,29 @@ export default function PurchasingDashboard({
       }
     });
 
-  const restoreOrder = (o) => {
-    setDeletedOrders((prev) => prev.filter((x) => x.invoice !== o.invoice));
+  const restoreOrder = async (o) => {
+    const targetId = dbId(o) || (num(o.id) > 0 ? num(o.id) : null) || o.invoice;
+    let restoredServerOrder = null;
+    if (targetId) {
+      try {
+        const res = await api.management.restoreOrder(targetId);
+        restoredServerOrder = res?.data || null;
+      } catch (err) {
+        return serverFail(err, `Memulihkan pesanan ${o.invoice}`);
+      }
+    }
+    commitDeletedOrders((prev) => prev.filter((x) => x.invoice !== o.invoice));
     setTrashSelected((prev) => prev.filter((inv) => inv !== o.invoice));
-    commitOrders((prev) => [{ ...o, deletedAt: '', deletedBy: '', deleteReason: '' }, ...prev]);
+    commitOrders((prev) => [
+      {
+        ...o,
+        deletedAt: '',
+        deletedBy: '',
+        deleteReason: '',
+        ...(restoredServerOrder ? { backendId: restoredServerOrder.id, id: restoredServerOrder.id } : {})
+      },
+      ...prev
+    ]);
     if (o.marketingStatus !== MKT.TOLAK) adjustQuota(o, num(o.qty));
     toast(`${o.invoice} berhasil dipulihkan.`);
   };
@@ -871,10 +929,10 @@ export default function PurchasingDashboard({
       try {
         await api.management.deleteOrder(targetId);
       } catch (err) {
-        console.warn(`Hapus order dari server gagal (${o.invoice}):`, err);
+        return serverFail(err, `Menghapus permanen ${o.invoice}`);
       }
     }
-    setDeletedOrders((prev) => prev.filter((x) => x.invoice !== o.invoice));
+    commitDeletedOrders((prev) => prev.filter((x) => x.invoice !== o.invoice));
     setTrashSelected((prev) => prev.filter((inv) => inv !== o.invoice));
     if (detailInvoice === o.invoice) setDetailInvoice(null);
     toast(`Pesanan ${o.invoice} berhasil dihapus permanen.`, 'warning');
@@ -907,7 +965,7 @@ export default function PurchasingDashboard({
             return targetId ? api.management.deleteOrder(targetId) : Promise.resolve();
           })
         );
-        setDeletedOrders([]);
+        commitDeletedOrders([]);
         setTrashSelected([]);
         setDetailInvoice(null);
         toast('Seluruh pesanan di arsip terhapus berhasil dihapus permanen.', 'warning');
@@ -931,7 +989,7 @@ export default function PurchasingDashboard({
             return targetId ? api.management.deleteOrder(targetId) : Promise.resolve();
           })
         );
-        setDeletedOrders((prev) => prev.filter((o) => !trashSelected.includes(o.invoice)));
+        commitDeletedOrders((prev) => prev.filter((o) => !trashSelected.includes(o.invoice)));
         setTrashSelected([]);
         if (trashSelected.includes(detailInvoice)) setDetailInvoice(null);
         toast(`${targets.length} pesanan berhasil dihapus permanen.`, 'warning');
@@ -939,19 +997,33 @@ export default function PurchasingDashboard({
     });
   };
 
-  const restoreSelectedTrash = () => {
+  const restoreSelectedTrash = async () => {
     if (trashSelected.length === 0) return;
     const targets = deletedOrders.filter((o) => trashSelected.includes(o.invoice));
-    setDeletedOrders((prev) => prev.filter((o) => !trashSelected.includes(o.invoice)));
+    const settled = await Promise.allSettled(
+      targets.map((o) => {
+        const targetId = dbId(o) || (num(o.id) > 0 ? num(o.id) : null) || o.invoice;
+        return targetId ? api.management.restoreOrder(targetId) : Promise.resolve();
+      })
+    );
+    const restoredInvoices = new Set();
+    targets.forEach((o, idx) => {
+      if (settled[idx]?.status === 'fulfilled') restoredInvoices.add(o.invoice);
+    });
+    if (!restoredInvoices.size) {
+      return toast('Gagal memulihkan pesanan terpilih dari server.', 'error');
+    }
+    const restoredTargets = targets.filter((o) => restoredInvoices.has(o.invoice));
+    commitDeletedOrders((prev) => prev.filter((o) => !restoredInvoices.has(o.invoice)));
     commitOrders((prev) => [
-      ...targets.map((o) => ({ ...o, deletedAt: '', deletedBy: '', deleteReason: '' })),
+      ...restoredTargets.map((o) => ({ ...o, deletedAt: '', deletedBy: '', deleteReason: '' })),
       ...prev
     ]);
-    targets.forEach((o) => {
+    restoredTargets.forEach((o) => {
       if (o.marketingStatus !== MKT.TOLAK) adjustQuota(o, num(o.qty));
     });
     setTrashSelected([]);
-    toast(`${targets.length} pesanan berhasil dipulihkan.`);
+    toast(`${restoredTargets.length} pesanan berhasil dipulihkan.`);
   };
 
   const addDraft = () => {
@@ -1078,6 +1150,8 @@ export default function PurchasingDashboard({
     // Sinkronkan ke API backend secara asinkron
     Promise.allSettled(
       created.map(async (item) => {
+        const addonTotal = (item.addon || 0) * item.qty;
+        const netFee = addonTotal - (item.discountNominal || 0);
         const payload = {
           user_id: dbId(item.mitraId) || (typeof item.mitraId === 'number' ? item.mitraId : null),
           order_number: item.invoice,
@@ -1086,30 +1160,57 @@ export default function PurchasingDashboard({
           shipping_cost: item.ongkir || 0,
           total_amount: (item.subtotal || 0) + (item.ongkir || 0),
           notes: item.notes,
-          status: 'Menunggu ACC Marketing',
+          status: 'Menunggu DP',
+          marketing_status: 'ACC',
+          marketing_by: me.name,
           items: [{
             product_id: dbId(item.produkId) || item.produkId,
             product_variant_id: dbId(item.variantId) || (typeof item.variantId === 'number' ? item.variantId : null),
             quantity: item.qty,
             unit_price: item.price,
-            addon_nominal: item.addon || 0,
-            fee: item.feeMitraNominal || 0,
-            discount_nominal: item.discountNominal || 0
+            addon_nominal: addonTotal,
+            fee: netFee,
+            discount_nominal: item.discountNominal || 0,
+            subtotal: item.subtotal
           }]
         };
         const res = await api.management.createOrder(payload);
-        if (res?.data?.id) {
+        const srv = res?.data;
+        if (srv?.id) {
+          const srvInv = srv.invoice || {};
+          const insts = Array.isArray(srvInv.installments) ? srvInv.installments : [];
+          const dpInst = insts.find((x) => x.sequence === 1 || String(x.type || '').toLowerCase().includes('dp'));
+          const pelInst = insts.slice().reverse().find((x) => x.sequence > 1 || String(x.type || '').toLowerCase().includes('lunas'));
+          const instMap = {};
+          insts.forEach((x) => {
+            if (x.id && x.type) instMap[String(x.type).toLowerCase()] = x.id;
+            if (x.id && x.sequence) instMap[`stage-${x.sequence}`] = x.id;
+          });
           commitOrders((prev) =>
             prev.map((o) =>
               o.invoice === item.invoice
-                ? { ...o, id: res.data.id, backendId: res.data.id, orderNo: res.data.order_number }
+                ? {
+                    ...o,
+                    id: srv.id,
+                    backendId: srv.id,
+                    invoice: srv.order_number || o.invoice,
+                    orderNo: srv.order_number || o.invoice,
+                    invoiceId: srv.invoice_id ?? srvInv.id ?? null,
+                    invoiceNumber: srv.invoice_number || srvInv.invoice_number || '',
+                    dpInstallmentId: dpInst?.id ?? null,
+                    pelunasanInstallmentId: pelInst?.id ?? null,
+                    installmentIds: instMap
+                  }
                 : o
             )
           );
         }
       })
-    ).catch((err) => {
-      console.warn('Gagal menyimpan pesanan manual ke server:', err);
+    ).then((results) => {
+      const failed = results.filter((r) => r.status === 'rejected');
+      if (failed.length) {
+        toast(`${failed.length} pesanan manual gagal tersimpan ke server.`, 'error');
+      }
     });
   };
 
@@ -2446,7 +2547,7 @@ export default function PurchasingDashboard({
       return serverFail(err, `Mengubah status mitra ${m.name}`);
     }
     commitMitra((prev) => prev.map((x) => (x.id === m.id ? { ...x, active: !x.active } : x)));
-    toast(`${m.name} ${m.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
+    toast(`${m.name} ${m.active ? 'dinonaktifkan' : 'di-ACC dan diaktifkan'}.`);
   };
 
   const deleteMitra = (m) => {
@@ -2592,7 +2693,7 @@ export default function PurchasingDashboard({
     reader.readAsDataURL(file);
   };
 
-  const resetProofForm = () =>
+  const resetProofForm = () => {
     setProofForm((prev) => ({
       ...prev,
       nominal: '',
@@ -2601,93 +2702,141 @@ export default function PurchasingDashboard({
       proof: '',
       proofFile: null
     }));
+    setProofInputKey((k) => k + 1);
+  };
 
   const submitProofForm = async (e) => {
     e.preventDefault();
+    if (isSubmittingProof) return;
     const f = proofForm;
     const nominal = num(f.nominal);
     if (!f.mitraId) return toast('Pilih mitra.', 'error');
     if (!nominal) return toast('Nominal harus lebih dari 0.', 'error');
+    if (f.kind === 'Deposit' && nominal < 1000) return toast('Nominal deposit minimal Rp 1.000.', 'error');
     if (f.kind !== 'Deposit' && !f.invoice) return toast('Pilih invoice terkait.', 'error');
-    if (!f.proofFile) return toast('Berkas bukti transfer wajib dipilih.', 'error');
 
-    const m = mitra.find((x) => x.id === f.mitraId);
+    const m = mitra.find((x) => String(x.id) === String(f.mitraId));
     if (!m) return toast('Mitra tidak ditemukan.', 'error');
     const mitraDbId = dbId(m);
     if (!mitraDbId) return notOnServer(`Mitra ${m.name}`);
-    const bank = bankAccounts.find((b) => b.id === f.bankId);
 
-    let proofPath = '';
+    const activeBanks = (bankAccounts || []).filter((b) => b.active !== false);
+    const bank =
+      bankAccounts.find((b) => String(b.id) === String(f.bankId)) ||
+      activeBanks[0] ||
+      null;
+
+    setIsSubmittingProof(true);
     try {
-      const uploaded = await api.management.uploadFile(f.proofFile, 'proof');
-      proofPath = uploaded?.data?.path || '';
-    } catch (err) {
-      return serverFail(err, 'Mengunggah bukti transfer');
-    }
-    if (!proofPath) return toast('Bukti transfer tidak tersimpan di server.', 'error');
+      let proofPath = '';
+      if (f.proofFile) {
+        try {
+          const uploaded = await api.management.uploadFile(f.proofFile, 'proof');
+          proofPath = uploaded?.data?.path || '';
+        } catch (err) {
+          return serverFail(err, 'Mengunggah bukti transfer');
+        }
+        if (!proofPath) return toast('Bukti transfer tidak tersimpan di server.', 'error');
+      }
 
-    if (f.kind === 'Deposit') {
-      let created;
+      if (f.kind === 'Deposit') {
+        let created;
+        try {
+          created = await api.management.createDeposit({
+            user_id: mitraDbId,
+            bank_account_id: dbId(bank) || bank?.backendId || null,
+            amount: nominal,
+            date: f.date || undefined,
+            proof_url: proofPath || '',
+            description: f.refNo ? `Ref ${f.refNo} — input purchasing` : 'Input manual admin purchasing'
+          });
+        } catch (err) {
+          return serverFail(err, `Deposit ${m.name}`);
+        }
+        const row = created?.data;
+        commitDeposits((prev) => [
+          {
+            id: row?.id != null ? `dep-${row.id}` : uid('dep'),
+            backendId: row?.id ?? null,
+            mitraId: m.id,
+            mitraName: m.name,
+            date: f.date || todayISO(),
+            nominal,
+            bank: row?.bank || bank?.bank || '-',
+            accountNo: row?.bank_account || '',
+            proof: row?.proof_url || proofPath ? mediaUrl(row?.proof_url || proofPath) : '',
+            status: PAY.MENUNGGU,
+            verifiedBy: '',
+            note: row?.description || f.refNo || 'Input manual admin purchasing'
+          },
+          ...prev
+        ]);
+        toast(`Deposit ${rp(nominal)} ${m.name} tersimpan dan menunggu verifikasi finance.`);
+        resetProofForm();
+        return;
+      }
+
+      const o = orders.find((x) => x.invoice === f.invoice);
+      if (!o) return toast('Invoice tidak ditemukan.', 'error');
+      const statusKey = { DP: 'dpStatus', Pelunasan: 'pelunasanStatus', Ongkir: 'ongkirStatus' }[f.kind];
+      const proofKey = { DP: 'dpProof', Pelunasan: 'pelunasanProof', Ongkir: 'ongkirProof' }[f.kind];
+      const paymentIdKey = { DP: 'dpPaymentId', Pelunasan: 'pelunasanPaymentId', Ongkir: 'ongkirPaymentId' }[f.kind];
+      const bankKey = { DP: 'dpBank', Pelunasan: 'pelunasanBank', Ongkir: 'ongkirBank' }[f.kind];
+      const noteKey = { DP: 'dpNote', Pelunasan: 'pelunasanNote', Ongkir: 'ongkirNote' }[f.kind];
+
+      const orderNumericId = dbId(o) || (Number.isInteger(o.backendId) ? o.backendId : null);
+      let payRes = null;
       try {
-        created = await api.management.createDeposit({
-          user_id: mitraDbId,
-          bank_account_id: dbId(bank) || null,
+        payRes = await api.management.createPayment({
+          ...(orderNumericId ? { order_id: orderNumericId } : {}),
+          invoice_number: o.invoiceNumber || '',
+          order_number: o.invoice,
+          installment_id:
+            f.kind === 'DP' ? o.dpInstallmentId || null : f.kind === 'Pelunasan' ? o.pelunasanInstallmentId || null : null,
+          stage: f.kind.toLowerCase(),
           amount: nominal,
-          proof_url: proofPath,
-          description: f.refNo ? `Ref ${f.refNo} — input purchasing` : 'Input manual admin purchasing'
+          bank_account_id: dbId(bank) || bank?.backendId || null,
+          bank_name: bank?.bank || '',
+          account_number: bank?.accountNo || '',
+          date: f.date || undefined,
+          note: f.refNo || 'Input manual admin purchasing',
+          proof_url: proofPath || ''
         });
       } catch (err) {
-        return serverFail(err, `Deposit ${m.name}`);
+        return serverFail(err, `Bukti ${f.kind} ${o.invoice}`);
       }
-      const row = created?.data;
-      commitDeposits((prev) => [
-        {
-          id: row?.id != null ? `dep-${row.id}` : uid('dep'),
-          backendId: row?.id ?? null,
-          mitraId: m.id,
-          mitraName: m.name,
-          date: f.date,
-          nominal,
-          bank: row?.bank || bank?.bank || '-',
-          accountNo: row?.bank_account || '',
-          proof: mediaUrl(row?.proof_url || proofPath),
-          status: PAY.MENUNGGU,
-          verifiedBy: '',
-          note: row?.description || f.refNo || 'Input manual admin purchasing'
-        },
-        ...prev
-      ]);
-      toast(`Deposit ${rp(nominal)} ${m.name} tersimpan dan menunggu verifikasi finance.`);
+
+      const serverOrder = payRes?.order || payRes?.data?.order || null;
+      if (serverOrder) {
+        const mappedCore = projectOrderToCore(
+          mapOrderToProjectOrder(serverOrder, currentUser || {}),
+          { currentUser, seedMitra: mitra, products: productsProp || seed.products }
+        );
+        commitOrders((prev) =>
+          prev.map((x) => (x.invoice === o.invoice ? { ...x, ...mappedCore } : x))
+        );
+      } else {
+        const createdPayId = payRes?.data?.payment?.id ?? payRes?.data?.id ?? null;
+        commitOrders((prev) =>
+          prev.map((x) =>
+            x.invoice === o.invoice
+              ? {
+                  ...x,
+                  [statusKey]: PAY.MENUNGGU,
+                  [proofKey]: proofPath ? mediaUrl(proofPath) : '',
+                  [bankKey]: bank?.bank || x[bankKey] || '',
+                  [noteKey]: f.refNo || x[noteKey] || '',
+                  ...(createdPayId ? { [paymentIdKey]: createdPayId } : {})
+                }
+              : x
+          )
+        );
+      }
+      toast(`Bukti ${f.kind} ${o.invoice} tersimpan. Menunggu verifikasi finance.`);
       resetProofForm();
-      return;
+    } finally {
+      setIsSubmittingProof(false);
     }
-
-    const o = orders.find((x) => x.invoice === f.invoice);
-    if (!o) return toast('Invoice tidak ditemukan.', 'error');
-    const statusKey = { DP: 'dpStatus', Pelunasan: 'pelunasanStatus', Ongkir: 'ongkirStatus' }[f.kind];
-    const proofKey = { DP: 'dpProof', Pelunasan: 'pelunasanProof', Ongkir: 'ongkirProof' }[f.kind];
-
-    try {
-      await api.management.createPayment({
-        invoice_number: o.invoiceNumber || '',
-        order_number: o.invoice,
-        installment_id:
-          f.kind === 'DP' ? o.dpInstallmentId || null : f.kind === 'Pelunasan' ? o.pelunasanInstallmentId || null : null,
-        stage: f.kind,
-        amount: nominal,
-        proof_url: proofPath
-      });
-    } catch (err) {
-      return serverFail(err, `Bukti ${f.kind} ${o.invoice}`);
-    }
-
-    commitOrders((prev) =>
-      prev.map((x) =>
-        x.invoice === o.invoice ? { ...x, [statusKey]: PAY.MENUNGGU, [proofKey]: mediaUrl(proofPath) } : x
-      )
-    );
-    toast(`Bukti ${f.kind} ${o.invoice} tersimpan. Menunggu verifikasi finance.`);
-    resetProofForm();
   };
 
   const reviewPR = async (req, decision, note) => {
@@ -3270,6 +3419,9 @@ export default function PurchasingDashboard({
             proofForm={proofForm}
             setProofForm={setProofForm}
             submitProofForm={submitProofForm}
+            resetProofForm={resetProofForm}
+            isSubmittingProof={isSubmittingProof}
+            proofInputKey={proofInputKey}
             mitra={mitra}
             orders={orders}
             bankAccounts={bankAccounts}

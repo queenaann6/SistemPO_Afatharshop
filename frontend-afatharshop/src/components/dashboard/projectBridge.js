@@ -192,11 +192,11 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       ? Boolean(order.aturSebelumKirim)
       : (order.ongkir === 0 || !order.ongkir || String(order.courier || order.ekspedisi || '').includes('Sebelum'));
     const ongkir = aturSebelumKirim ? 0 : (hasShipping ? num(order.ongkir) : 0);
-    const address = flags.dpPaid
-      ? order.mitraAddress ||
-        order.recipientAddress ||
-        (orderCity ? `Kota ${orderCity}` : null)
-      : null;
+    const address =
+      order.mitraAddress ||
+      order.address ||
+      order.recipientAddress ||
+      (flags.dpPaid && orderCity ? `Kota ${orderCity}` : null);
     const invoice = order.orderNo || order.id || `INV-${Date.now()}`;
     const paymentPlan =
       cleanPaymentStages(order.paymentStages) ||
@@ -260,30 +260,45 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       dpStatus: order.dpStatus || (flags.rejected ? PAY.TOLAK : flags.dpPaid ? PAY.ACC : PAY.BELUM),
       dpProof: order.dpProof || '',
       dpPaymentId: order.dpPaymentId ?? null,
+      dpBank: order.dpBank || '',
+      dpBankAccount: order.dpBankAccount || '',
+      dpNote: order.dpNote || '',
+      isDpDeposit: Boolean(order.isDpDeposit),
+      dpSubmittedAt: order.dpSubmittedAt ? parseProjectDate(order.dpSubmittedAt) : '',
       dpVerifiedBy: flags.dpPaid ? 'Admin Finance' : '',
-      dpVerifiedAt: flags.dpPaid ? date : '',
+      dpVerifiedAt: order.dpVerifiedAt ? parseProjectDate(order.dpVerifiedAt) : (flags.dpPaid ? date : ''),
       pelunasanStatus: order.pelunasanStatus || (flags.paid ? PAY.ACC : PAY.BELUM),
       pelunasanProof: order.pelunasanProof || '',
       pelunasanPaymentId: order.pelunasanPaymentId ?? null,
+      pelunasanBank: order.pelunasanBank || '',
+      pelunasanBankAccount: order.pelunasanBankAccount || '',
+      pelunasanNote: order.pelunasanNote || '',
+      isPelunasanDeposit: Boolean(order.isPelunasanDeposit),
+      pelunasanSubmittedAt: order.pelunasanSubmittedAt ? parseProjectDate(order.pelunasanSubmittedAt) : '',
       pelunasanVerifiedBy: flags.paid ? 'Admin Finance' : '',
-      pelunasanVerifiedAt: flags.paid ? date : '',
+      pelunasanVerifiedAt: order.pelunasanVerifiedAt ? parseProjectDate(order.pelunasanVerifiedAt) : (flags.paid ? date : ''),
       ongkir,
-      ongkirAt: flags.paid ? date : '',
+      ongkirAt: order.ongkirAt ? parseProjectDate(order.ongkirAt) : (ongkir > 0 || flags.paid ? date : ''),
       ekspedisi: order.courier || (aturSebelumKirim ? 'Ditentukan Sebelum Pengiriman' : ''),
       aturSebelumKirim,
-      weight: `${Math.max(1, Math.round(qty * 0.4))} kg`,
-      shippingNote: '',
+      weight: order.weight ? `${order.weight} kg` : `${Math.max(1, Math.round(qty * 0.4))} kg`,
+      shippingNote: order.shippingNote || '',
       ongkirStatus: order.ongkirStatus || (flags.paid ? PAY.ACC : PAY.BELUM),
       ongkirProof: order.ongkirProof || '',
       ongkirPaymentId: order.ongkirPaymentId ?? null,
+      ongkirBank: order.ongkirBank || '',
+      ongkirBankAccount: order.ongkirBankAccount || '',
+      ongkirNote: order.ongkirNote || '',
+      isOngkirDeposit: Boolean(order.isOngkirDeposit),
+      ongkirSubmittedAt: order.ongkirSubmittedAt ? parseProjectDate(order.ongkirSubmittedAt) : '',
       ongkirVerifiedBy: flags.paid ? 'Admin Finance' : '',
-      ongkirVerifiedAt: flags.paid ? date : '',
+      ongkirVerifiedAt: order.ongkirVerifiedAt ? parseProjectDate(order.ongkirVerifiedAt) : (flags.paid ? date : ''),
       resi: order.trackingNumber || order.resi || '',
       senderName: order.senderName || '',
       senderPhone: order.senderPhone || '',
       senderNotes: order.senderNotes || '',
-      shippedAt: flags.shipped ? date : '',
-      receivedAt: flags.done ? date : '',
+      shippedAt: order.shippedAt ? parseProjectDate(order.shippedAt) : (flags.shipped ? date : ''),
+      receivedAt: order.receivedAt ? parseProjectDate(order.receivedAt) : (flags.done ? date : ''),
       shipStatus: flags.done ? SHIP.DITERIMA : flags.shipped ? SHIP.DIKIRIM : flags.paid ? SHIP.SIAP : SHIP.BELUM,
       marketingStatus: order.marketingStatus
         ? order.marketingStatus
@@ -293,18 +308,21 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
             ? MKT.ACC
             : MKT.PENDING,
 
-      marketingNote: '',
-      marketingBy: flags.dpPaid ? 'Admin Marketing' : '',
-      marketingAt: flags.dpPaid ? date : '',
+      marketingNote: order.marketingNote || '',
+      marketingBy: order.marketingBy || (flags.dpPaid ? 'Admin Marketing' : ''),
+      marketingAt: order.marketingAt ? parseProjectDate(order.marketingAt) : (flags.dpPaid ? date : ''),
       productionStatus: order.productionStatus || (flags.paid ? PROD.READY : flags.dpPaid ? PROD.RUN : PROD.QUEUE),
-      readyAt: order.readyAt || (flags.paid ? date : ''),
+      readyAt: order.readyAt ? parseProjectDate(order.readyAt) : (flags.paid ? date : ''),
       addressConfirmed: Boolean(order.addressConfirmed || (num(order.ongkir) > 0)),
       addressSubmitted: Boolean(order.addressSubmitted || (num(order.ongkir) > 0)),
       address,
       createdBy: 'Checkout Mitra',
       notes: order.note || '',
       revisionNote: '',
-      cancelReason: flags.rejected ? 'Pesanan dibatalkan mitra' : '',
+      cancelReason: flags.rejected ? (order.marketingNote || 'Pesanan ditolak/dibatalkan') : '',
+      deletedAt: order.deletedAt ? parseProjectDate(order.deletedAt) : '',
+      deletedBy: order.deletedBy || '',
+      deleteReason: order.deleteReason || '',
       _projectMeta: {
         items,
         image: order.image,
@@ -468,19 +486,31 @@ export const coreOrdersToProject = (coreOrders) =>
       dpStatus: order.dpStatus,
       dpProof: order.dpProof,
       dpBank: order.dpBank,
+      dpBankAccount: order.dpBankAccount || '',
       dpNote: order.dpNote,
       dpSubmittedAt: order.dpSubmittedAt,
+      dpPaymentId: order.dpPaymentId ?? null,
+      isDpDeposit: !!order.isDpDeposit,
       pelunasanStatus: order.pelunasanStatus,
       pelunasanProof: order.pelunasanProof,
       pelunasanBank: order.pelunasanBank,
+      pelunasanBankAccount: order.pelunasanBankAccount || '',
       pelunasanNote: order.pelunasanNote,
       pelunasanSubmittedAt: order.pelunasanSubmittedAt,
+      pelunasanPaymentId: order.pelunasanPaymentId ?? null,
+      isPelunasanDeposit: !!order.isPelunasanDeposit,
       ongkirStatus: order.ongkirStatus,
       ongkirProof: order.ongkirProof,
       ongkirBank: order.ongkirBank,
+      ongkirBankAccount: order.ongkirBankAccount || '',
       ongkirNote: order.ongkirNote,
       ongkirSubmittedAt: order.ongkirSubmittedAt,
+      ongkirPaymentId: order.ongkirPaymentId ?? null,
+      isOngkirDeposit: !!order.isOngkirDeposit,
       marketingStatus: order.marketingStatus,
+      marketingBy: order.marketingBy || '',
+      marketingAt: order.marketingAt || '',
+      marketingNote: order.marketingNote || '',
       stage,
       // === Keterhubungan invoice ↔ dashboard mitra ===
       paymentStages: meta.paymentStagesDetailed || order.stageDetails || null,
@@ -494,7 +524,15 @@ export const coreOrdersToProject = (coreOrders) =>
       addressObject: order.addressObject ?? null,
       productionStatus: order.productionStatus || '',
       readyAt: order.readyAt || '',
+      weight: order.weight ?? null,
+      shippingNote: order.shippingNote || '',
+      ongkirAt: order.ongkirAt || '',
+      shippedAt: order.shippedAt || '',
+      receivedAt: order.receivedAt || '',
       trackingNumber: order.resi || '',
+      deletedAt: order.deletedAt || '',
+      deletedBy: order.deletedBy || '',
+      deleteReason: order.deleteReason || '',
       senderName: order.senderName || '',
       senderPhone: order.senderPhone || '',
       senderNotes: order.senderNotes || '',
@@ -812,18 +850,21 @@ export const couriersToCore = (couriers) =>
   }));
 
 export const paymentToCorePatch = (order, payment) => {
+  const stageHint = String(payment?.stage || '').toLowerCase();
   const title = String(payment?.title || '').toLowerCase();
-  const kind = title.includes('ongkir')
-    ? 'ongkir'
-    : title.includes('pelunasan') || title.includes('lunas')
-    ? 'pelunasan'
-    : title.includes('dp')
-    ? 'dp'
-    : !order.dpStatus || order.dpStatus !== PAY.ACC
-    ? 'dp'
-    : order.pelunasanStatus !== PAY.ACC
-    ? 'pelunasan'
-    : 'ongkir';
+  const kind = ['dp', 'pelunasan', 'ongkir'].includes(stageHint)
+    ? stageHint
+    : title.includes('ongkir')
+      ? 'ongkir'
+      : title.includes('pelunasan') || title.includes('lunas')
+        ? 'pelunasan'
+        : title.includes('dp')
+          ? 'dp'
+          : !order.dpStatus || order.dpStatus !== PAY.ACC
+            ? 'dp'
+            : order.pelunasanStatus !== PAY.ACC
+              ? 'pelunasan'
+              : 'ongkir';
 
   if (kind === 'dp') {
     return {
@@ -832,7 +873,8 @@ export const paymentToCorePatch = (order, payment) => {
       dpNominal: num(payment.nominal) || order.dpNominal,
       dpBank: payment.bank || '',
       dpNote: payment.note || '',
-      dpSubmittedAt: todayISO()
+      dpSubmittedAt: todayISO(),
+      ...(payment.paymentId ? { dpPaymentId: payment.paymentId } : {})
     };
   }
   if (kind === 'pelunasan') {
@@ -842,7 +884,8 @@ export const paymentToCorePatch = (order, payment) => {
       pelunasanSubmittedNominal: num(payment.nominal),
       pelunasanBank: payment.bank || '',
       pelunasanNote: payment.note || '',
-      pelunasanSubmittedAt: todayISO()
+      pelunasanSubmittedAt: todayISO(),
+      ...(payment.paymentId ? { pelunasanPaymentId: payment.paymentId } : {})
     };
   }
   return {
@@ -851,7 +894,8 @@ export const paymentToCorePatch = (order, payment) => {
     ongkirSubmittedNominal: num(payment.nominal),
     ongkirBank: payment.bank || '',
     ongkirNote: payment.note || '',
-    ongkirSubmittedAt: todayISO()
+    ongkirSubmittedAt: todayISO(),
+    ...(payment.paymentId ? { ongkirPaymentId: payment.paymentId } : {})
   };
 };
 

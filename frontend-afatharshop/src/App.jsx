@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import Header from './components/Header';
 import HeroBanner from './components/HeroBanner';
 import FilterSection from './components/FilterSection';
@@ -17,7 +17,6 @@ import SuccessAddToCartModal from './components/SuccessAddToCartModal';
 import ProfileModal from './components/ProfileModal';
 import OrdersModal from './components/OrdersModal';
 import WishlistModal from './components/WishlistModal';
-import ErrorBoundary from './components/ErrorBoundary';
 import MitraDashboard from './components/dashboard/mitra/MitraDashboard';
 import PurchasingDashboard from './components/dashboard/purchasing/PurchasingDashboard';
 import FinanceDashboard from './components/dashboard/finance/FinanceDashboard';
@@ -234,12 +233,20 @@ export default function App() {
   const [poPaymentRequests, setPoPaymentRequests] = useState(poSeed.paymentRequests);
   const [poLedger, setPoLedger] = useState(poSeed.ledger);
   const [poSettings, setPoSettings] = useState(poSeed.settings);
+  const [poTrashedOrders, setPoTrashedOrders] = useState([]);
   const [mitraPayments, setMitraPayments] = useState([]);
   const mitraOrders = useMemo(() => coreOrdersToProject(coreOrders), [coreOrders]);
 
   // Live synchronous balance & total bill computation for the active user
   const computedUserBalance = useMemo(() => {
     if (!currentUser || (activeRole?.id && activeRole.id !== 'mitra')) return 'Rp 0';
+    if (
+      sessionToken &&
+      currentUser?.deposit_balance !== undefined &&
+      currentUser?.deposit_balance !== null
+    ) {
+      return `Rp ${Math.round(Math.max(0, Number(currentUser.deposit_balance) || 0)).toLocaleString('id-ID')}`;
+    }
     if (currentUser?.deposit_balance !== undefined && Number(currentUser.deposit_balance) > 0) {
       return `Rp ${Math.round(Number(currentUser.deposit_balance)).toLocaleString('id-ID')}`;
     }
@@ -261,11 +268,8 @@ export default function App() {
     if (userAccDeposits > 0) {
       return `Rp ${Math.round(userAccDeposits).toLocaleString('id-ID')}`;
     }
-    if (currentUser?.deposit_balance !== undefined) {
-      return `Rp ${Math.round(Number(currentUser.deposit_balance)).toLocaleString('id-ID')}`;
-    }
     return 'Rp 0';
-  }, [poMitra, poDeposits, currentUser, activeRole?.id]);
+  }, [poMitra, poDeposits, currentUser, activeRole?.id, sessionToken]);
 
   const computedUserTotalBill = useMemo(() => {
     if (!currentUser || (activeRole?.id && activeRole.id !== 'mitra')) return 'Rp 0';
@@ -324,7 +328,30 @@ export default function App() {
 
   // Mitra Upload Proof -> masuk ke antrean verifikasi Finance pada order yang sama
   const handleUploadPayment = (paymentData) => {
-    setCoreOrders((prev) => projectPaymentToCoreOrder(prev, paymentData));
+    setCoreOrders((prev) => {
+      if (paymentData?.serverOrder) {
+        const mappedCore = projectOrderToCore(
+          mapOrderToProjectOrder(paymentData.serverOrder, currentUser || {}),
+          { currentUser, seedMitra: poSeed.mitra, products }
+        );
+        const found = prev.some(
+          (o) =>
+            o.invoice === mappedCore.invoice ||
+            o.orderNo === mappedCore.orderNo ||
+            String(o.id) === String(mappedCore.id)
+        );
+        return found
+          ? prev.map((o) =>
+              o.invoice === mappedCore.invoice ||
+              o.orderNo === mappedCore.orderNo ||
+              String(o.id) === String(mappedCore.id)
+                ? mappedCore
+                : o
+            )
+          : [mappedCore, ...prev];
+      }
+      return projectPaymentToCoreOrder(prev, paymentData);
+    });
     setToast({
       show: true,
       message: `Bukti pembayaran ${paymentData.orderNo} berhasil dikirim ke Admin Finance untuk validasi mutasi.`
@@ -332,6 +359,9 @@ export default function App() {
     if (tokenStore.get()) {
       api.my.payments().then((res) => {
         if (Array.isArray(res?.data)) setMitraPayments(res.data);
+      }).catch(() => {});
+      api.my.notifications().then((res) => {
+        if (Array.isArray(res?.data)) setNotifications(res.data.map(mapNotificationToHeader));
       }).catch(() => {});
     }
   };
@@ -352,14 +382,26 @@ export default function App() {
   };
 
   // Mitra Membayar Tagihan menggunakan Saldo Deposit (Potong Saldo & Langsung ACC)
-  const handlePayWithDeposit = ({ orderNo, billTitle, amount, billType, depositBalance }) => {
+  const handlePayWithDeposit = ({
+    orderNo,
+    billTitle,
+    amount,
+    billType,
+    depositBalance,
+    serverOrder,
+    paymentId
+  }) => {
     const uName = String(currentUser?.name || 'Mitra').toLowerCase();
     const currentBalance =
-      Number(String(currentUser?.balance || '').replace(/[^0-9]/g, '')) || 0;
+      currentUser?.deposit_balance !== undefined && currentUser?.deposit_balance !== null
+        ? Number(currentUser.deposit_balance) || 0
+        : Number(String(currentUser?.balance || '').replace(/[^0-9]/g, '')) || 0;
     const nextBalance =
       depositBalance !== null && depositBalance !== undefined
-        ? Number(depositBalance)
+        ? Math.max(0, Number(depositBalance))
         : Math.max(0, currentBalance - (Number(amount) || 0));
+
+    setCurrentUser((prev) => (prev ? { ...prev, deposit_balance: nextBalance } : prev));
     setPoMitra((prev) =>
       prev.map((m) => {
         if (m.name.toLowerCase().includes(uName) || uName.includes(m.name.toLowerCase())) {
@@ -368,30 +410,61 @@ export default function App() {
         return m;
       })
     );
-    setCoreOrders((prev) =>
-      prev.map((order) => {
-        if (order.invoice !== orderNo && !orderNo.includes(order.invoice)) return order;
+    setCoreOrders((prev) => {
+      if (serverOrder) {
+        const mappedCore = projectOrderToCore(
+          mapOrderToProjectOrder(serverOrder, currentUser || {}),
+          { currentUser, seedMitra: poSeed.mitra, products }
+        );
+        const found = prev.some(
+          (o) =>
+            o.invoice === mappedCore.invoice ||
+            o.orderNo === mappedCore.orderNo ||
+            String(o.id) === String(mappedCore.id)
+        );
+        return found
+          ? prev.map((o) =>
+              o.invoice === mappedCore.invoice ||
+              o.orderNo === mappedCore.orderNo ||
+              String(o.id) === String(mappedCore.id)
+                ? mappedCore
+                : o
+            )
+          : [mappedCore, ...prev];
+      }
+      return prev.map((order) => {
+        if (order.invoice !== orderNo && !String(orderNo || '').includes(order.invoice)) return order;
         const patch = {};
+        const stage = String(billType || '').toLowerCase();
         const title = String(billTitle || '').toLowerCase();
-        if (title.includes('dp')) {
+        if (stage === 'dp' || title.includes('dp')) {
           patch.dpStatus = 'ACC';
-          patch.dpBank = 'Saldo Deposit Mitra';
+          patch.dpBank = 'Deposit';
+          patch.dpBankAccount = 'Saldo Deposit Mitra';
           patch.dpNote = 'Lunas otomatis via Saldo Deposit';
           patch.dpPaidAt = new Date().toISOString().slice(0, 10);
-        } else if (title.includes('pelunasan') || title.includes('lunas')) {
+          patch.isDpDeposit = true;
+          if (paymentId) patch.dpPaymentId = paymentId;
+        } else if (stage === 'pelunasan' || title.includes('pelunasan') || title.includes('lunas')) {
           patch.pelunasanStatus = 'ACC';
-          patch.pelunasanBank = 'Saldo Deposit Mitra';
+          patch.pelunasanBank = 'Deposit';
+          patch.pelunasanBankAccount = 'Saldo Deposit Mitra';
           patch.pelunasanNote = 'Lunas otomatis via Saldo Deposit';
           patch.pelunasanPaidAt = new Date().toISOString().slice(0, 10);
+          patch.isPelunasanDeposit = true;
+          if (paymentId) patch.pelunasanPaymentId = paymentId;
         } else {
           patch.ongkirStatus = 'ACC';
-          patch.ongkirBank = 'Saldo Deposit Mitra';
+          patch.ongkirBank = 'Deposit';
+          patch.ongkirBankAccount = 'Saldo Deposit Mitra';
           patch.ongkirNote = 'Lunas otomatis via Saldo Deposit';
           patch.ongkirPaidAt = new Date().toISOString().slice(0, 10);
+          patch.isOngkirDeposit = true;
+          if (paymentId) patch.ongkirPaymentId = paymentId;
         }
         return { ...order, ...patch };
-      })
-    );
+      });
+    });
     setPoLedger((prev) => [
       {
         id: `l-${Date.now()}`,
@@ -408,6 +481,19 @@ export default function App() {
       show: true,
       message: `Tagihan ${orderNo} berhasil dilunasi via Saldo Deposit!`
     });
+    if (tokenStore.get()) {
+      api.my.payments().then((res) => {
+        if (Array.isArray(res?.data)) setMitraPayments(res.data);
+      }).catch(() => {});
+      api.my.deposits().then((res) => {
+        if (Array.isArray(res?.data)) setPoDeposits(res.data.map(mapDepositToCore));
+      }).catch(() => {});
+      api.me().then((res) => {
+        if (res?.data?.deposit_balance !== undefined) {
+          setCurrentUser((prev) => (prev ? { ...prev, deposit_balance: res.data.deposit_balance } : prev));
+        }
+      }).catch(() => {});
+    }
   };
 
   // Sinkronisasi Produk & Brand antara katalog toko dan dashboard Marketing
@@ -550,9 +636,12 @@ export default function App() {
     }
   }, [mitraActiveTab]);
 
-  // Pulihkan sesi JWT yang masih aktif saat halaman di-refresh
+  const productsRef = useRef(products);
+  productsRef.current = products;
+
+  // Pulihkan sesi JWT yang masih aktif saat halaman di-refresh atau login berubah
   useEffect(() => {
-    const token = tokenStore.get();
+    const token = sessionToken || tokenStore.get();
     if (!token) return undefined;
 
     let cancelled = false;
@@ -565,7 +654,6 @@ export default function App() {
         if (!mapped) return;
         const role = ROLES.find((item) => item.id === mapped.roleId) || ROLES[0];
 
-        setSessionToken(token);
         setIsLoggedIn(true);
         setActiveRole(role);
         setCurrentUser((prev) => ({ ...(prev || {}), ...mapped, role: role.name, roleId: role.id }));
@@ -589,7 +677,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sessionToken]);
 
   // Sinkronisasi katalog, brand, kategori, kurir, dan rekening dari backend Laravel
   useEffect(() => {
@@ -667,12 +755,13 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sessionToken]);
 
-  // Tarik riwayat pesanan mitra dari backend setiap sesi JWT aktif
+  // Tarik riwayat pesanan mitra dari backend setiap sesi JWT aktif + auto-sync berkala
   useEffect(() => {
     // Admin memakai endpoint manajemen; endpoint /orders hanya untuk mitra.
-    if (!sessionToken || currentUser?.roleId !== 'mitra') return undefined;
+    const token = sessionToken || tokenStore.get();
+    if (!token || currentUser?.roleId !== 'mitra') return undefined;
 
     let cancelled = false;
 
@@ -681,20 +770,23 @@ export default function App() {
         const response = await api.orders();
         if (cancelled) return;
 
+        const latestProducts = productsRef.current || products;
         const projectOrders = (response?.data || []).map((order) =>
           mapOrderToProjectOrder(order, currentUser || {})
         );
 
-        // Backend tanpa pesanan: pertahankan data demo agar dashboard tetap terisi.
-        if (!projectOrders.length) return;
+        if (!projectOrders.length) {
+          setCoreOrders([]);
+          return;
+        }
 
         const mappedCore = alignCoreOrdersToProducts(
           projectOrdersToCore(projectOrders, {
             currentUser,
             seedMitra: poSeed.mitra,
-            products
+            products: latestProducts
           }),
-          projectProductsToCore(products)
+          projectProductsToCore(latestProducts)
         );
 
         setCoreOrders(mappedCore);
@@ -706,15 +798,26 @@ export default function App() {
     };
 
     syncOrders();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') syncOrders();
+    };
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') syncOrders();
+    }, 20000);
+    window.addEventListener('focus', syncOrders);
+    document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', syncOrders);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [sessionToken, currentUser?.roleId, activeRole?.id, currentPage]);
 
   // Seluruh data operasional dashboard admin berasal dari tabel backend
-  // (pesanan lintas mitra, pengguna, deposit, pembayaran, supplier, batch,
-  // pengajuan, notifikasi, pengaturan). Fallback demo dipakai bila kosong/offline.
+  // (pesanan lintas mitra, pesanan terhapus, pengguna, deposit, pembayaran,
+  // supplier, batch, pengajuan, notifikasi, pengaturan).
   useEffect(() => {
     const rawRole = String(currentUser?.roleId || activeRole?.id || currentUser?.role || '').toLowerCase();
     const isAdminRole =
@@ -751,9 +854,17 @@ export default function App() {
 
       if (cancelled || !snapshot) return;
 
-      const remoteOrders = snapshot.orders || [];
-      if (remoteOrders.length) {
-        const projectOrders = remoteOrders.map((order) =>
+      const latestProducts = Array.isArray(snapshot.products)
+        ? mapProducts({ data: snapshot.products })
+        : (productsRef.current || products);
+
+      if (Array.isArray(snapshot.products)) {
+        setProducts(latestProducts);
+        setPoProducts(projectProductsToCore(latestProducts));
+      }
+
+      if (Array.isArray(snapshot.orders)) {
+        const projectOrders = snapshot.orders.map((order) =>
           mapOrderToProjectOrder(order, currentUser || {})
         );
         setCoreOrders(
@@ -761,9 +872,25 @@ export default function App() {
             projectOrdersToCore(projectOrders, {
               currentUser,
               seedMitra: poSeed.mitra,
-              products
+              products: latestProducts
             }),
-            projectProductsToCore(products)
+            projectProductsToCore(latestProducts)
+          )
+        );
+      }
+
+      if (Array.isArray(snapshot.trashed_orders)) {
+        const trashedProject = snapshot.trashed_orders.map((order) =>
+          mapOrderToProjectOrder(order, currentUser || {})
+        );
+        setPoTrashedOrders(
+          alignCoreOrdersToProducts(
+            projectOrdersToCore(trashedProject, {
+              currentUser,
+              seedMitra: poSeed.mitra,
+              products: latestProducts
+            }),
+            projectProductsToCore(latestProducts)
           )
         );
       }
@@ -780,13 +907,16 @@ export default function App() {
         setPoTeam(teamUsers);
       }
 
-      const remoteDeposits = snapshot.deposits || [];
-      const coreDeposits = remoteDeposits.map(mapDepositToCore);
-      if (coreDeposits.length) setPoDeposits(coreDeposits);
+      if (Array.isArray(snapshot.deposits)) {
+        const coreDeposits = snapshot.deposits.map(mapDepositToCore);
+        setPoDeposits(coreDeposits);
+      }
 
-      const remotePayments = snapshot.payments || [];
-      if (remotePayments.length || coreDeposits.length) {
-        // Deposit ACC ikut tercatat sebagai kas masuk di buku kas.
+      if (Array.isArray(snapshot.payments) || Array.isArray(snapshot.deposits)) {
+        const remotePayments = Array.isArray(snapshot.payments) ? snapshot.payments : [];
+        const coreDeposits = Array.isArray(snapshot.deposits)
+          ? snapshot.deposits.map(mapDepositToCore)
+          : [];
         const depositRows = coreDeposits.map((deposit) => ({
           id: `l-${deposit.id}`,
           backendId: deposit.backendId,
@@ -803,40 +933,39 @@ export default function App() {
         setPoLedger([...remotePayments.map(mapPaymentToLedger), ...depositRows]);
       }
 
-      const remoteSuppliers = snapshot.suppliers || [];
       if (Array.isArray(snapshot.suppliers)) {
-        setPoSuppliers(remoteSuppliers.map(mapSupplier));
+        setPoSuppliers(snapshot.suppliers.map(mapSupplier));
       }
 
-      const remoteBrands = snapshot.brands || [];
-      if (Array.isArray(snapshot.brands) && remoteBrands.length) {
-        const coreBrands = remoteBrands.map(mapBrandToCore);
+      if (Array.isArray(snapshot.brands) && snapshot.brands.length) {
+        const coreBrands = snapshot.brands.map(mapBrandToCore);
         setPoBrands(coreBrands);
         setBrands(coreBrandsToProject(coreBrands));
       }
 
-      const remoteCategories = snapshot.categories || [];
-      if (Array.isArray(snapshot.categories) && remoteCategories.length) {
-        setPoCategories(remoteCategories.map((c) => c.name || c));
+      if (Array.isArray(snapshot.categories) && snapshot.categories.length) {
+        setPoCategories(snapshot.categories.map((c) => c.name || c));
       }
 
-      const remoteProducts = snapshot.products || [];
-      if (Array.isArray(snapshot.products)) {
-        const projectProds = mapProducts({ data: remoteProducts });
-        setProducts(projectProds);
-        setPoProducts(projectProductsToCore(projectProds));
+      if (Array.isArray(snapshot.bank_accounts) && snapshot.bank_accounts.length) {
+        setAdminBankAccounts(snapshot.bank_accounts.map(mapBankAccount));
       }
 
-      const remoteBatches = snapshot.batches || [];
-      if (remoteBatches.length) setPoBatches(remoteBatches.map(mapBatchToCore));
-
-      const remoteRequests = snapshot.payment_requests || [];
-      if (remoteRequests.length) {
-        setPoPaymentRequests(remoteRequests.map(mapPaymentRequestToCore));
+      if (Array.isArray(snapshot.couriers) && snapshot.couriers.length) {
+        setAdminCouriers(snapshot.couriers.map(mapCourier));
       }
 
-      const remoteNotifs = snapshot.notifications || [];
-      if (remoteNotifs.length) setNotifications(remoteNotifs.map(mapNotificationToHeader));
+      if (Array.isArray(snapshot.batches)) {
+        setPoBatches(snapshot.batches.map(mapBatchToCore));
+      }
+
+      if (Array.isArray(snapshot.payment_requests)) {
+        setPoPaymentRequests(snapshot.payment_requests.map(mapPaymentRequestToCore));
+      }
+
+      if (Array.isArray(snapshot.notifications)) {
+        setNotifications(snapshot.notifications.map(mapNotificationToHeader));
+      }
 
       if (snapshot.settings) {
         setPoSettings((prev) => ({ ...prev, ...mapSettings(snapshot.settings) }));
@@ -844,15 +973,27 @@ export default function App() {
     };
 
     syncManagement();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') syncManagement();
+    };
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') syncManagement();
+    }, 20000);
+    window.addEventListener('focus', syncManagement);
+    document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', syncManagement);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [sessionToken, currentUser?.roleId, activeRole?.id, currentPage]);
 
   // Notifikasi, deposit, pembayaran, dan buku alamat mitra mengikuti akun JWT aktif.
   useEffect(() => {
-    if (!sessionToken || currentUser?.roleId !== 'mitra') return undefined;
+    const token = sessionToken || tokenStore.get();
+    if (!token || currentUser?.roleId !== 'mitra') return undefined;
 
     let cancelled = false;
 
@@ -867,25 +1008,26 @@ export default function App() {
         ]);
         if (cancelled) return;
 
-        const remoteNotifs = notifResponse?.data || [];
-        if (remoteNotifs.length) setNotifications(remoteNotifs.map(mapNotificationToHeader));
-
-        const remoteDeposits = depositsRes?.data || [];
-        if (Array.isArray(remoteDeposits) && remoteDeposits.length) {
-          const coreDeposits = remoteDeposits.map(mapDepositToCore);
-          setPoDeposits(coreDeposits);
+        if (Array.isArray(notifResponse?.data)) {
+          setNotifications(notifResponse.data.map(mapNotificationToHeader));
         }
 
-        const remotePayments = paymentsRes?.data || [];
-        if (Array.isArray(remotePayments) && remotePayments.length) {
-          setMitraPayments(remotePayments);
+        if (Array.isArray(depositsRes?.data)) {
+          setPoDeposits(depositsRes.data.map(mapDepositToCore));
+        }
+
+        if (Array.isArray(paymentsRes?.data)) {
+          setMitraPayments(paymentsRes.data);
         }
 
         if (meRes?.data) {
           const fresh = meRes.data;
           setCurrentUser((prev) => ({
-            ...prev,
-            deposit_balance: fresh.deposit_balance ?? prev?.deposit_balance
+            ...(prev || {}),
+            id: fresh.id ?? prev?.id ?? null,
+            mitraId: fresh.mitra_id ?? prev?.mitraId ?? null,
+            level: fresh.level || prev?.level || '',
+            deposit_balance: fresh.deposit_balance ?? prev?.deposit_balance ?? 0
           }));
         }
       } catch (err) {
@@ -894,9 +1036,20 @@ export default function App() {
     };
 
     syncMitraProfile();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') syncMitraProfile();
+    };
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') syncMitraProfile();
+    }, 20000);
+    window.addEventListener('focus', syncMitraProfile);
+    document.addEventListener('visibilitychange', onVisible);
 
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', syncMitraProfile);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [sessionToken, currentUser?.roleId, activeRole?.id, currentPage]);
 
@@ -1292,7 +1445,7 @@ export default function App() {
     const enrichedOrder = {
       ...newOrder,
       mitraName: currentUser?.name || 'HENI (Bekasi)',
-      mitraLevel: currentUser?.role || 'Mitra Distributor',
+      mitraLevel: currentUser?.level || currentUser?.role || 'Mitra Distributor',
       mitraCity: newOrder.recipientCity || 'Bekasi',
       mitraAddress: newOrder.recipientAddress || '',
       mitraPhone: currentUser?.phone || '0812-1999-1888',
@@ -1436,8 +1589,17 @@ export default function App() {
           unit_price: Number(it.price) || 0,
           fee: Number(it.fee) || 0,
           discount_nominal: Number(it.discountNominal) || 0,
-          addon_nominal: Number(it.addonNominal) || 0,
-          subtotal: Number(it.subtotal) || ((Number(it.price) || 0) * (Number(it.qty) || 1)),
+          addon_nominal: Number(
+            it.addonNominal ?? ((Number(it.addon) || 0) * (Math.max(1, Number(it.qty) || 1)))
+          ),
+          subtotal:
+            Number(it.subtotal) ||
+            Math.max(
+              0,
+              (Number(it.price) || 0) * Math.max(1, Number(it.qty) || 1) -
+                (Number(it.discountNominal) || 0) +
+                Number(it.addonNominal ?? ((Number(it.addon) || 0) * Math.max(1, Number(it.qty) || 1)))
+            ),
           address_id: it.addressId || it.address_id || null,
           splits: Array.isArray(it.splits) ? it.splits : []
         }));
@@ -1576,7 +1738,7 @@ export default function App() {
     }
   };
 
-  const handleNotificationClick = (notif) => {
+  const handleNotificationClick = (notif, options = {}) => {
     if (!notif) return;
     setNotifications((prev) =>
       prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n))
@@ -1585,6 +1747,11 @@ export default function App() {
       ? api.my.markNotificationsRead(notif.id)
       : api.management.markNotificationsRead(notif.id);
     markRead?.catch?.(() => {});
+
+    if (!options?.navigate || notif.isRejected) {
+      return;
+    }
+
     if (notif.target === 'katalog') {
       setCurrentPage('catalog');
       return;
@@ -1613,9 +1780,13 @@ export default function App() {
     const roleName = role?.name || 'Mitra Distributor';
 
     const userObj = {
+      id: userData?.id ?? null,
+      mitraId: userData?.mitraId ?? userData?.mitra_id ?? null,
       name: userData?.name || (roleId === 'mitra' ? 'Mitra' : roleName),
       role: roleName,
       roleId: roleId,
+      level: userData?.level || '',
+      deposit_balance: userData?.deposit_balance ?? 0,
       avatar: (userData?.avatar && !userData.avatar.includes('unsplash.com'))
         ? userData.avatar
         : savedAvatar || '',
@@ -1678,6 +1849,14 @@ export default function App() {
     setCurrentUser(null);
     setCartItems([]);
     setCheckoutItems([]);
+    setCoreOrders([]);
+    setPoTrashedOrders([]);
+    setPoDeposits(poSeed.deposits);
+    setPoLedger(poSeed.ledger);
+    setPoPaymentRequests(poSeed.paymentRequests);
+    setMitraPayments([]);
+    setNotifications([]);
+    setWishlistItems([]);
     setCurrentPage('logout_success');
     api.logout().catch(() => {});
     tokenStore.clear();
@@ -1787,8 +1966,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <ErrorBoundary key={currentPage} onReset={handleNavigateHome}>
-        <main className={`flex-1 ${['marketing_dashboard', 'finance_dashboard', 'owner_dashboard'].includes(currentPage) ? '' : 'pb-8'}`}>
+      <main className={`flex-1 ${['marketing_dashboard', 'finance_dashboard', 'owner_dashboard'].includes(currentPage) ? '' : 'pb-8'}`}>
         
         {/* VIEW 1: HOME PAGE (BERANDA) */}
         {currentPage === 'home' && (
@@ -1903,7 +2081,7 @@ export default function App() {
             onBuyNow={handleBuyNow}
             isLoggedIn={isLoggedIn}
             brands={poBrands}
-            mitraLevel={normalizeLevel(currentUser?.role || currentUser?.level)}
+            mitraLevel={normalizeLevel(currentUser?.level || currentUser?.role)}
             isWishlist={wishlistProductIds.includes(Number(selectedProduct?.id))}
             onToggleWishlist={handleToggleWishlist}
           />
@@ -1989,6 +2167,8 @@ export default function App() {
             categories={poCategories}
             deposits={poDeposits}
             settings={poSettings}
+            deletedOrders={poTrashedOrders}
+            onChangeDeletedOrders={setPoTrashedOrders}
             onChangeOrders={setCoreOrders}
             onChangeProducts={handleChangePoProducts}
             onChangeBrands={handleChangePoBrands}
@@ -2066,7 +2246,6 @@ export default function App() {
         )}
 
         </main>
-      </ErrorBoundary>
 
       {/* Footer matching Maroon Design (hidden on dashboard portals) */}
       {!isPortalDashboard && <Footer />}

@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import api from '../../../services/api';
-import { dbId, normalizeLevel } from '../../../services/adapters';
+import api, { mediaUrl } from '../../../services/api';
+import { dbId, mapOrderToProjectOrder, normalizeLevel } from '../../../services/adapters';
 import BankAccountModal from '../BankAccountModal';
 import AccountSettingsPanel from '../AccountSettingsPanel';
-import { serverMoneyPatch } from '../projectBridge';
+import { projectOrderToCore, serverMoneyPatch } from '../projectBridge';
 import { dpPercentFor } from '../../../utils/terminScheme';
 import FinanceOverviewTab from './FinanceOverviewTab';
 import FinanceVerificationTab from './FinanceVerificationTab';
@@ -111,6 +111,8 @@ const VERIF_META = {
     verifiedByKey: 'dpVerifiedBy',
     verifiedAtKey: 'dpVerifiedAt',
     noteKey: 'dpNote',
+    paymentIdKey: 'dpPaymentId',
+    bankKey: 'dpBank',
     icon: 'wallet',
     tone: 'blue'
   },
@@ -124,6 +126,8 @@ const VERIF_META = {
     verifiedByKey: 'pelunasanVerifiedBy',
     verifiedAtKey: 'pelunasanVerifiedAt',
     noteKey: 'pelunasanNote',
+    paymentIdKey: 'pelunasanPaymentId',
+    bankKey: 'pelunasanBank',
     icon: 'receipt',
     tone: 'indigo'
   },
@@ -137,6 +141,8 @@ const VERIF_META = {
     verifiedByKey: 'ongkirVerifiedBy',
     verifiedAtKey: 'ongkirVerifiedAt',
     noteKey: 'ongkirNote',
+    paymentIdKey: 'ongkirPaymentId',
+    bankKey: 'ongkirBank',
     icon: 'truck',
     tone: 'orange'
   }
@@ -229,8 +235,20 @@ export default function FinanceDashboard({
     date: todayISO(),
     bankId: seed.bankAccounts[0]?.id || '',
     refNo: '',
-    proof: ''
+    proof: '',
+    proofFile: null
   });
+  const [isSubmittingProof, setIsSubmittingProof] = useState(false);
+  const [proofInputKey, setProofInputKey] = useState(0);
+
+  useEffect(() => {
+    const activeBanks = (bankAccounts || []).filter((b) => b.active !== false);
+    if (!activeBanks.length) return;
+    setProofForm((prev) => {
+      const valid = activeBanks.some((b) => String(b.id) === String(prev.bankId));
+      return valid ? prev : { ...prev, bankId: activeBanks[0].id };
+    });
+  }, [bankAccounts]);
 
   // Ongkir & pengiriman
   const [ongkirModal, setOngkirModal] = useState(null);
@@ -373,6 +391,8 @@ export default function FinanceDashboard({
       .map((o) => ({
         key: `${o.invoice}-${verifMeta.kind}`,
         ref: o.invoice,
+        paymentId: o[verifMeta.paymentIdKey] || null,
+        bank: o[verifMeta.bankKey] || '-',
         mitraName: o.mitraName,
         level: o.level,
         produk: `${o.produk}  ·  ${o.variant}`,
@@ -680,7 +700,13 @@ export default function FinanceDashboard({
         children: [
           { id: 'rekap', label: 'Rekap PO', title: 'Rekap PO per Brand / Produk / Mitra', icon: 'file' },
           { id: 'rekap_fee', label: 'Rekap Fee', title: 'Rekap Fee & Diskon Brand', icon: 'wallet' },
-          { id: 'mitra', label: 'Mitra & User', title: 'Data Mitra & Piutang', icon: 'users' },
+          {
+            id: 'mitra',
+            label: 'Mitra & User',
+            title: 'Data Mitra & Piutang',
+            icon: 'users',
+            badge: mitra.filter((m) => !m.active).length || null
+          },
           { id: 'tim', label: 'Tim Admin', title: 'Manajemen Tim Admin', icon: 'shield' }
         ]
       },
@@ -759,6 +785,7 @@ export default function FinanceDashboard({
         items: source.map((it, idx) => ({
           key: it.id != null ? `it-${it.id}` : `it-new-${idx}`,
           id: it.id != null ? it.id : null,
+          variantId: it.variantId ?? null,
           title: it.title || '',
           variant: it.variant || '',
           qty: it.qty || 1,
@@ -821,7 +848,7 @@ export default function FinanceDashboard({
       };
     });
 
-  const saveInvoiceEdit = (e) => {
+  const saveInvoiceEdit = async (e) => {
     e.preventDefault();
     if (!invoiceEdit) return;
     const f = invoiceEdit.form;
@@ -866,6 +893,7 @@ export default function FinanceDashboard({
         item: {
           ...(prev || {}),
           id: prev?.id || `${target.invoice}-e${Date.now()}${idx + 1}`,
+          variantId: it.variantId ?? prev?.variantId ?? null,
           title: it.title,
           variant: it.variant || 'All Varian',
           variation: prev?.variation || it.variant || 'All Varian',
@@ -892,7 +920,7 @@ export default function FinanceDashboard({
     const uniqueTitles = [...new Set(items.map((it) => it.title))];
     const weightedDiscPct = grossTotal > 0 ? Math.round((discountNominal / grossTotal) * 10000) / 100 : 0;
 
-    patchOrder(target.invoice, {
+    const ok = await patchOrder(target.invoice, {
       invoiceItems: items.map((it) => ({
         id: it.id,
         variantId: it.variantId,
@@ -922,13 +950,22 @@ export default function FinanceDashboard({
         items
       }
     });
+    if (!ok) return;
     setInvoiceEdit(null);
     toast(`Invoice ${target.invoice} diperbarui (${items.length} produk/varian). Mitra melihat nilai terbaru.`);
   };
 
-  const approvePayment = (row) => {
+  const approvePayment = async (row) => {
     if (row.deposit) {
       const dep = row.deposit;
+      const targetId = dep.backendId || dep.id;
+      if (targetId && !String(targetId).startsWith('dep-')) {
+        try {
+          await api.management.verifyDeposit(targetId, { status: 'ACC' });
+        } catch (err) {
+          return serverFail(err, `Verifikasi deposit ${dep.mitraName}`);
+        }
+      }
       commitDeposits((prev) =>
         prev.map((d) =>
           d.id === dep.id
@@ -958,18 +995,51 @@ export default function FinanceDashboard({
         ...prev
       ]);
       toast(`Deposit ${dep.mitraName} ${rp(dep.nominal)} diverifikasi. Saldo mitra bertambah.`);
-      const targetId = dep.backendId || dep.id;
-      api.management.verifyDeposit(targetId, { status: 'ACC' }).catch(() => {});
     } else {
       const o = row.order;
-      patchOrder(o.invoice, {
+      const pid = row.paymentId || row.backendPaymentId || o?.[verifMeta.paymentIdKey] || null;
+      const ongkirCleared = num(o.ongkir) === 0 || o.ongkirStatus === PAY.ACC;
+      const localPatch = {
         [verifMeta.statusKey]: PAY.ACC,
-        ...(verifMeta.kind === 'Pelunasan' ? { ongkirStatus: PAY.ACC, shipStatus: SHIP.SIAP } : {}),
+        ...(verifMeta.kind === 'Pelunasan' && ongkirCleared ? { ongkirStatus: PAY.ACC, shipStatus: SHIP.SIAP } : {}),
+        ...(verifMeta.kind === 'Ongkir' && o.pelunasanStatus === PAY.ACC ? { shipStatus: SHIP.SIAP } : {}),
         [verifMeta.verifiedByKey]: me.name,
         [verifMeta.verifiedAtKey]: todayISO(),
         [verifMeta.noteKey]: '',
-        status: verifMeta.kind === 'DP' ? 'Produksi' : 'Siap Kirim'
-      });
+        status:
+          verifMeta.kind === 'DP'
+            ? 'Produksi'
+            : verifMeta.kind === 'Pelunasan'
+              ? (ongkirCleared ? 'Siap Kirim' : 'Menunggu Pembayaran Ongkir')
+              : (o.pelunasanStatus === PAY.ACC ? 'Siap Kirim' : 'Menunggu Pelunasan')
+      };
+
+      if (pid && !String(pid).startsWith('p-')) {
+        let res = null;
+        try {
+          res = await api.management.verifyPayment(pid, { status: 'disetujui' });
+        } catch (err) {
+          return serverFail(err, `Verifikasi ${verifMeta.kind} ${o.invoice}`);
+        }
+        const serverOrder = res?.order || res?.data?.order || null;
+        if (serverOrder) {
+          const mappedCore = projectOrderToCore(
+            mapOrderToProjectOrder(serverOrder, currentUser || {}),
+            { currentUser, seedMitra: mitra, products: productsProp || seed.products }
+          );
+          commitOrders((prev) =>
+            prev.map((x) => (x.invoice === o.invoice ? { ...x, ...mappedCore } : x))
+          );
+        } else {
+          commitOrders((prev) =>
+            prev.map((x) => (x.invoice === o.invoice ? { ...x, ...localPatch } : x))
+          );
+        }
+      } else {
+        const ok = await patchOrder(o.invoice, localPatch);
+        if (!ok) return;
+      }
+
       commitLedger((prev) => [
         {
           id: uid('l'),
@@ -978,7 +1048,7 @@ export default function FinanceDashboard({
           ref: o.invoice,
           mitraName: o.mitraName,
           nominal: row.amount,
-          bank: '-',
+          bank: row.bank || o?.[verifMeta.bankKey] || '-',
           by: me.name,
           status: PAY.ACC,
           note: 'Verifikasi finance'
@@ -986,23 +1056,20 @@ export default function FinanceDashboard({
         ...prev
       ]);
       toast(`${verifMeta.kind} ${o.invoice} diverifikasi ACC.`);
-      const targetId = dbId(o) || o.backendId || o.invoice;
-      const statusPayload =
-        verifMeta.kind === 'DP'
-          ? { status: 'Produksi', dpStatus: 'ACC' }
-          : verifMeta.kind === 'Pelunasan'
-            ? { status: 'Siap Kirim', pelunasanStatus: 'ACC', ongkirStatus: 'ACC' }
-            : { ongkirStatus: 'ACC' };
-      api.management.updateOrderStatus(targetId, statusPayload).catch(() => {});
-      if (row.paymentId || row.backendPaymentId) {
-        api.management.verifyPayment(row.paymentId || row.backendPaymentId, { status: 'disetujui' }).catch(() => {});
-      }
     }
     setConfirmModal(null);
   };
 
-  const rejectPayment = (row, note) => {
+  const rejectPayment = async (row, note) => {
     if (row.deposit) {
+      const targetId = row.deposit.backendId || row.deposit.id;
+      if (targetId && !String(targetId).startsWith('dep-')) {
+        try {
+          await api.management.verifyDeposit(targetId, { status: 'Ditolak', note });
+        } catch (err) {
+          return serverFail(err, `Penolakan deposit ${row.deposit.mitraName}`);
+        }
+      }
       commitDeposits((prev) =>
         prev.map((d) =>
           d.id === row.deposit.id
@@ -1010,54 +1077,60 @@ export default function FinanceDashboard({
             : d
         )
       );
-      const targetId = row.deposit.backendId || row.deposit.id;
-      api.management.verifyDeposit(targetId, { status: 'Ditolak', note }).catch(() => {});
     } else {
-      patchOrder(row.order.invoice, {
+      const o = row.order;
+      const pid = row.paymentId || row.backendPaymentId || o?.[verifMeta.paymentIdKey] || null;
+      const localPatch = {
         [verifMeta.statusKey]: PAY.TOLAK,
         [verifMeta.verifiedByKey]: me.name,
         [verifMeta.verifiedAtKey]: todayISO(),
         [verifMeta.noteKey]: note
-      });
-      const targetId = dbId(row.order) || row.order.backendId || row.order.invoice;
-      const statusPayload =
-        verifMeta.kind === 'DP'
-          ? { dpStatus: 'Tolak', note }
-          : verifMeta.kind === 'Pelunasan'
-            ? { pelunasanStatus: 'Tolak', note }
-            : { ongkirStatus: 'Tolak', note };
-      api.management.updateOrderStatus(targetId, statusPayload).catch(() => {});
-      if (row.paymentId || row.backendPaymentId) {
-        api.management.verifyPayment(row.paymentId || row.backendPaymentId, { status: 'ditolak', notes: note }).catch(() => {});
+      };
+      if (pid && !String(pid).startsWith('p-')) {
+        let res = null;
+        try {
+          res = await api.management.verifyPayment(pid, { status: 'ditolak', notes: note });
+        } catch (err) {
+          return serverFail(err, `Penolakan ${verifMeta.kind} ${o.invoice}`);
+        }
+        const serverOrder = res?.order || res?.data?.order || null;
+        if (serverOrder) {
+          const mappedCore = projectOrderToCore(
+            mapOrderToProjectOrder(serverOrder, currentUser || {}),
+            { currentUser, seedMitra: mitra, products: productsProp || seed.products }
+          );
+          commitOrders((prev) =>
+            prev.map((x) => (x.invoice === o.invoice ? { ...x, ...mappedCore } : x))
+          );
+        } else {
+          commitOrders((prev) =>
+            prev.map((x) => (x.invoice === o.invoice ? { ...x, ...localPatch } : x))
+          );
+        }
+      } else {
+        const ok = await patchOrder(o.invoice, {
+          ...localPatch,
+          note
+        });
+        if (!ok) return;
       }
     }
     toast(`${verifMeta.kind} ${row.ref} ditolak.`, 'warning');
   };
 
-  const setProduction = (o, status) => {
+  const setProduction = async (o, status) => {
     const patch = { productionStatus: status };
     if (status === PROD.READY) {
       patch.readyAt = todayISO();
       patch.status = 'Menunggu Alamat Mitra';
     }
-    patchOrder(o.invoice, patch);
+    const ok = await patchOrder(o.invoice, patch);
+    if (!ok) return;
     toast(
       status === PROD.READY
         ? `${o.invoice} ditandai READY. Mitra dapat melengkapi alamat.`
         : `${o.invoice} masuk tahap ${status}.`
     );
-
-    const targetId = dbId(o) || o.backendId || o.invoice;
-    if (targetId) {
-      const prodStatusDb = status === PROD.READY ? 'Ready' : 'Produksi';
-      const statusPayload = {
-        production_status: prodStatusDb,
-        ...(status === PROD.READY ? { status: 'Menunggu Alamat Mitra' } : {})
-      };
-      api.management.updateOrderStatus(targetId, statusPayload).catch((err) => {
-        console.warn('Gagal sinkron status produksi ke server:', err);
-      });
-    }
   };
 
   const openWA = (o, kind) => {
@@ -1065,54 +1138,39 @@ export default function FinanceDashboard({
     window.open(waLink(o.phone, text), '_blank');
   };
 
-  const saveOngkir = (e) => {
+  const saveOngkir = async (e) => {
     e.preventDefault();
     const { order, form } = ongkirModal;
     if (!form.ekspedisi) return toast('Pilih ekspedisi terlebih dahulu.', 'error');
     if (!num(form.ongkir)) return toast('Nominal ongkir harus lebih dari 0.', 'error');
-    patchOrder(order.invoice, {
+    const ok = await patchOrder(order.invoice, {
       ongkir: num(form.ongkir),
       ekspedisi: form.ekspedisi,
       weight: num(form.weight),
       shippingNote: form.note || '',
       ongkirAt: todayISO(),
       ongkirStatus: PAY.BELUM,
-      status: 'Menunggu Pelunasan'
+      status: order.pelunasanStatus === PAY.ACC ? 'Menunggu Pembayaran Ongkir' : 'Menunggu Pelunasan'
     });
+    if (!ok) return;
     setOngkirModal(null);
     toast(`Ongkir ${order.invoice} tersimpan. Mitra dapat melakukan pembayaran.`);
-
-    const targetId = dbId(order) || order.backendId || order.invoice;
-    if (targetId) {
-      api.management.updateOrderStatus(targetId, {
-        shipping_cost: num(form.ongkir),
-        courier_name: form.ekspedisi,
-        notes: form.note || '',
-        status: 'Menunggu Pelunasan'
-      }).catch((err) => {
-        console.warn('Gagal sinkron ongkir ke server:', err);
-      });
-    }
   };
 
-  const saveResi = (e) => {
+  const saveResi = async (e) => {
     e.preventDefault();
     const { order, form } = resiModal;
     if (!form.resi.trim()) return toast('Nomor resi wajib diisi.', 'error');
-    const patch = { resi: form.resi.trim(), shippedAt: todayISO(), shipStatus: SHIP.DIKIRIM };
-    patchOrder(order.invoice, patch);
+    const patch = {
+      resi: form.resi.trim(),
+      shippedAt: todayISO(),
+      shipStatus: SHIP.DIKIRIM,
+      status: 'Dikirim'
+    };
+    const ok = await patchOrder(order.invoice, patch);
+    if (!ok) return;
     setResiModal(null);
     toast(`Resi ${form.resi} tersimpan. ${order.invoice} ditandai dikirim.`);
-
-    const targetId = dbId(order) || order.backendId || order.invoice;
-    if (targetId) {
-      api.management.updateOrderStatus(targetId, {
-        tracking_number: form.resi.trim(),
-        status: 'Dikirim'
-      }).catch((err) => {
-        console.warn('Gagal sinkron resi ke server:', err);
-      });
-    }
 
     if (form.notify) {
       window.open(
@@ -1122,16 +1180,14 @@ export default function FinanceDashboard({
     }
   };
 
-  const markReceived = (o) => {
-    patchOrder(o.invoice, { receivedAt: todayISO(), shipStatus: SHIP.DITERIMA });
+  const markReceived = async (o) => {
+    const ok = await patchOrder(o.invoice, {
+      receivedAt: todayISO(),
+      shipStatus: SHIP.DITERIMA,
+      status: 'Selesai'
+    });
+    if (!ok) return;
     toast(`${o.invoice} ditandai diterima. Pesanan selesai.`);
-
-    const targetId = dbId(o) || o.backendId || o.invoice;
-    if (targetId) {
-      api.management.updateOrderStatus(targetId, { status: 'Selesai' }).catch((err) => {
-        console.warn('Gagal sinkron status selesai ke server:', err);
-      });
-    }
   };
 
   const handleProofFile = (file) => {
@@ -1143,80 +1199,146 @@ export default function FinanceDashboard({
     reader.readAsDataURL(file);
   };
 
+  const resetProofForm = () => {
+    setProofForm((prev) => ({ ...prev, nominal: '', invoice: '', refNo: '', proof: '', proofFile: null }));
+    setProofInputKey((k) => k + 1);
+  };
+
   const submitProofForm = async (e) => {
     e.preventDefault();
+    if (isSubmittingProof) return;
     const f = proofForm;
     const nominal = num(f.nominal);
     if (!f.mitraId) return toast('Pilih mitra.', 'error');
     if (!nominal) return toast('Nominal harus lebih dari 0.', 'error');
+    if (f.kind === 'Deposit' && nominal < 1000) return toast('Nominal deposit minimal Rp 1.000.', 'error');
     if (f.kind !== 'Deposit' && !f.invoice) return toast('Pilih invoice terkait.', 'error');
-    const bank = bankAccounts.find((b) => b.id === f.bankId);
+
+    const activeBanks = (bankAccounts || []).filter((b) => b.active !== false);
+    const bank =
+      bankAccounts.find((b) => String(b.id) === String(f.bankId)) ||
+      activeBanks[0] ||
+      null;
     const m = mitra.find((x) => String(x.id) === String(f.mitraId));
 
-    let serverProofPath = '';
-    if (f.proofFile) {
-      try {
-        const uploaded = await api.management.uploadFile(f.proofFile, 'proof');
-        serverProofPath = uploaded?.data?.path || '';
-      } catch (err) {
-        console.warn('Gagal upload berkas ke server, lanjut simpan lokal:', err);
+    setIsSubmittingProof(true);
+    try {
+      let serverProofPath = '';
+      if (f.proofFile) {
+        try {
+          const uploaded = await api.management.uploadFile(f.proofFile, 'proof');
+          serverProofPath = uploaded?.data?.path || '';
+        } catch (err) {
+          return serverFail(err, 'Mengunggah bukti transfer');
+        }
+        if (!serverProofPath) return toast('Bukti transfer tidak tersimpan di server.', 'error');
       }
+
+      const proofUrlToUse = serverProofPath ? mediaUrl(serverProofPath) : '';
+
+      if (f.kind === 'Deposit') {
+        const userId = m?.backendId || dbId(m);
+        let depRow = null;
+        if (userId) {
+          try {
+            const depRes = await api.management.createDeposit({
+              user_id: userId,
+              amount: nominal,
+              bank_account_id: dbId(bank) || bank?.backendId || null,
+              date: f.date || undefined,
+              description: f.refNo || 'Input manual admin finance',
+              proof_url: serverProofPath || ''
+            });
+            depRow = depRes?.data || null;
+          } catch (err) {
+            return serverFail(err, `Deposit ${m?.name || 'Mitra'}`);
+          }
+        }
+        commitDeposits((prev) => [
+          {
+            id: depRow?.id != null ? `dep-${depRow.id}` : uid('dep'),
+            backendId: depRow?.id ?? null,
+            date: f.date || todayISO(),
+            mitraId: m?.id,
+            mitraName: m?.name,
+            nominal,
+            bank: depRow?.bank || bank?.bank || '-',
+            proof: depRow?.proof_url ? mediaUrl(depRow.proof_url) : proofUrlToUse,
+            status: PAY.MENUNGGU,
+            verifiedBy: '',
+            note: depRow?.description || f.refNo || 'Input manual admin finance'
+          },
+          ...prev
+        ]);
+        toast(`Deposit ${rp(nominal)} dicatat dan menunggu verifikasi.`);
+      } else {
+        const o = orders.find((x) => x.invoice === f.invoice);
+        if (!o) return toast('Invoice tidak ditemukan.', 'error');
+        const statusKey = { DP: 'dpStatus', Pelunasan: 'pelunasanStatus', Ongkir: 'ongkirStatus' }[f.kind];
+        const proofKey = { DP: 'dpProof', Pelunasan: 'pelunasanProof', Ongkir: 'ongkirProof' }[f.kind];
+        const paymentIdKey = { DP: 'dpPaymentId', Pelunasan: 'pelunasanPaymentId', Ongkir: 'ongkirPaymentId' }[f.kind];
+        const bankKey = { DP: 'dpBank', Pelunasan: 'pelunasanBank', Ongkir: 'ongkirBank' }[f.kind];
+        const noteKey = { DP: 'dpNote', Pelunasan: 'pelunasanNote', Ongkir: 'ongkirNote' }[f.kind];
+
+        const orderNumericId = dbId(o) || (Number.isInteger(o.backendId) ? o.backendId : null);
+        let payRes = null;
+        try {
+          payRes = await api.management.createPayment({
+            ...(orderNumericId ? { order_id: orderNumericId } : {}),
+            order_number: o.invoice,
+            invoice_number: o.invoiceNumber || '',
+            installment_id:
+              f.kind === 'DP'
+                ? o.dpInstallmentId || null
+                : f.kind === 'Pelunasan'
+                  ? o.pelunasanInstallmentId || null
+                  : null,
+            amount: nominal,
+            bank_account_id: dbId(bank) || bank?.backendId || null,
+            bank_name: bank?.bank || '',
+            account_number: bank?.accountNo || '',
+            date: f.date || undefined,
+            note: f.refNo || 'Input manual admin finance',
+            stage: f.kind.toLowerCase(),
+            proof_url: serverProofPath || ''
+          });
+        } catch (err) {
+          return serverFail(err, `Simpan bukti ${f.kind} ${o.invoice}`);
+        }
+
+        const serverOrder = payRes?.order || payRes?.data?.order || null;
+        if (serverOrder) {
+          const mappedCore = projectOrderToCore(
+            mapOrderToProjectOrder(serverOrder, currentUser || {}),
+            { currentUser, seedMitra: mitra, products: productsProp || seed.products }
+          );
+          commitOrders((prev) =>
+            prev.map((x) => (x.invoice === o.invoice ? { ...x, ...mappedCore } : x))
+          );
+        } else {
+          const createdPayData = payRes?.data || null;
+          const createdPaymentId = createdPayData?.payment?.id ?? createdPayData?.id ?? null;
+          commitOrders((prev) =>
+            prev.map((x) =>
+              x.invoice === o.invoice
+                ? {
+                    ...x,
+                    [statusKey]: PAY.MENUNGGU,
+                    [proofKey]: proofUrlToUse,
+                    [bankKey]: bank?.bank || x[bankKey] || '',
+                    [noteKey]: f.refNo || x[noteKey] || '',
+                    ...(createdPaymentId ? { [paymentIdKey]: createdPaymentId } : {})
+                  }
+                : x
+            )
+          );
+        }
+        toast(`Bukti ${f.kind} ${o.invoice} dicatat. Menunggu verifikasi.`);
+      }
+      resetProofForm();
+    } finally {
+      setIsSubmittingProof(false);
     }
-
-    const proofUrlToUse = serverProofPath || f.proof || '';
-
-    if (f.kind === 'Deposit') {
-      commitDeposits((prev) => [
-        {
-          id: uid('dep'),
-          date: f.date,
-          mitraId: m?.id,
-          mitraName: m?.name,
-          nominal,
-          bank: bank?.bank || '-',
-          proof: proofUrlToUse,
-          status: PAY.MENUNGGU,
-          verifiedBy: '',
-          note: f.refNo || 'Input manual admin finance'
-        },
-        ...prev
-      ]);
-      toast(`Deposit ${rp(nominal)} dicatat dan menunggu verifikasi.`);
-
-      const userId = m?.backendId || dbId(m);
-      if (userId && serverProofPath) {
-        api.management.createDeposit({
-          user_id: userId,
-          amount: nominal,
-          bank_account_id: dbId(bank) || bank?.backendId || bank?.id,
-          description: f.refNo || 'Input manual admin finance',
-          proof_url: serverProofPath
-        }).catch((err) => {
-          console.warn('Gagal simpan deposit manual ke server:', err);
-        });
-      }
-    } else {
-      const o = orders.find((x) => x.invoice === f.invoice);
-      if (!o) return toast('Invoice tidak ditemukan.', 'error');
-      const statusKey = { DP: 'dpStatus', Pelunasan: 'pelunasanStatus', Ongkir: 'ongkirStatus' }[f.kind];
-      const proofKey = { DP: 'dpProof', Pelunasan: 'pelunasanProof', Ongkir: 'ongkirProof' }[f.kind];
-      patchOrder(o.invoice, { [statusKey]: PAY.MENUNGGU, [proofKey]: proofUrlToUse });
-      toast(`Bukti ${f.kind} ${o.invoice} dicatat. Menunggu verifikasi.`);
-
-      const targetId = dbId(o) || o.backendId || o.invoice;
-      if (targetId && serverProofPath) {
-        api.management.createPayment({
-          order_id: targetId,
-          amount: nominal,
-          bank_account_id: dbId(bank) || bank?.backendId || bank?.id,
-          stage: f.kind.toLowerCase(),
-          proof_url: serverProofPath
-        }).catch((err) => {
-          console.warn('Gagal simpan pembayaran manual ke server:', err);
-        });
-      }
-    }
-    setProofForm((prev) => ({ ...prev, nominal: '', invoice: '', refNo: '', proof: '', proofFile: null }));
   };
 
   const savePR = async (e) => {
@@ -1622,7 +1744,7 @@ export default function FinanceDashboard({
       return serverFail(err, `Mengubah status mitra ${m.name}`);
     }
     commitMitra((prev) => prev.map((x) => (x.id === m.id ? { ...x, active: !x.active } : x)));
-    toast(`${m.name} ${m.active ? 'dinonaktifkan' : 'diaktifkan'}.`);
+    toast(`${m.name} ${m.active ? 'dinonaktifkan' : 'di-ACC dan diaktifkan'}.`);
   };
 
   const deleteMitra = (m) => {
@@ -1759,10 +1881,16 @@ export default function FinanceDashboard({
     });
   };
 
-  const saveSettingsForm = (e) => {
+  const saveSettingsForm = async (e) => {
     e.preventDefault();
-    commitSettings((prev) => ({ ...prev, ...settingsForm }));
-    toast('Pengaturan finance disimpan.');
+    let saved;
+    try {
+      saved = await api.management.updateSettings(settingsForm);
+    } catch (err) {
+      return serverFail(err, 'Menyimpan pengaturan finance');
+    }
+    commitSettings((prev) => ({ ...prev, ...(saved?.data || {}), ...settingsForm }));
+    toast('Pengaturan finance disimpan di database.');
   };
 
   const exportOrders = () => {
@@ -1890,6 +2018,9 @@ export default function FinanceDashboard({
             proofForm={proofForm}
             setProofForm={setProofForm}
             submitProofForm={submitProofForm}
+            resetProofForm={resetProofForm}
+            isSubmittingProof={isSubmittingProof}
+            proofInputKey={proofInputKey}
             mitra={mitra}
             orders={orders}
             bankAccounts={bankAccounts}

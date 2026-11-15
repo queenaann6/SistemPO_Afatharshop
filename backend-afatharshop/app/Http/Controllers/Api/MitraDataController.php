@@ -57,7 +57,7 @@ class MitraDataController extends Controller
 
         $payments = Payment::query()
             ->with(['installment', 'verifier', 'invoice.order'])
-            ->whereHas('invoice.order', fn ($query) => $query->where('user_id', $user->id))
+            ->whereHas('invoice.order', fn ($query) => $query->where('user_id', $user->id)->whereNull('deleted_at'))
             ->orderByDesc('uploaded_at')
             ->get();
 
@@ -71,9 +71,14 @@ class MitraDataController extends Controller
                 'order_id'         => $order?->id,
                 'order_number'     => $order?->order_number,
                 'amount'           => (float) $payment->amount,
-                'stage'            => $payment->installment?->type,
+                'stage'            => $payment->installment?->type ?: ($payment->invoice_id ? 'ongkir' : null),
+                'installment_id'   => $payment->installment_id,
                 'status'           => $payment->status,
                 'proof_url'        => $payment->proof_url,
+                'method'           => $payment->method,
+                'bank_name'        => $payment->bank_name,
+                'account_number'   => $payment->account_number,
+                'note'             => $payment->note,
                 'rejection_reason' => $payment->rejection_reason,
                 'uploaded_at'      => optional($payment->uploaded_at)->toIso8601String(),
                 'verified_by'      => $payment->verifier?->nama,

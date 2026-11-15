@@ -15,7 +15,6 @@ export default function AccountSettingsPanel({
   const [name, setName] = useState(me.name || me.nama || '');
   const [email, setEmail] = useState(me.email || '');
   const [phone, setPhone] = useState(me.phone || '');
-  const [city, setCity] = useState(me.city || '');
   const [avatar, setAvatar] = useState(
     me.avatar && !me.avatar.includes('unsplash.com') ? me.avatar : ''
   );
@@ -41,7 +40,6 @@ export default function AccountSettingsPanel({
     if (me.name || me.nama) setName(me.name || me.nama || '');
     if (me.email) setEmail(me.email || '');
     if (me.phone) setPhone(me.phone || '');
-    if (me.city) setCity(me.city || '');
     if (me.avatar && !me.avatar.includes('unsplash.com')) {
       setAvatar(me.avatar);
     }
@@ -148,7 +146,6 @@ export default function AccountSettingsPanel({
         nama: name.trim(),
         email: email.trim(),
         phone: phone.trim(),
-        city: city.trim(),
         avatar: avatar
       };
 
@@ -159,7 +156,6 @@ export default function AccountSettingsPanel({
           name: name.trim(),
           email: email.trim(),
           phone: phone.trim(),
-          city: city.trim(),
           avatar: avatar
         });
       }
@@ -331,17 +327,17 @@ export default function AccountSettingsPanel({
 
               {/* Form Input Data Diri */}
               <form onSubmit={handleSaveProfile} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <Field label="Nama Lengkap" required>
-                    <Input
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="Nama Lengkap"
-                      required
-                    />
-                  </Field>
+                <Field label="Nama Lengkap" required>
+                  <Input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Nama Lengkap"
+                    required
+                  />
+                </Field>
 
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Field label="Alamat Email" hint="Digunakan untuk login portal">
                     <Input
                       type="email"
@@ -350,24 +346,13 @@ export default function AccountSettingsPanel({
                       placeholder="nama@email.com"
                     />
                   </Field>
-                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Field label="Nomor WhatsApp / HP">
                     <Input
                       type="tel"
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
                       placeholder="Contoh: 081234567890"
-                    />
-                  </Field>
-
-                  <Field label="Kota / Domisili">
-                    <Input
-                      type="text"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      placeholder="Contoh: Bandung, Jawa Barat"
                     />
                   </Field>
                 </div>

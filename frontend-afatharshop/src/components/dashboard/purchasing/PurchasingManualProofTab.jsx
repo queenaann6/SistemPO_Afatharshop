@@ -10,6 +10,9 @@ import {
   PageHead,
   ProofThumb,
   Select,
+  TableWrap,
+  TD,
+  TH,
   fmtDate,
   orderOutstanding,
   orderStage,
@@ -23,12 +26,17 @@ export default function PurchasingManualProofTab({
   proofForm = { mitraId: '', kind: 'DP', invoice: '', nominal: '', date: '', bankId: '', refNo: '', proof: '' },
   setProofForm = () => {},
   submitProofForm = () => {},
+  resetProofForm = null,
+  isSubmittingProof = false,
+  proofInputKey = 0,
   mitra = [],
   orders = [],
   bankAccounts = [],
   handleProofFile = () => {},
   setProofView = () => {}
 }) {
+  const statusKey = { DP: 'dpStatus', Pelunasan: 'pelunasanStatus', Ongkir: 'ongkirStatus' }[proofForm.kind];
+
   return (
     <>
       <PageHead
@@ -40,7 +48,9 @@ export default function PurchasingManualProofTab({
             variant="outline"
             icon="refresh"
             onClick={() =>
-              setProofForm((prev) => ({ ...prev, invoice: '', nominal: '', refNo: '', proof: '' }))
+              resetProofForm
+                ? resetProofForm()
+                : setProofForm((prev) => ({ ...prev, invoice: '', nominal: '', refNo: '', proof: '', proofFile: null }))
             }
           >
             Reset Form
@@ -123,21 +133,18 @@ export default function PurchasingManualProofTab({
                   <option value="">Pilih invoice…</option>
                   {orders
                     .filter((o) => {
+                      const selMitra = mitra.find((m) => String(m.id) === String(proofForm.mitraId));
                       const isMitraMatch =
                         String(o.mitraId) === String(proofForm.mitraId) ||
                         (dbId(o.mitraId) && dbId(o.mitraId) === dbId(proofForm.mitraId)) ||
-                        (o.mitraName && o.mitraName === mitra.find((m) => String(m.id) === String(proofForm.mitraId))?.name);
+                        (o.mitraName && selMitra?.name && o.mitraName.toLowerCase() === selMitra.name.toLowerCase());
                       return isMitraMatch && orderStage(o) !== 'ditolak';
                     })
-                    .filter((o) => {
-                      const statusKey = { DP: 'dpStatus', Pelunasan: 'pelunasanStatus', Ongkir: 'ongkirStatus' }[
-                        proofForm.kind
-                      ];
-                      return o[statusKey] !== PAY.ACC;
-                    })
+                    .filter((o) => !statusKey || o[statusKey] !== PAY.ACC)
                     .map((o) => (
                       <option key={o.invoice} value={o.invoice}>
                         {o.invoice} · {o.produk} · sisa {rp(orderOutstanding(o))}
+                        {statusKey && o[statusKey] === PAY.MENUNGGU ? ' (Menunggu Verifikasi)' : ''}
                       </option>
                     ))}
                 </Select>
@@ -169,6 +176,7 @@ export default function PurchasingManualProofTab({
                   value={proofForm.bankId}
                   onChange={(e) => setProofForm((prev) => ({ ...prev, bankId: e.target.value }))}
                 >
+                  <option value="">Pilih rekening tujuan…</option>
                   {bankAccounts
                     .filter((b) => b.active)
                     .map((b) => (
@@ -187,9 +195,10 @@ export default function PurchasingManualProofTab({
               </Field>
             </div>
 
-            <Field label="Berkas Bukti" hint="JPG atau PNG, maksimal 2 MB.">
+            <Field label="Berkas Bukti" hint="JPG, PNG, atau WEBP, maksimal 2 MB (opsional jika sudah ada No. Referensi).">
               <div className="space-y-2">
                 <input
+                  key={proofInputKey}
                   type="file"
                   accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                   onChange={(e) => handleProofFile(e.target.files?.[0])}
@@ -213,8 +222,8 @@ export default function PurchasingManualProofTab({
               <p className="text-[10px] text-gray-400">
                 Bukti akan diverifikasi finance sebelum status pembayaran menjadi ACC.
               </p>
-              <Button type="submit" icon="check">
-                Simpan Bukti
+              <Button type="submit" icon="check" disabled={isSubmittingProof}>
+                {isSubmittingProof ? 'Menyimpan...' : 'Simpan Bukti'}
               </Button>
             </div>
           </form>

@@ -14,7 +14,13 @@ return new class extends Migration
     {
         // Ubah kolom status pada tabel orders dari ENUM menjadi VARCHAR(100)
         // agar mendukung semua status PO seperti 'Menunggu Pembayaran DP', 'Pesanan Dibuat', dsb.
-        DB::statement("ALTER TABLE `orders` MODIFY `status` VARCHAR(100) NOT NULL DEFAULT 'Menunggu Pembayaran DP'");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE `orders` MODIFY `status` VARCHAR(100) NOT NULL DEFAULT 'Menunggu Pembayaran DP'");
+        } elseif (Schema::hasTable('orders') && Schema::hasColumn('orders', 'status')) {
+            Schema::table('orders', function (Blueprint $table) {
+                $table->string('status', 100)->default('Menunggu Pembayaran DP')->change();
+            });
+        }
     }
 
     /**
@@ -22,6 +28,8 @@ return new class extends Migration
      */
     public function down(): void
     {
-        DB::statement("ALTER TABLE `orders` MODIFY `status` ENUM('Open','Produksi','Pengisian Alamat','Menunggu Pengiriman','Update Resi','Terkirim') NOT NULL DEFAULT 'Open'");
+        if (DB::getDriverName() === 'mysql') {
+            DB::statement("ALTER TABLE `orders` MODIFY `status` ENUM('Open','Produksi','Pengisian Alamat','Menunggu Pengiriman','Update Resi','Terkirim') NOT NULL DEFAULT 'Open'");
+        }
     }
 };
