@@ -18,6 +18,7 @@ class OrderItem extends Model
         'unit_price',
         'fee',
         'discount_nominal',
+        'brand_discount_nominal',
         'addon_nominal',
         'subtotal',
         'splits_data',
@@ -25,11 +26,12 @@ class OrderItem extends Model
     ];
 
     protected $casts = [
-        'unit_price'       => 'float',
-        'fee'              => 'float',
-        'discount_nominal' => 'float',
-        'addon_nominal'    => 'float',
-        'subtotal'         => 'float',
+        'unit_price'              => 'float',
+        'fee'                     => 'float',
+        'discount_nominal'        => 'float',
+        'brand_discount_nominal'  => 'float',
+        'addon_nominal'           => 'float',
+        'subtotal'                => 'float',
     ];
 
     protected $appends = ['splits'];

@@ -20,8 +20,7 @@ export default function OwnerReceivablesTab({
   agingSearch = '',
   setAgingSearch = () => {},
   setDetailInvoice = () => {},
-  openWA = () => {},
-  exportOrders = () => {}
+  openWA = () => {}
 }) {
   return (
     <>
@@ -32,11 +31,6 @@ export default function OwnerReceivablesTab({
           <Badge tone="red">
             {agingRows.filter((o) => o.late > 0).length} terlambat
           </Badge>
-        }
-        actions={
-          <Button variant="outline" icon="download" onClick={exportOrders}>
-            Ekspor
-          </Button>
         }
       />
 

@@ -284,6 +284,7 @@ class OrderController extends Controller
             'items.*.unit_price'         => 'required|numeric|min:0',
             'items.*.fee'                => 'nullable|numeric',
             'items.*.discount_nominal'   => 'nullable|numeric',
+            'items.*.brand_discount_nominal' => 'nullable|numeric|min:0',
             'items.*.addon_nominal'      => 'nullable|numeric',
             'items.*.subtotal'           => 'nullable|numeric|min:0',
         ]);
@@ -315,7 +316,7 @@ class OrderController extends Controller
             }
         }
 
-        $variants = ProductVariant::with('product')
+        $variants = ProductVariant::with('product.brand')
             ->whereIn('id', collect($request->items)->pluck('product_variant_id'))
             ->get()
             ->keyBy('id');
@@ -345,6 +346,16 @@ class OrderController extends Controller
         $hasAnySplit = (bool) $request->input('is_split_address', false);
         foreach ($request->items as $item) {
             $amounts = OrderSerializer::resolveLineAmounts($item);
+            $variant = $variants->get($item['product_variant_id'] ?? null);
+            if (empty($amounts['brand_discount_nominal']) && $variant?->product?->brand) {
+                $brand = $variant->product->brand;
+                $basePrice = (float) ($amounts['unit_price'] ?: $variant->price);
+                $value = (float) $brand->discount_value;
+                $perUnit = ($brand->discount_type ?? 'pct') === 'nominal'
+                    ? $value
+                    : ($basePrice * $value) / 100;
+                $amounts['brand_discount_nominal'] = max(0, round(min($basePrice, $perUnit) * $amounts['quantity'], 2));
+            }
             $computedSubtotal += $amounts['subtotal'];
             $splits = $item['splits'] ?? null;
             $splitsJson = (is_array($splits) && count($splits) > 0) ? json_encode($splits) : null;
@@ -407,6 +418,7 @@ class OrderController extends Controller
                     'unit_price'         => $line['unit_price'],
                     'fee'                => $line['fee'],
                     'discount_nominal'   => $line['discount_nominal'],
+                    'brand_discount_nominal' => $line['brand_discount_nominal'],
                     'addon_nominal'      => $line['addon_nominal'],
                     'subtotal'           => $line['subtotal'],
                     'splits_data'        => $line['splits_data'],
@@ -636,7 +648,7 @@ class OrderController extends Controller
                     $variantIds[] = (int) $vId;
                 }
             }
-            $existingVariants = ProductVariant::with('product')
+            $existingVariants = ProductVariant::with('product.brand')
                 ->whereIn('id', $variantIds)
                 ->get()
                 ->keyBy('id');
@@ -679,6 +691,20 @@ class OrderController extends Controller
                     : (float) ($variant?->price ?? 0);
                 $fee = (float) ($item['fee'] ?? $item['feeNominal'] ?? 0);
                 $discountNominal = (float) ($item['discount_nominal'] ?? $item['discountNominal'] ?? 0);
+                $brandDiscountNominal = max(0, (float) ($item['brand_discount_nominal'] ?? $item['brandDiscountNominal'] ?? 0));
+                if ($brandDiscountNominal <= 0 && $variant) {
+                    $existingItem = $order->items->firstWhere('product_variant_id', $variant->id);
+                    if ($existingItem) {
+                        $brandDiscountNominal = (float) $existingItem->brand_discount_nominal;
+                    } elseif ($variant->product?->brand) {
+                        $brand = $variant->product->brand;
+                        $value = (float) $brand->discount_value;
+                        $perUnit = ($brand->discount_type ?? 'pct') === 'nominal'
+                            ? $value
+                            : ($unitPrice * $value) / 100;
+                        $brandDiscountNominal = max(0, round(min($unitPrice, $perUnit) * $qty, 2));
+                    }
+                }
                 $addonNominal = (float) ($item['addon_nominal'] ?? $item['addonNominal'] ?? 0);
                 $lineSubtotal = (float) ($item['subtotal'] ?? ($unitPrice * $qty - $discountNominal + $addonNominal));
 
@@ -704,6 +730,7 @@ class OrderController extends Controller
                     'unit_price'         => $unitPrice,
                     'fee'                => $fee,
                     'discount_nominal'   => $discountNominal,
+                    'brand_discount_nominal' => $brandDiscountNominal,
                     'addon_nominal'      => $addonNominal,
                     'subtotal'           => $lineSubtotal,
                     'splits_data'        => $splitsJson,

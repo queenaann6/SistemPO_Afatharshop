@@ -658,9 +658,21 @@ export const orderTimeline = (o) => {
 
 /* ------------------------------------------------------------------ utility */
 export const downloadCSV = (filename, rows) => {
-  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  /* Excel locale Indonesia memakai ';' sebagai pemisah daftar; direktif sep=;
+     membuat kolom langsung terpisah tanpa perlu Text Import Wizard. */
+  const cell = (value) => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Number.isInteger(value)
+        ? String(value)
+        : String(Math.round(value * 100) / 100).replace('.', ',');
+    }
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    const text = String(value);
+    return /[";\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
   const blob = new Blob(
-    ['\ufeff' + rows.map((r) => r.map(esc).join(',')).join('\r\n')],
+    ['\ufeffsep=;\r\n' + rows.map((row) => row.map(cell).join(';')).join('\r\n')],
     { type: 'text/csv;charset=utf-8;' }
   );
   const url = URL.createObjectURL(blob);

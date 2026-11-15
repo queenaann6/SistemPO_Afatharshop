@@ -36,9 +36,9 @@ export default function CheckoutPage({
     addresses.find((a) => a.id === selectedAddressId) || addresses[0] || {};
 
   // Options & Forms States
-  const [aturSebelumKirim, setAturSebelumKirim] = useState(true);
   const [notes, setNotes] = useState('');
-  const [selectedCourier, setSelectedCourier] = useState('Ditentukan Sebelum Pengiriman');
+  const [selectedCourier, setSelectedCourier] = useState('');
+  const [formError, setFormError] = useState('');
 
   // Dropship Info State
   const [isDropshipActive, setIsDropshipActive] = useState(false);
@@ -144,8 +144,13 @@ export default function CheckoutPage({
 
   // Confirm and Create Order
   const handleConfirmOrder = () => {
-    setIsSummaryModalOpen(false);
     if (!items || items.length === 0) return;
+    if (!activeAddress?.name || !activeAddress?.address) {
+      setFormError('Alamat pengiriman belum lengkap. Tambahkan alamat terlebih dahulu.');
+      return;
+    }
+    setFormError('');
+    setIsSummaryModalOpen(false);
 
     const firstItem = items[0] || {};
     const schemeDpPct = dpPercentFor(firstItem);
@@ -193,8 +198,8 @@ export default function CheckoutPage({
       recipientAddress: activeAddress.address,
       recipientCity: activeAddress.city || '',
       addressId: activeAddress.backendId || activeAddress.id || null,
-      courier: aturSebelumKirim ? 'Ditentukan Sebelum Pengiriman' : (selectedCourier || 'Ditentukan Sebelum Pengiriman'),
-      aturSebelumKirim: Boolean(aturSebelumKirim),
+      courier: selectedCourier || 'Ditentukan Sebelum Pengiriman',
+      aturSebelumKirim: false,
       shippingCost: 0,
       shippingFee: 0,
       ongkir: 0,
@@ -366,13 +371,16 @@ export default function CheckoutPage({
 
               {/* Active Address Display */}
               <div
-                onClick={() => setIsSelectAddressOpen(true)}
-                className="group p-3 rounded-lg border border-transparent hover:border-stone-200 hover:bg-stone-50/60 transition cursor-pointer flex items-start justify-between gap-3"
+                onClick={() => {
+                  setFormError('');
+                  setIsSelectAddressOpen(true);
+                }}
+                className="group p-3 rounded-lg border border-transparent transition flex items-start justify-between gap-3 hover:border-stone-200 hover:bg-stone-50/60 cursor-pointer"
               >
                 <div className="space-y-1.5 text-xs">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-stone-900">
-                      {activeAddress.name}
+                      {activeAddress.name || 'Belum ada alamat tersimpan'}
                     </span>
                     <span className="text-stone-500 font-medium">
                       {activeAddress.phoneDisplay}
@@ -384,11 +392,11 @@ export default function CheckoutPage({
                     )}
                   </div>
                   <p className="text-stone-600 leading-relaxed text-[11.5px]">
-                    {activeAddress.address}
+                    {activeAddress.address || 'Tambahkan alamat pengiriman sebelum membuat pesanan.'}
                   </p>
                 </div>
 
-                <div className="text-stone-400 group-hover:text-stone-800 transition pt-1">
+                <div className="transition pt-1 text-stone-400 group-hover:text-stone-800">
                   <ChevronRightIcon className="w-4 h-4" />
                 </div>
               </div>
@@ -425,40 +433,31 @@ export default function CheckoutPage({
 
                 <button
                   type="button"
-                  onClick={() => setIsSelectAddressOpen(true)}
-                  className="w-full py-2.5 px-4 rounded-lg border border-stone-300 hover:bg-stone-50 text-xs font-semibold text-stone-700 transition cursor-pointer text-center"
+                  onClick={() => {
+                    setFormError('');
+                    setIsSelectAddressOpen(true);
+                  }}
+                  className="w-full py-2.5 px-4 rounded-lg border border-stone-300 text-xs font-semibold text-stone-700 transition text-center hover:bg-stone-50 cursor-pointer"
                 >
                   + Ubah Alamat Pengiriman
                 </button>
-              </div>
 
-              {/* Checkbox: Atur Sebelum Pengiriman */}
-              <div
-                onClick={() => setAturSebelumKirim((prev) => !prev)}
-                className={`rounded-xl p-3.5 sm:p-4 border transition-all cursor-pointer select-none ${
-                  aturSebelumKirim
-                    ? 'bg-[#fffdf9] border-amber-300 shadow-2xs ring-1 ring-amber-300/40'
-                    : 'bg-stone-50 border-stone-200 hover:border-stone-300'
-                }`}
-              >
-                <div className="flex items-start gap-2.5">
-                  <div className="pt-0.5">
-                    <input
-                      type="checkbox"
-                      checked={aturSebelumKirim}
-                      onChange={(e) => setAturSebelumKirim(e.target.checked)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="w-4 h-4 rounded border-amber-400 text-amber-600 focus:ring-amber-500 cursor-pointer accent-amber-600"
-                    />
-                  </div>
-                  <div className="space-y-0.5">
-                    <label className="text-xs font-bold text-stone-900 cursor-pointer block">
-                      Atur Sebelum Pengiriman
-                    </label>
-                    <p className="text-[11px] text-stone-500 leading-relaxed">
-                      Centang jika alamat & ongkos kirim ingin diatur nanti sebelum barang dikirim. Ongkir tidak dihitung sekarang (ditagih menyusul).
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-stone-300 px-3.5 py-2.5">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-stone-500">
+                      Ekspedisi (opsional)
+                    </p>
+                    <p className="text-xs font-semibold text-stone-900 truncate">
+                      {selectedCourier || 'Diinput admin saat ongkir'}
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsCourierModalOpen(true)}
+                    className="shrink-0 px-3 py-1.5 rounded-lg border border-stone-800 text-[11px] font-bold text-stone-900 hover:bg-stone-50 transition cursor-pointer"
+                  >
+                    {selectedCourier ? 'Ganti' : 'Pilih Ekspedisi'}
+                  </button>
                 </div>
               </div>
 
@@ -566,11 +565,9 @@ export default function CheckoutPage({
                   <span>Total Ongkos Kirim</span>
                   <span className="font-semibold text-stone-900 flex items-center gap-1.5">
                     Rp 0
-                    {aturSebelumKirim && (
-                      <span className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200/80 px-1.5 py-0.5 rounded font-semibold">
-                        Ditagih Menyusul
-                      </span>
-                    )}
+                    <span className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200/80 px-1.5 py-0.5 rounded font-semibold">
+                      Diinput Admin
+                    </span>
                   </span>
                 </div>
 
@@ -590,7 +587,10 @@ export default function CheckoutPage({
               {/* Buat Pesanan Button */}
               <button
                 type="button"
-                onClick={() => setIsSummaryModalOpen(true)}
+                onClick={() => {
+                  setFormError('');
+                  setIsSummaryModalOpen(true);
+                }}
                 className="w-full bg-[#1c1917] hover:bg-black text-white text-xs font-bold py-3 rounded-lg uppercase tracking-wider transition shadow-sm cursor-pointer"
               >
                 Buat Pesanan
@@ -896,11 +896,25 @@ export default function CheckoutPage({
                   <span>Total Ongkos Kirim</span>
                   <span className="font-semibold text-stone-900 flex items-center gap-1.5">
                     Rp 0
-                    {aturSebelumKirim && (
-                      <span className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200/80 px-1.5 py-0.5 rounded font-semibold">
-                        Ditagih Menyusul
-                      </span>
-                    )}
+                    <span className="text-[10px] bg-amber-50 text-amber-800 border border-amber-200/80 px-1.5 py-0.5 rounded font-semibold">
+                      Diinput Admin
+                    </span>
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span>Ekspedisi</span>
+                  <span className="font-semibold text-stone-900 text-right">
+                    {selectedCourier || 'Diinput admin saat ongkir'}
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-start gap-3">
+                  <span className="shrink-0">Alamat</span>
+                  <span className="font-semibold text-stone-900 text-right leading-relaxed">
+                    {activeAddress.name
+                      ? `${activeAddress.name} · ${activeAddress.address || '-'}`
+                      : 'Belum ada alamat'}
                   </span>
                 </div>
               </div>
@@ -911,6 +925,12 @@ export default function CheckoutPage({
                   {formatRupiah(grandTotal)}
                 </span>
               </div>
+
+              {formError && (
+                <p className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 leading-relaxed">
+                  {formError}
+                </p>
+              )}
 
               {/* Buat Pesanan Outline Button */}
               <button

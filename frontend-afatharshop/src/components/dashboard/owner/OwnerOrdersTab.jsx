@@ -24,8 +24,7 @@ export default function OwnerOrdersTab({
   orderPag = { rows: [], page: 1, pageSize: 20, total: 0, setPage: () => {}, setPageSize: () => {} },
   setDetailInvoice = () => {},
   openWA = () => {},
-  orderOutstanding = () => 0,
-  exportOrders = () => {}
+  orderOutstanding = () => 0
 }) {
   return (
     <>
@@ -33,11 +32,6 @@ export default function OwnerOrdersTab({
         title="Monitoring Seluruh Pesanan"
         desc="Pantau posisi setiap pesanan PO dari pengajuan mitra sampai diterima. Mode baca-saja untuk owner."
         badge={<Badge tone="gray">{orders.length} pesanan</Badge>}
-        actions={
-          <Button variant="outline" icon="download" onClick={exportOrders}>
-            Ekspor
-          </Button>
-        }
       />
 
       <StageTabs orders={orders} value={stageFilter} onChange={setStageFilter} />

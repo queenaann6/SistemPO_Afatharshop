@@ -55,6 +55,8 @@ class OrderSerializer
             'received_at'       => optional($order->received_at)->toIso8601String(),
             'total_amount'      => (float) $order->total_amount,
             'fee_mitra_total'   => (float) $items->sum('discount_nominal'),
+            'brand_discount_total' => (float) $items->sum('brand_discount_nominal'),
+            'fee_company_total' => (float) max(0, $items->sum('brand_discount_nominal') - $items->sum('discount_nominal')),
             'addon_total'       => (float) $items->sum('addon_nominal'),
             'ordered_at'        => optional($order->ordered_at)->toIso8601String(),
             'created_at'        => optional($order->created_at)->toIso8601String(),
@@ -95,6 +97,7 @@ class OrderSerializer
                     'unit_price'         => $unitPrice,
                     'fee'                => $fee,
                     'discount_nominal'   => $discount,
+                    'brand_discount_nominal' => (float) $item->brand_discount_nominal,
                     'addon_nominal'      => $addon,
                     'subtotal'           => $storedSub,
                     'net_subtotal'       => $netSubtotal,
@@ -122,6 +125,13 @@ class OrderSerializer
                                 'id'   => $item->variant->product->brand->id,
                                 'name' => $item->variant->product->brand->name,
                                 'logo' => $item->variant->product->brand->logo,
+                                'discount_value'    => (float) $item->variant->product->brand->discount_value,
+                                'discount_type'     => $item->variant->product->brand->discount_type ?: 'pct',
+                                'fee_type'          => $item->variant->product->brand->fee_type ?: 'pct',
+                                'discount_db_all'   => (float) $item->variant->product->brand->discount_db_all,
+                                'discount_sub_db'   => (float) $item->variant->product->brand->discount_sub_db,
+                                'discount_agen'     => (float) $item->variant->product->brand->discount_agen,
+                                'discount_reseller' => (float) $item->variant->product->brand->discount_reseller,
                             ] : null,
                             'batch'              => $item->variant->product->batch ? [
                                 'id'                 => $item->variant->product->batch->id,
@@ -179,6 +189,7 @@ class OrderSerializer
         $hasDiscount = array_key_exists('discount_nominal', $item) || array_key_exists('discountNominal', $item);
         $rawFee = (float) ($item['fee'] ?? $item['feeNominal'] ?? 0);
         $discount = max(0, round((float) ($item['discount_nominal'] ?? $item['discountNominal'] ?? ($rawFee < 0 ? abs($rawFee) : 0)), 2));
+        $brandDiscount = max(0, round((float) ($item['brand_discount_nominal'] ?? $item['brandDiscountNominal'] ?? 0), 2));
         $addon = max(0, round((float) ($item['addon_nominal'] ?? $item['addonNominal'] ?? $item['addon'] ?? 0), 2));
         $fee = round($addon - $discount, 2);
 
@@ -195,6 +206,7 @@ class OrderSerializer
             'unit_price'       => $unitPrice,
             'fee'              => $fee,
             'discount_nominal' => $discount,
+            'brand_discount_nominal' => $brandDiscount,
             'addon_nominal'    => $addon,
             'subtotal'         => $subtotal,
         ];

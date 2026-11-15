@@ -18,7 +18,6 @@ import {
 
 export default function PurchasingOrdersTab({
   filteredOrders = [],
-  exportOrders = () => {},
   goTo = () => {},
   orders = [],
   stageFilter = 'all',
@@ -48,14 +47,9 @@ export default function PurchasingOrdersTab({
         desc="Pantau seluruh pesanan lintas tahap. Purchasing mengelola ACC pesanan, update produksi, dan notifikasi Ready."
         badge={<Badge tone="gray">{filteredOrders.length} pesanan</Badge>}
         actions={
-          <>
-            <Button variant="outline" icon="download" onClick={exportOrders}>
-              Ekspor CSV
-            </Button>
-            <Button icon="plus" onClick={() => goTo('tambah_pesanan')}>
-              Input Pesanan
-            </Button>
-          </>
+          <Button icon="plus" onClick={() => goTo('tambah_pesanan')}>
+            Input Pesanan
+          </Button>
         }
       />
 

@@ -27,8 +27,7 @@ export default function FinanceOrdersTab({
   goTo = () => {},
   setOngkirModal = () => {},
   setResiModal = () => {},
-  markReceived = () => {},
-  exportOrders = () => {}
+  markReceived = () => {}
 }) {
   return (
     <>
@@ -36,11 +35,6 @@ export default function FinanceOrdersTab({
         title="Monitoring Pesanan PO"
         desc="Pantau seluruh pesanan di setiap tahap, verifikasi pembayaran, dan update status operasional."
         badge={<Badge tone="gray">{orders.length} pesanan</Badge>}
-        actions={
-          <Button variant="outline" icon="download" onClick={exportOrders}>
-            Ekspor CSV
-          </Button>
-        }
       />
 
       <StageTabs orders={orders} value={stageFilter} onChange={setStageFilter} />

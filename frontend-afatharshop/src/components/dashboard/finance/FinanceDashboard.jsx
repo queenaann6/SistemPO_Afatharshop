@@ -19,6 +19,7 @@ import FinanceMitraTab from './FinanceMitraTab';
 import FinanceTeamTab from './FinanceTeamTab';
 import FinanceBankAccountsTab from './FinanceBankAccountsTab';
 import FinanceCouriersTab from './FinanceCouriersTab';
+import ExportReportPanel from '../ExportReportPanel';
 import {
   ACCENTS,
   Badge,
@@ -522,6 +523,249 @@ export default function FinanceDashboard({
       .sort((a, b) => b.nilai - a.nilai);
   }, [orders, rekapTab]);
 
+  /* Isi menu Ekspor Laporan: seluruh baris, tidak mengikuti filter/paginasi tab. */
+  const exportSections = useMemo(() => {
+    const rekapRows = (tab) => {
+      const keyFn =
+        tab === 'brand' ? (o) => o.brand : tab === 'produk' ? (o) => o.produk : (o) => o.mitraName;
+      return groupBy(
+        orders.filter((o) => o.marketingStatus !== MKT.TOLAK),
+        keyFn
+      )
+        .map(({ key, items: list }) => [
+          key,
+          list.length,
+          sumBy(list, (o) => o.qty),
+          sumBy(list, (o) => o.subtotal),
+          sumBy(list, (o) => orderPaid(o)),
+          sumBy(list, (o) => orderOutstanding(o))
+        ])
+        .sort((a, b) => b[3] - a[3]);
+    };
+
+    const ledgerAll = [
+      ...ledger.map((l) => ({ ...l, direction: 'in' })),
+      ...transferredPr.map((r) => ({
+        date: r.transfer?.at || r.owner?.at || r.createdAt,
+        type: 'Pengajuan Owner',
+        ref: r.code,
+        mitraName: r.purpose,
+        nominal: num(r.amount),
+        bank: r.bank,
+        by: r.transfer?.by || r.owner?.by || 'Owner',
+        status: 'Transfer',
+        direction: 'out'
+      }))
+    ].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+    const dueDays = settings.pelunasanDueDays || 7;
+    const today = todayISO();
+
+    const financeOrders = orders.filter((o) => o.marketingStatus !== MKT.TOLAK);
+    const companyFeeOf = (o) =>
+      num(o.feeCompanyNominal) || Math.max(0, num(o.brandDiscountNominal) - num(o.feeMitraNominal));
+    const brandDiscPctOf = (name) => {
+      const brand = (brands || []).find(
+        (b) => String(b.name || '').toLowerCase() === String(name || '').toLowerCase()
+      );
+      return num(brand?.discountValue ?? brand?.discountDBAll);
+    };
+
+    const totalOmzet = sumBy(financeOrders, (o) => num(o.subtotal) || num(o.total));
+    const totalPaid = sumBy(financeOrders, (o) => orderPaid(o));
+    const totalOutstanding = sumBy(financeOrders, (o) => orderOutstanding(o));
+    const totalBrandDisc = sumBy(financeOrders, (o) => num(o.brandDiscountNominal));
+    const totalFeeMitra = sumBy(financeOrders, (o) => num(o.feeMitraNominal));
+    const totalFeeCompany = sumBy(financeOrders, companyFeeOf);
+
+    const brandRecap = groupBy(financeOrders, (o) => o.brand || '-')
+      .map(({ key, items: list }) => [
+        key,
+        brandDiscPctOf(key),
+        list.length,
+        sumBy(list, (o) => num(o.qty)),
+        sumBy(list, (o) => num(o.subtotal)),
+        sumBy(list, (o) => num(o.brandDiscountNominal)),
+        sumBy(list, (o) => num(o.feeMitraNominal)),
+        sumBy(list, companyFeeOf)
+      ])
+      .sort((a, b) => b[4] - a[4]);
+
+    const levelRecap = LEVELS.map((levelName) => {
+      const list = financeOrders.filter((o) => (o.level || o.mitraLevel) === levelName);
+      const omzet = sumBy(list, (o) => num(o.subtotal));
+      const company = sumBy(list, companyFeeOf);
+      return [
+        levelName,
+        list.length,
+        sumBy(list, (o) => num(o.qty)),
+        omzet,
+        sumBy(list, (o) => num(o.brandDiscountNominal)),
+        sumBy(list, (o) => num(o.feeMitraNominal)),
+        company,
+        omzet > 0 ? Math.round((company / omzet) * 10000) / 100 : 0
+      ];
+    }).filter((row) => row[1] > 0);
+
+    const mitraRecap = groupBy(financeOrders, (o) => o.mitraName || '-')
+      .map(({ key, items: list }) => {
+        const info = (mitra || []).find(
+          (m) => String(m.name || '').toLowerCase() === String(key || '').toLowerCase()
+        );
+        return [
+          key,
+          list[0]?.level || info?.level || '-',
+          info?.city || list[0]?.mitraCity || '',
+          info?.phone || list[0]?.mitraPhone || '',
+          list.length,
+          sumBy(list, (o) => num(o.qty)),
+          sumBy(list, (o) => num(o.subtotal)),
+          sumBy(list, (o) => orderPaid(o)),
+          sumBy(list, (o) => orderOutstanding(o)),
+          sumBy(list, (o) => num(o.feeMitraNominal)),
+          sumBy(list, companyFeeOf)
+        ];
+      })
+      .sort((a, b) => b[6] - a[6]);
+
+    const summaryRows = [
+      ['Total Invoice', financeOrders.length],
+      ['Total Qty', sumBy(financeOrders, (o) => num(o.qty))],
+      ['Omzet (Rp)', totalOmzet],
+      ['Total Dibayar (Rp)', totalPaid],
+      ['Piutang (Rp)', totalOutstanding],
+      ['Kas Masuk Verified (Rp)', kasMasuk],
+      ['Kas Keluar Transfer (Rp)', kasKeluar],
+      ['Saldo Kas (Rp)', kasMasuk - kasKeluar],
+      ['Diskon Pabrik (Rp)', totalBrandDisc],
+      ['Fee Mitra (Rp)', totalFeeMitra],
+      ['Fee Perusahaan (Rp)', totalFeeCompany]
+    ];
+
+    return [
+      {
+        id: 'ringkasan',
+        label: 'Ringkasan Keuangan',
+        sheetName: 'Ringkasan',
+        desc: 'Omzet, pembayaran, piutang, arus kas, dan fee perusahaan.',
+        headers: ['Metrik', 'Nilai'],
+        numericCols: [1],
+        sum: false,
+        rows: summaryRows
+      },
+      {
+        id: 'pesanan',
+        label: 'Daftar Pesanan',
+        sheetName: 'Pesanan',
+        desc: 'Semua pesanan PO: nilai, diskon pabrik, fee mitra & perusahaan, DP, pelunasan, ongkir, sisa tagihan, tahap, dan resi.',
+        headers: [
+          'Invoice', 'Tanggal', 'Mitra', 'Level', 'Brand', 'Produk', 'Varian', 'Qty',
+          'Nilai (Rp)', 'Diskon Pabrik (Rp)', 'Fee Mitra (Rp)', 'Fee Perusahaan (Rp)',
+          'DP (Rp)', 'Status DP', 'Pelunasan (Rp)', 'Status Pelunasan',
+          'Ongkir (Rp)', 'Status Ongkir', 'Sisa (Rp)', 'Tahap', 'Resi'
+        ],
+        numericCols: [7, 8, 9, 10, 11, 12, 14, 16, 18],
+        currencyCols: [8, 9, 10, 11, 12, 14, 16, 18],
+        integerCols: [7],
+        dateCols: [1],
+        rows: orders.map((o) => [
+          o.invoice, o.date, o.mitraName, o.level, o.brand, o.produk, o.variant, o.qty,
+          o.subtotal, num(o.brandDiscountNominal), num(o.feeMitraNominal), companyFeeOf(o),
+          o.dpNominal, o.dpStatus, o.pelunasanNominal, o.pelunasanStatus,
+          o.ongkir, o.ongkirStatus, orderOutstanding(o), stageMeta(orderStage(o)).label, o.resi || ''
+        ])
+      },
+      {
+        id: 'buku_kas',
+        label: 'Buku Kas',
+        sheetName: 'Buku Kas',
+        desc: 'Seluruh mutasi kas masuk mitra dan transfer keluar ke pengajuan owner.',
+        headers: ['Tanggal', 'Tipe', 'Referensi', 'Mitra / Tujuan', 'Nominal (Rp)', 'Arah', 'Bank', 'Oleh', 'Status'],
+        numericCols: [4],
+        currencyCols: [4],
+        dateCols: [0],
+        rows: ledgerAll.map((l) => [
+          l.date, l.type, l.ref, l.mitraName, l.nominal,
+          l.direction === 'out' ? 'Keluar' : 'Masuk', l.bank || '', l.by || '', l.status || ''
+        ])
+      },
+      {
+        id: 'rekap_brand',
+        label: 'Rekap per Brand',
+        sheetName: 'Rekap Brand',
+        desc: 'Omzet, diskon pabrik, fee mitra, dan fee perusahaan per brand.',
+        headers: [
+          'Brand', 'Diskon Pabrik (%)', 'Invoice', 'Qty', 'Omzet (Rp)',
+          'Diskon Pabrik (Rp)', 'Fee Mitra (Rp)', 'Fee Perusahaan (Rp)'
+        ],
+        numericCols: [1, 2, 3, 4, 5, 6, 7],
+        currencyCols: [4, 5, 6, 7],
+        integerCols: [2, 3],
+        sum: [2, 3, 4, 5, 6, 7],
+        rows: brandRecap
+      },
+      {
+        id: 'rekap_fee_level',
+        label: 'Rekap Fee per Level',
+        sheetName: 'Rekap Fee Level',
+        desc: 'Keuntungan perusahaan per level mitra: diskon pabrik dikurangi fee mitra.',
+        headers: [
+          'Level', 'Invoice', 'Qty', 'Omzet (Rp)', 'Diskon Pabrik (Rp)',
+          'Fee Mitra (Rp)', 'Fee Perusahaan (Rp)', 'Margin Fee (%)'
+        ],
+        numericCols: [1, 2, 3, 4, 5, 6, 7],
+        currencyCols: [3, 4, 5, 6],
+        integerCols: [1, 2],
+        sum: [1, 2, 3, 4, 5, 6],
+        rows: levelRecap
+      },
+      {
+        id: 'rekap_produk',
+        label: 'Rekap per Produk',
+        sheetName: 'Rekap Produk',
+        desc: 'Omzet, pembayaran, dan piutang yang dikelompokkan per produk.',
+        headers: ['Produk', 'Jumlah Invoice', 'Qty', 'Nilai (Rp)', 'Dibayar (Rp)', 'Piutang (Rp)'],
+        numericCols: [1, 2, 3, 4, 5],
+        currencyCols: [3, 4, 5],
+        integerCols: [1, 2],
+        rows: rekapRows('produk')
+      },
+      {
+        id: 'rekap_mitra',
+        label: 'Rekap per Mitra',
+        sheetName: 'Rekap Mitra',
+        desc: 'Data mitra beserta omzet, pembayaran, piutang, dan kontribusi fee.',
+        headers: [
+          'Mitra', 'Level', 'Kota', 'Telepon', 'Invoice', 'Qty', 'Omzet (Rp)',
+          'Dibayar (Rp)', 'Piutang (Rp)', 'Fee Mitra (Rp)', 'Fee Perusahaan (Rp)'
+        ],
+        numericCols: [4, 5, 6, 7, 8, 9, 10],
+        currencyCols: [6, 7, 8, 9, 10],
+        integerCols: [4, 5],
+        rows: mitraRecap
+      },
+      {
+        id: 'piutang',
+        label: 'Piutang & Aging',
+        sheetName: 'Piutang',
+        desc: 'Tagihan yang belum lunas beserta jatuh tempo dan jumlah hari terlambat.',
+        headers: ['Invoice', 'Mitra', 'Jatuh Tempo', 'Terlambat (hari)', 'Sisa (Rp)', 'Tahap'],
+        numericCols: [3, 4],
+        currencyCols: [4],
+        integerCols: [3],
+        dateCols: [2],
+        rows: orders
+          .filter((o) => o.marketingStatus !== MKT.TOLAK && orderOutstanding(o) > 0 && orderStage(o) !== 'baru')
+          .map((o) => {
+            const due = addDays(o.date, dueDays);
+            const late = diffDays(today, due);
+            return [o.invoice, o.mitraName, due, late > 0 ? late : 0, orderOutstanding(o), stageMeta(orderStage(o)).label];
+          })
+          .sort((a, b) => b[3] - a[3])
+      }
+    ];
+  }, [orders, ledger, transferredPr, settings.pelunasanDueDays, brands, mitra, kasMasuk, kasKeluar]);
+
   const mitraRows = useMemo(
     () =>
       mitra.map((m) => {
@@ -700,6 +944,7 @@ export default function FinanceDashboard({
         children: [
           { id: 'rekap', label: 'Rekap PO', title: 'Rekap PO per Brand / Produk / Mitra', icon: 'file' },
           { id: 'rekap_fee', label: 'Rekap Fee', title: 'Rekap Fee & Diskon Brand', icon: 'wallet' },
+          { id: 'ekspor_laporan', label: 'Ekspor Laporan', title: 'Unduh Laporan Lengkap (Excel)', icon: 'download' },
           {
             id: 'mitra',
             label: 'Mitra & User',
@@ -1893,28 +2138,6 @@ export default function FinanceDashboard({
     toast('Pengaturan finance disimpan di database.');
   };
 
-  const exportOrders = () => {
-    downloadCSV(`monitoring_pesanan_${todayISO()}.csv`, [
-      ['Invoice', 'Tanggal', 'Mitra', 'Level', 'Produk', 'Qty', 'Nilai', 'DP', 'Pelunasan', 'Ongkir', 'Sisa', 'Tahap', 'Resi'],
-      ...orders.map((o) => [
-        o.invoice,
-        o.date,
-        o.mitraName,
-        o.level,
-        o.produk,
-        o.qty,
-        o.subtotal,
-        o.dpStatus,
-        o.pelunasanStatus,
-        o.ongkirStatus,
-        orderOutstanding(o),
-        stageMeta(orderStage(o)).label,
-        o.resi || ''
-      ])
-    ]);
-    toast('Monitoring pesanan diunduh.');
-  };
-
   const exportLedger = () => {
     downloadCSV(`buku_kas_${todayISO()}.csv`, [
       ['Tanggal', 'Tipe', 'Referensi', 'Mitra / Tujuan', 'Nominal', 'Arah', 'Bank', 'Oleh', 'Status'],
@@ -1951,11 +2174,6 @@ export default function FinanceDashboard({
         onLogout={onLogout}
         onNavigateStore={onNavigateStore}
         notifications={notifications}
-        headerRight={
-          <Button variant="outline" icon="download" onClick={exportOrders}>
-            Ekspor Pesanan
-          </Button>
-        }
       >
         {/* ============================= DASHBOARD ============================= */}
         {activeMenu === 'dashboard' && (
@@ -2076,7 +2294,6 @@ export default function FinanceDashboard({
             setOngkirModal={setOngkirModal}
             setResiModal={setResiModal}
             markReceived={markReceived}
-            exportOrders={exportOrders}
           />
         )}
 
@@ -2148,6 +2365,11 @@ export default function FinanceDashboard({
             brands={brands}
             subtitle="Rekap fee mitra yang dipotong saat checkout dan diskon pabrik yang menjadi fee perusahaan. Dipakai untuk rekonsiliasi ke Owner."
           />
+        )}
+
+        {/* ============================ EKSPOR LAPORAN ====================== */}
+        {activeMenu === 'ekspor_laporan' && (
+          <ExportReportPanel sections={exportSections} fileName="laporan_finance" />
         )}
 
         {/* ============================ MITRA & USER ======================== */}

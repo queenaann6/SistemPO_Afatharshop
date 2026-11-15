@@ -628,6 +628,23 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
         ? Math.round((unitPrice * qty + discountNominal) / qty)
         : unitPrice;
     const gross = effectiveGrossPrice * qty;
+    const brandCfg = item.variant?.product?.brand || product.brand || {};
+    const brandDiscValue = toNumber(
+      brandCfg.discount_value ?? brandCfg.discountValue ?? brandCfg.discount_db_all ?? brandCfg.discountDBAll
+    );
+    const brandDiscIsNominal =
+      (brandCfg.discount_type || brandCfg.discountType) === 'nominal';
+    const brandDiscPerUnit = brandDiscValue
+      ? Math.max(
+          0,
+          Math.min(
+            effectiveGrossPrice,
+            Math.round(brandDiscIsNominal ? brandDiscValue : (effectiveGrossPrice * brandDiscValue) / 100)
+          )
+        )
+      : 0;
+    const brandDiscountNominal =
+      toNumber(item.brand_discount_nominal) || brandDiscPerUnit * qty;
     return {
       id: item.id ?? index + 1,
       variantId: item.variant?.id ?? item.product_variant_id ?? null,
@@ -646,6 +663,7 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
       qty,
       fee,
       discountNominal,
+      brandDiscountNominal,
       discountPct: gross > 0 ? Math.round((discountNominal / gross) * 100) : 0,
       addon: qty > 0 ? Math.round(addonNominal / qty) : 0,
       addonNominal,
@@ -656,7 +674,9 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
 
   const feeMitraNominal = mappedItems.reduce((sum, it) => sum + (it.discountNominal || 0), 0);
   const addonNominal = mappedItems.reduce((sum, it) => sum + (it.addonNominal || 0), 0);
-  const brandDiscountNominal = feeMitraNominal > 0 ? Math.round(feeMitraNominal * 1.5) : 0;
+  const brandDiscountNominal =
+    toNumber(order.brand_discount_total) ||
+    mappedItems.reduce((sum, it) => sum + (it.brandDiscountNominal || 0), 0);
   const feeCompanyNominal = Math.max(0, brandDiscountNominal - feeMitraNominal);
 
   return {
@@ -816,6 +836,8 @@ export const buildOrderPayload = (order, items = []) => {
     const grossUnitPrice =
       basePrice > 0 ? basePrice : (discountNominal > 0 ? netPrice + Math.round(discountNominal / qty) : netPrice);
     const addonNominal = toNumber(item.addonTotal ?? (toNumber(item.addon) * qty));
+    const brandDiscountNominal =
+      toNumber(item.brandDiscountNominal) || toNumber(item.brand_discount_nominal) || 0;
     const subtotalLine = Math.max(
       0,
       Math.round(
@@ -834,6 +856,7 @@ export const buildOrderPayload = (order, items = []) => {
       unit_price: grossUnitPrice,
       fee: addonNominal - discountNominal,
       discount_nominal: discountNominal,
+      brand_discount_nominal: brandDiscountNominal,
       addon_nominal: addonNominal,
       subtotal: subtotalLine,
       address_id: Number.isInteger(addressId) && addressId > 0 ? addressId : undefined,

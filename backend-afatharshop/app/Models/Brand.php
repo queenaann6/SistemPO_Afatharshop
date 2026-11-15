@@ -18,6 +18,9 @@ class Brand extends Model
         'discount_sub_db',
         'discount_agen',
         'discount_reseller',
+        'discount_value',
+        'discount_type',
+        'fee_type',
         'is_active',
     ];
 
@@ -27,6 +30,7 @@ class Brand extends Model
         'discount_sub_db'   => 'float',
         'discount_agen'     => 'float',
         'discount_reseller' => 'float',
+        'discount_value'    => 'float',
     ];
 
     public function supplier()

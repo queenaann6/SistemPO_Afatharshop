@@ -395,6 +395,12 @@ class ManagementController extends Controller
             'discountSubDB'     => (float) ($b->discount_sub_db ?? 25),
             'discountAgen'      => (float) ($b->discount_agen ?? 20),
             'discountReseller'  => (float) ($b->discount_reseller ?? 15),
+            'discount_value'    => (float) ($b->discount_value ?? 30),
+            'discountValue'     => (float) ($b->discount_value ?? 30),
+            'discount_type'     => $b->discount_type ?? 'pct',
+            'discountType'      => $b->discount_type ?? 'pct',
+            'fee_type'          => $b->fee_type ?? 'pct',
+            'feeType'           => $b->fee_type ?? 'pct',
             'is_active'         => (bool) $b->is_active,
             'active'            => (bool) $b->is_active,
             'products_count'    => $b->products_count,
@@ -449,6 +455,9 @@ class ManagementController extends Controller
             'discount_sub_db'   => (float) ($request->discount_sub_db ?? $request->discountSubDB ?? 25),
             'discount_agen'     => (float) ($request->discount_agen ?? $request->discountAgen ?? 20),
             'discount_reseller' => (float) ($request->discount_reseller ?? $request->discountReseller ?? 15),
+            'discount_value'    => (float) ($request->discount_value ?? $request->discountValue ?? 30),
+            'discount_type'     => $request->discount_type ?? $request->discountType ?? 'pct',
+            'fee_type'          => $request->fee_type ?? $request->feeType ?? 'pct',
             'is_active'         => $request->boolean('is_active', true),
         ]);
 
@@ -529,6 +538,15 @@ class ManagementController extends Controller
         }
         if ($request->has('discount_reseller') || $request->has('discountReseller')) {
             $brand->discount_reseller = (float) ($request->discount_reseller ?? $request->discountReseller);
+        }
+        if ($request->has('discount_value') || $request->has('discountValue')) {
+            $brand->discount_value = (float) ($request->discount_value ?? $request->discountValue);
+        }
+        if ($request->has('discount_type') || $request->has('discountType')) {
+            $brand->discount_type = ($request->discount_type ?? $request->discountType) === 'nominal' ? 'nominal' : 'pct';
+        }
+        if ($request->has('fee_type') || $request->has('feeType')) {
+            $brand->fee_type = ($request->fee_type ?? $request->feeType) === 'nominal' ? 'nominal' : 'pct';
         }
 
         if ($request->filled('supplier')) {
@@ -2437,7 +2455,7 @@ class ManagementController extends Controller
             $user = auth('api')->user();
         }
 
-        $variants = ProductVariant::with('product')
+        $variants = ProductVariant::with('product.brand')
             ->whereIn('id', collect($request->items)->pluck('product_variant_id'))
             ->get()
             ->keyBy('id');
@@ -2446,6 +2464,16 @@ class ManagementController extends Controller
         $resolvedLines = [];
         foreach ($request->items as $item) {
             $amounts = OrderSerializer::resolveLineAmounts($item);
+            $variant = $variants->get($item['product_variant_id'] ?? null);
+            if (empty($amounts['brand_discount_nominal']) && $variant?->product?->brand) {
+                $brand = $variant->product->brand;
+                $basePrice = (float) ($amounts['unit_price'] ?: $variant->price);
+                $value = (float) $brand->discount_value;
+                $perUnit = ($brand->discount_type ?? 'pct') === 'nominal'
+                    ? $value
+                    : ($basePrice * $value) / 100;
+                $amounts['brand_discount_nominal'] = max(0, round(min($basePrice, $perUnit) * $amounts['quantity'], 2));
+            }
             $computedSubtotal += $amounts['subtotal'];
             $resolvedLines[] = array_merge($amounts, [
                 'product_variant_id' => $item['product_variant_id'],
@@ -2517,6 +2545,7 @@ class ManagementController extends Controller
                     'unit_price'         => $line['unit_price'],
                     'fee'                => $line['fee'],
                     'discount_nominal'   => $line['discount_nominal'],
+                    'brand_discount_nominal' => $line['brand_discount_nominal'] ?? 0,
                     'addon_nominal'      => $line['addon_nominal'],
                     'subtotal'           => $line['subtotal'],
                     'created_at'         => now(),

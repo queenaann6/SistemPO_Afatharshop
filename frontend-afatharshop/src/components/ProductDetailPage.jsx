@@ -280,7 +280,7 @@ export default function ProductDetailPage({
                       </span>
                     </div>
                     <p className="text-[10px] text-stone-600 flex items-center gap-1 mt-0.5 font-medium">
-                      <span>Distributor Resmi & Kota Bekasi</span>
+                      <span>Kota Bekasi</span>
                     </p>
                   </div>
                 </div>

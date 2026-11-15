@@ -6,6 +6,7 @@ import { DEFAULT_DP_PCT, defaultStagePcts, dpPercentFor } from '../../../utils/t
 import ProductCatalogModal from '../ProductCatalogModal';
 import BankAccountModal from '../BankAccountModal';
 import AccountSettingsPanel from '../AccountSettingsPanel';
+import ExportReportPanel from '../ExportReportPanel';
 import PurchasingOverviewTab from './PurchasingOverviewTab';
 import PurchasingAccOrdersTab from './PurchasingAccOrdersTab';
 import PurchasingOrdersTab from './PurchasingOrdersTab';
@@ -481,6 +482,141 @@ export default function PurchasingDashboard({
     [products, orders]
   );
 
+  /* Isi menu Ekspor Laporan: seluruh baris, tidak mengikuti filter/paginasi tab. */
+  const exportSections = useMemo(() => {
+    const validOrders = orders.filter((o) => o.marketingStatus !== MKT.TOLAK);
+    const companyFeeOf = (o) =>
+      num(o.feeCompanyNominal) || Math.max(0, num(o.brandDiscountNominal) - num(o.feeMitraNominal));
+
+    const brandRecap = brands.map((b) => {
+      const list = validOrders.filter(
+        (o) => String(o.brand || '').toLowerCase() === String(b.name || '').toLowerCase()
+      );
+      return [
+        b.name,
+        num(b.discountValue ?? b.discountDBAll),
+        num(b.discountDBAll),
+        num(b.discountSubDB),
+        num(b.discountAgen),
+        num(b.discountReseller),
+        products.filter((p) => p.brand === b.name).length,
+        list.length,
+        sumBy(list, (o) => num(o.qty)),
+        sumBy(list, (o) => num(o.subtotal)),
+        sumBy(list, (o) => num(o.brandDiscountNominal)),
+        sumBy(list, (o) => num(o.feeMitraNominal)),
+        sumBy(list, companyFeeOf)
+      ];
+    });
+
+    const levelRecap = LEVELS.map((levelName) => {
+      const list = validOrders.filter((o) => (o.level || o.mitraLevel) === levelName);
+      const omzetLevel = sumBy(list, (o) => num(o.subtotal));
+      const company = sumBy(list, companyFeeOf);
+      return [
+        levelName,
+        list.length,
+        sumBy(list, (o) => num(o.qty)),
+        omzetLevel,
+        sumBy(list, (o) => num(o.brandDiscountNominal)),
+        sumBy(list, (o) => num(o.feeMitraNominal)),
+        company,
+        omzetLevel > 0 ? Math.round((company / omzetLevel) * 10000) / 100 : 0
+      ];
+    }).filter((row) => row[1] > 0);
+
+    const summaryRows = [
+      ['Total Pesanan', validOrders.length],
+      ['Menunggu ACC Marketing', pendingAcc.length],
+      ['Total Qty', sumBy(validOrders, (o) => num(o.qty))],
+      ['Omzet (Rp)', sumBy(validOrders, (o) => num(o.subtotal))],
+      ['Diskon Pabrik (Rp)', sumBy(validOrders, (o) => num(o.brandDiscountNominal))],
+      ['Fee Mitra (Rp)', sumBy(validOrders, (o) => num(o.feeMitraNominal))],
+      ['Fee Perusahaan (Rp)', sumBy(validOrders, companyFeeOf)],
+      ['Jumlah Produk', products.length],
+      ['Jumlah Brand', brands.length]
+    ];
+
+    return [
+      {
+        id: 'ringkasan',
+        label: 'Ringkasan',
+        sheetName: 'Ringkasan',
+        desc: 'Angka utama pesanan masuk, omzet, dan fee perusahaan.',
+        headers: ['Metrik', 'Nilai'],
+        numericCols: [1],
+        sum: false,
+        rows: summaryRows
+      },
+      {
+        id: 'pesanan',
+        label: 'Daftar Pesanan',
+        sheetName: 'Pesanan',
+        desc: 'Semua pesanan PO: nilai, diskon pabrik, fee mitra & perusahaan, DP, pelunasan, ongkir, status, dan tahap proses.',
+        headers: [
+          'Invoice', 'Tanggal', 'Mitra', 'Level', 'Brand', 'Produk', 'Varian', 'Qty',
+          'Nilai (Rp)', 'Diskon Pabrik (Rp)', 'Fee Mitra (Rp)', 'Fee Perusahaan (Rp)',
+          'DP (Rp)', 'Status DP', 'Pelunasan (Rp)', 'Status Pelunasan',
+          'Ongkir (Rp)', 'Status Ongkir', 'Sisa (Rp)', 'Tahap'
+        ],
+        numericCols: [7, 8, 9, 10, 11, 12, 14, 16, 18],
+        currencyCols: [8, 9, 10, 11, 12, 14, 16, 18],
+        integerCols: [7],
+        dateCols: [1],
+        rows: orders.map((o) => [
+          o.invoice, o.date, o.mitraName, o.level, o.brand, o.produk, o.variant, o.qty,
+          o.subtotal, num(o.brandDiscountNominal), num(o.feeMitraNominal), companyFeeOf(o),
+          o.dpNominal, o.dpStatus, o.pelunasanNominal, o.pelunasanStatus,
+          o.ongkir, o.ongkirStatus, orderOutstanding(o), stageMeta(orderStage(o)).label
+        ])
+      },
+      {
+        id: 'rekap_produk',
+        label: 'Rekap Checkout per Produk',
+        sheetName: 'Rekap Produk',
+        desc: 'Jumlah invoice, qty terjual, omzet, piutang, dan sisa kuota tiap produk.',
+        headers: ['Produk', 'Brand', 'Harga (Rp)', 'Jumlah Invoice', 'Qty Terjual', 'Omzet (Rp)', 'Piutang (Rp)', 'Kuota', 'Terpakai', 'Sisa Kuota', 'Status PO'],
+        numericCols: [2, 3, 4, 5, 6, 7, 8, 9],
+        currencyCols: [2, 5, 6],
+        integerCols: [3, 4, 7, 8, 9],
+        rows: productSummary.map((p) => [
+          p.title, p.brand, p.price, p.invoiceCount, p.qtySold, p.omzet, p.piutang,
+          p.quota, p.used, p.remaining, p.status
+        ])
+      },
+      {
+        id: 'rekap_brand',
+        label: 'Rekap Brand & Fee',
+        sheetName: 'Rekap Brand',
+        desc: 'Diskon pabrik tiap brand, fee per level mitra, omzet, dan fee perusahaan.',
+        headers: [
+          'Brand', 'Diskon Pabrik (%)', 'Fee DB (%)', 'Fee Sub DB (%)', 'Fee Agen (%)', 'Fee Reseller (%)',
+          'Jumlah Produk', 'Invoice', 'Qty', 'Omzet (Rp)', 'Diskon Pabrik (Rp)', 'Fee Mitra (Rp)', 'Fee Perusahaan (Rp)'
+        ],
+        numericCols: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        currencyCols: [9, 10, 11, 12],
+        integerCols: [6, 7, 8],
+        sum: [6, 7, 8, 9, 10, 11, 12],
+        rows: brandRecap
+      },
+      {
+        id: 'rekap_fee_level',
+        label: 'Rekap Fee per Level',
+        sheetName: 'Rekap Fee Level',
+        desc: 'Keuntungan perusahaan per level mitra: diskon pabrik dikurangi fee mitra.',
+        headers: [
+          'Level', 'Invoice', 'Qty', 'Omzet (Rp)', 'Diskon Pabrik (Rp)',
+          'Fee Mitra (Rp)', 'Fee Perusahaan (Rp)', 'Margin Fee (%)'
+        ],
+        numericCols: [1, 2, 3, 4, 5, 6, 7],
+        currencyCols: [3, 4, 5, 6],
+        integerCols: [1, 2],
+        sum: [1, 2, 3, 4, 5, 6],
+        rows: levelRecap
+      }
+    ];
+  }, [orders, productSummary, brands, products, pendingAcc]);
+
   const filteredBrands = useMemo(() => {
     const q = brandSearch.toLowerCase().trim();
     const list = brands.filter((b) => {
@@ -731,6 +867,7 @@ export default function PurchasingDashboard({
         ]
       },
       { id: 'terhapus', label: 'Penjualan Terhapus', title: 'Penjualan Terhapus', icon: 'trash' },
+      { id: 'ekspor_laporan', label: 'Ekspor Laporan', title: 'Unduh Laporan Lengkap (Excel)', icon: 'download' },
       { id: 'pengaturan_akun', label: 'Pengaturan Akun', title: 'Pengaturan Profil & Keamanan', icon: 'settings' }
     ],
     [pendingAcc.length, marketingPR.length]
@@ -1171,6 +1308,7 @@ export default function PurchasingDashboard({
             addon_nominal: addonTotal,
             fee: netFee,
             discount_nominal: item.discountNominal || 0,
+            brand_discount_nominal: item.brandDiscountNominal || 0,
             subtotal: item.subtotal
           }]
         };
@@ -2882,31 +3020,6 @@ export default function PurchasingDashboard({
     toast('Pengaturan purchasing tersimpan di database.');
   };
 
-  const exportOrders = () => {
-    downloadCSV(`rekap_pesanan_${todayISO()}.csv`, [
-      ['Invoice', 'Tanggal', 'Mitra', 'Level', 'Brand', 'Produk', 'Varian', 'Qty', 'Subtotal', 'DP', 'Status DP', 'Pelunasan', 'Status Pelunasan', 'Ongkir', 'Status Ongkir', 'Tahap'],
-      ...filteredOrders.map((o) => [
-        o.invoice,
-        o.date,
-        o.mitraName,
-        o.level,
-        o.brand,
-        o.produk,
-        o.variant,
-        o.qty,
-        o.subtotal,
-        o.dpNominal,
-        o.dpStatus,
-        o.pelunasanNominal,
-        o.pelunasanStatus,
-        o.ongkir,
-        o.ongkirStatus,
-        stageMeta(orderStage(o)).label
-      ])
-    ]);
-    toast('Rekap pesanan diunduh.');
-  };
-
   const exportProducts = () => {
     downloadCSV(`rekap_checkout_produk_${todayISO()}.csv`, [
       ['Produk', 'Brand', 'Harga', 'Invoice', 'Qty Checkout', 'Omzet', 'Piutang', 'Kuota', 'Terpakai', 'Sisa', 'Status PO'],
@@ -3217,11 +3330,6 @@ export default function PurchasingDashboard({
         onLogout={onLogout}
         onNavigateStore={onNavigateStore}
         notifications={notifications}
-        headerRight={
-          <Button variant="outline" icon="download" onClick={exportOrders}>
-            Ekspor Pesanan
-          </Button>
-        }
       >
         {/* ============================= DASHBOARD ============================= */}
         {activeMenu === 'dashboard' && (
@@ -3271,7 +3379,6 @@ export default function PurchasingDashboard({
         {activeMenu === 'pesanan' && (
           <PurchasingOrdersTab
             filteredOrders={filteredOrders}
-            exportOrders={exportOrders}
             goTo={goTo}
             orders={orders}
             stageFilter={stageFilter}
@@ -3526,6 +3633,11 @@ export default function PurchasingDashboard({
             toggleCourier={toggleCourier}
             deleteCourier={deleteCourier}
           />
+        )}
+
+        {/* ============================ EKSPOR LAPORAN ====================== */}
+        {activeMenu === 'ekspor_laporan' && (
+          <ExportReportPanel sections={exportSections} fileName="laporan_purchasing" />
         )}
 
         {/* ============================= PENGATURAN AKUN ============================= */}
