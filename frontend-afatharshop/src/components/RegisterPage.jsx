@@ -13,7 +13,7 @@ export default function RegisterPage({
   onNavigateLogin,
   onNavigateHome
 }) {
-  const adminNumber = '6281219991888';
+  const adminNumber = '6281311495285'; // Admin WhatsApp number for registration confirmation
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -48,7 +48,7 @@ export default function RegisterPage({
     const cleanCity = city.trim();
 
     if (!cleanName) {
-      setErrorMsg('Nama lengkap atau nama butik wajib diisi.');
+      setErrorMsg('Nama lengkap wajib diisi.');
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
@@ -118,7 +118,7 @@ export default function RegisterPage({
             className="h-16 sm:h-20 w-auto object-contain mx-auto mb-1"
           />
           <span className="inline-block bg-[#FFF8EE] text-[#936E39] border border-[#F6E1C4] text-[10px] sm:text-[11px] font-bold px-3.5 py-1 rounded-full uppercase tracking-wider mt-2">
-            PROGRAM KEMITRAAN & RESELLER
+            PROGRAM KEMITRAAN @AFATHARSHOP
           </span>
         </div>
 
@@ -199,13 +199,13 @@ export default function RegisterPage({
                   <span className="w-4 h-4 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
                     <CheckIcon className="w-2.5 h-2.5" />
                   </span>
-                  <span>Akses Katalog Pre-Order</span>
+                  <span>Akses Produk Katalog Pre-Order</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <span className="w-4 h-4 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
                     <CheckIcon className="w-2.5 h-2.5" />
                   </span>
-                  <span>Harga Khusus Reseller & Agen</span>
+                  <span>Harga Khusus Mitra</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <span className="w-4 h-4 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
@@ -217,7 +217,7 @@ export default function RegisterPage({
                   <span className="w-4 h-4 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
                     <CheckIcon className="w-2.5 h-2.5" />
                   </span>
-                  <span>Verifikasi Cepat oleh Admin</span>
+                  <span>Verifikasi Akun oleh Admin</span>
                 </li>
               </ul>
             </div>
@@ -231,12 +231,12 @@ export default function RegisterPage({
             <form onSubmit={handleSubmit} className="space-y-3.5 text-left">
               <div>
                 <label className="block text-xs font-semibold text-stone-700 mb-1">
-                  Nama Lengkap / Nama Butik <span className="text-rose-500">*</span>
+                  Nama Lengkap <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="Contoh: Butik Hijab Zahra"
+                  placeholder="Contoh: John Doe"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full text-xs sm:text-sm px-3.5 py-2.5 border border-stone-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#8B6A3E]/30 focus:border-[#8B6A3E]"

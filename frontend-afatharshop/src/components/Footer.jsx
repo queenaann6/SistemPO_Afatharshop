@@ -47,7 +47,7 @@ export default function Footer() {
             </h3>
             <div className="space-y-2 text-xs text-amber-100/90">
               <a
-                href="https://wa.me/81311495285"
+                href="https://wa.me/6281311495285"
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-2 hover:text-[#F0C973] transition"
@@ -56,7 +56,7 @@ export default function Footer() {
                 <span> Admin 3 @afatharshop - Purchasing </span>
               </a>
               <a
-                href="https://wa.me/81537425493"
+                href="https://wa.me/6281537425493"
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-2 hover:text-[#F0C973] transition"
