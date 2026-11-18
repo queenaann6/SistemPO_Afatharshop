@@ -202,6 +202,7 @@ export const api = {
   products: (params) => request(`/products${buildQuery(params)}`),
   product: (id) => request(`/products/${id}`),
   brands: () => request('/brands', { auth: false }),
+  brand: (id) => request(`/brands/${id}`, { auth: false }),
   suppliers: () => request('/suppliers', { auth: false }),
   categories: () => request('/categories', { auth: false }),
   couriers: () => request('/couriers', { auth: false }),
@@ -342,6 +343,7 @@ export const api = {
       request(`/management/suppliers/${id}`, { method: 'DELETE' }),
 
     brands: (options) => request('/management/brands', options),
+    brand: (id) => request(`/management/brands/${id}`),
     createBrand: (payload) =>
       request('/management/brands', { method: 'POST', body: payload }),
     updateBrand: (id, payload) =>

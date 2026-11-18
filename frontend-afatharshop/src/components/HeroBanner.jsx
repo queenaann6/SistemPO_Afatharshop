@@ -22,7 +22,7 @@ export default function HeroBanner({ onSelectSale, onSelectPreOrder }) {
 
           {/* Subtitle Header */}
           <p className="text-[#ECC467] text-[11px] sm:text-xs font-semibold tracking-[0.25em] uppercase mb-2">
-            MOSLEM WOMENS NEEDS • OFFICIAL STORE
+            MOSLEM MOSLEMAH NEEDS • OFFICIAL STORE
           </p>
 
           {/* Main Title */}
@@ -32,7 +32,7 @@ export default function HeroBanner({ onSelectSale, onSelectPreOrder }) {
 
           {/* Description */}
           <p className="text-amber-100/90 text-xs sm:text-sm lg:text-base max-w-2xl mx-auto font-light leading-relaxed mb-6 sm:mb-8">
-            Koleksi busana muslimah syar'i eksklusif dengan keanggunan siluet elegan & material premium.
+            Koleksi busana muslim-muslimah eksklusif dengan keanggunan siluet elegan & material premium.
           </p>
 
           {/* CTA Buttons */}

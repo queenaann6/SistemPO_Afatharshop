@@ -529,7 +529,7 @@ export default function App() {
         if (matchedBrand) {
           return {
             ...p,
-            brand: String(matchedBrand.name || p.brand).toUpperCase(),
+            brand: matchedBrand.name || p.brand,
             brandId: brandIdFor(matchedBrand.name)
           };
         }
@@ -705,6 +705,17 @@ export default function App() {
           const coreBrands = rawBrands.map(mapBrandToCore);
           setPoBrands(coreBrands);
           setBrands(coreBrandsToProject(coreBrands));
+        } else {
+          try {
+            const brandRes = await api.brands();
+            if (Array.isArray(brandRes?.data) && brandRes.data.length) {
+              const coreBrands = brandRes.data.map(mapBrandToCore);
+              setPoBrands(coreBrands);
+              setBrands(coreBrandsToProject(coreBrands));
+            }
+          } catch {
+            /* ignore fallback error */
+          }
         }
 
         const rawSuppliers = snapshot.suppliers || [];

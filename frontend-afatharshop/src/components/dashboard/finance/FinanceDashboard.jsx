@@ -76,6 +76,7 @@ import {
   groupBy,
   hasAddress,
   invoicePatchToServer,
+  isBrandMatch,
   isPaid,
   levelTone,
   nextAction,
@@ -434,7 +435,7 @@ export default function FinanceDashboard({
     return orders
       .filter((o) => {
         if (stageFilter !== 'all' && orderStage(o) !== stageFilter) return false;
-        if (listBrand !== 'all' && o.brand !== listBrand) return false;
+        if (listBrand !== 'all' && !isBrandMatch(o.brand, listBrand)) return false;
         if (!q) return true;
         return `${o.invoice} ${o.mitraName} ${o.produk} ${o.variant} ${o.brand}`
           .toLowerCase()
@@ -566,7 +567,7 @@ export default function FinanceDashboard({
       num(o.feeCompanyNominal) || Math.max(0, num(o.brandDiscountNominal) - num(o.feeMitraNominal));
     const brandDiscPctOf = (name) => {
       const brand = (brands || []).find(
-        (b) => String(b.name || '').toLowerCase() === String(name || '').toLowerCase()
+        (b) => isBrandMatch(b.name, name)
       );
       return num(brand?.discountValue ?? brand?.discountDBAll);
     };

@@ -46,7 +46,13 @@ export default function PurchasingSuppliersTab({
           </thead>
           <tbody className="divide-y divide-gray-100">
             {suppliers.map((s) => {
-              const supplied = brands.filter((b) => b.supplier === s.name);
+              const supplied = brands.filter((b) => {
+                if (b.supplier_id && s.backendId && Number(b.supplier_id) === Number(s.backendId)) return true;
+                if (b.supplier_id && (String(b.supplier_id) === String(s.id) || String(b.supplier_id) === String(s.backendId))) return true;
+                const bSup = String(b.supplier || '').trim().toLowerCase();
+                const sName = String(s.name || '').trim().toLowerCase();
+                return Boolean(bSup && sName && bSup === sName);
+              });
               return (
                 <tr key={s.id} className="hover:bg-gray-50/70">
                   <td className={`${TD} font-bold text-gray-900`}>{s.name}</td>

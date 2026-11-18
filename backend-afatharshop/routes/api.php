@@ -68,6 +68,7 @@ Route::get('products', [ProductController::class, 'index']);
 Route::get('products/{id}', [ProductController::class, 'show'])->whereNumber('id');
 
 Route::get('brands', [BrandController::class, 'index']);
+Route::get('brands/{id}', [BrandController::class, 'show']);
 Route::get('suppliers', [SupplierController::class, 'index']);
 Route::get('categories', [CategoryController::class, 'index']);
 Route::get('couriers', [CourierController::class, 'index']);
@@ -162,6 +163,7 @@ Route::prefix('management')->middleware('auth:api')->group(function () {
         Route::post('suppliers', [ManagementController::class, 'storeSupplier']);
         Route::put('suppliers/{id}', [ManagementController::class, 'updateSupplier']);
 
+        Route::get('brands/{id}', [ManagementController::class, 'showBrand']);
         Route::get('brands', [ManagementController::class, 'brands']);
         Route::post('brands', [ManagementController::class, 'storeBrand']);
         Route::put('brands/{id}', [ManagementController::class, 'updateBrand']);

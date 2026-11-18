@@ -194,15 +194,24 @@ export const mapProduct = (product) => {
     : '-';
   const openDate = product.open_date || product.openDate || (product.batch?.start_date ? String(product.batch.start_date).slice(0, 10) : '');
 
+  const rawBrandName = typeof product.brand === 'object' ? (product.brand?.name || '') : (product.brand || '');
+  const brandName = rawBrandName ? String(rawBrandName).trim() : '';
+  const brandNumericId = product.brand_id ?? (typeof product.brand === 'object' ? product.brand?.id : null);
+  const brandSlug = brandIdFor(brandName);
+
   return {
     id: product.id,
     backendId: product.id,
     title: product.title || product.name,
     series: product.series || 'PRE-ORDER COLLECTION • 2027 SERIES',
     sku: product.article_code || product.title || product.name,
-    brand: String(product.brand || '').toUpperCase(),
-    brandId: brandIdFor(product.brand),
+    brand: brandName,
+    brand_id: brandNumericId,
+    brandId: brandSlug,
     category: product.category || 'Gamis & Abaya',
+    category_id: product.category_id ?? null,
+    po_batch_id: product.po_batch_id ?? null,
+    batch: product.batch?.name || (typeof product.batch === 'string' ? product.batch : ''),
     price: basePrice,
     userPrice: toNumber(product.user_price ?? product.userPrice ?? basePrice),
     priceMin: basePrice,
@@ -648,7 +657,9 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
     return {
       id: item.id ?? index + 1,
       variantId: item.variant?.id ?? item.product_variant_id ?? null,
-      productId: item.variant?.product?.id ?? null,
+      productId: item.variant?.product?.id ?? item.product_id ?? null,
+      brand: item.variant?.product?.brand?.name || (typeof item.variant?.product?.brand === 'string' ? item.variant?.product?.brand : '') || product.brand?.name || (typeof product.brand === 'string' ? product.brand : '') || '',
+      brand_id: item.variant?.product?.brand?.id ?? item.variant?.product?.brand_id ?? product.brand?.id ?? product.brand_id ?? null,
       splits: Array.isArray(item.splits) ? item.splits : [],
       addressId: item.address_id ?? null,
       title: item.variant?.product?.name || product.name || 'Item PO',
@@ -699,9 +710,10 @@ export const mapOrderToProjectOrder = (order, user = {}) => {
       (acc, row) => ({ ...acc, [row.type]: row.id, [`stage-${row.sequence_number}`]: row.id }),
       {}
     ),
-    brand: product.brand?.name || '',
-    brandName: product.brand?.name || '',
-    title: product.name || 'Pesanan PO',
+    brand: product.brand?.name || (typeof product.brand === 'string' ? product.brand : '') || mappedItems[0]?.brand || '',
+    brandName: product.brand?.name || (typeof product.brand === 'string' ? product.brand : '') || mappedItems[0]?.brand || '',
+    brand_id: product.brand?.id ?? product.brand_id ?? mappedItems[0]?.brand_id ?? null,
+    title: product.name || mappedItems[0]?.title || 'Pesanan PO',
     date: order.ordered_at || order.created_at ? formatDisplayDate(order.ordered_at || order.created_at) : '',
     dateRaw: order.ordered_at || order.created_at || '',
     status,
@@ -943,6 +955,7 @@ export const mapSupplier = (supplier) => ({
 export const mapBrandToCore = (brand) => {
   const supplierName = brand.supplier_name || (typeof brand.supplier === 'object' ? brand.supplier?.name : brand.supplier) || '';
   const supplierCity = brand.address || (typeof brand.supplier === 'object' ? brand.supplier?.city : '') || 'Solo';
+  const prodCount = toNumber(brand.products_count ?? brand.count, 0);
   return {
     id: brand.id ? `b-${brand.id}` : (brand.id || `b-${slugify(brand.name)}`),
     backendId: brand.id,
@@ -950,6 +963,8 @@ export const mapBrandToCore = (brand) => {
     supplier: supplierName,
     supplier_id: brand.supplier_id || (typeof brand.supplier === 'object' ? brand.supplier?.id : null),
     address: supplierCity,
+    logo: brand.logo || null,
+    description: brand.description || null,
     discountType: brand.discount_type || brand.discountType || 'pct',
     discountValue: toNumber(brand.discount_value ?? brand.discountValue ?? brand.discount_db_all ?? brand.discountDBAll, 30),
     feeType: brand.fee_type || brand.feeType || 'pct',
@@ -958,6 +973,8 @@ export const mapBrandToCore = (brand) => {
     discountAgen: toNumber(brand.discount_agen ?? brand.discountAgen, 20),
     discountReseller: toNumber(brand.discount_reseller ?? brand.discountReseller, 15),
     active: brand.is_active !== false && brand.active !== false,
+    products_count: prodCount,
+    count: prodCount,
     createdAt: String(brand.created_at || '').slice(0, 10)
   };
 };

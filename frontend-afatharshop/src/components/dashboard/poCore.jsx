@@ -31,6 +31,21 @@ export const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 export const num = (n) => Number(n || 0);
 export const pct = (n) => `${Math.round(Number(n || 0))}%`;
 
+export const isBrandMatch = (a, b) => {
+  if (!a || !b) return false;
+  const aObj = typeof a === 'object' ? a : null;
+  const bObj = typeof b === 'object' ? b : null;
+
+  const aBackendId = aObj?.backendId || aObj?.brand_id || aObj?.brandId || null;
+  const bBackendId = bObj?.backendId || bObj?.brand_id || bObj?.brandId || null;
+  if (aBackendId && bBackendId && String(aBackendId) === String(bBackendId)) return true;
+
+  const aName = String(aObj?.brand || aObj?.brandName || aObj?.name || a || '').trim().toLowerCase();
+  const bName = String(bObj?.brand || bObj?.brandName || bObj?.name || b || '').trim().toLowerCase();
+
+  return Boolean(aName && bName && aName === bName);
+};
+
 export const toISO = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 export const parseISO = (iso) => {
@@ -2862,7 +2877,7 @@ export function FeeRecapPanel({
     [orders]
   );
   const filtered = useMemo(
-    () => (brandFilter === 'all' ? valid : valid.filter((o) => o.brand === brandFilter)),
+    () => (brandFilter === 'all' ? valid : valid.filter((o) => isBrandMatch(o.brand, brandFilter))),
     [valid, brandFilter]
   );
   const feeOf = (o) => num(o.feeMitraNominal) || num(o.discountNominal);

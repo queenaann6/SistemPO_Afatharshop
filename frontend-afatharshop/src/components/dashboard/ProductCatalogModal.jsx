@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { DEFAULT_DP_PCT, defaultStagePcts } from '../../utils/terminScheme';
+import { isBrandMatch } from './poCore';
 
 const PRESET_COLORS = [
   { name: 'Emerald Green', hex: '#059669' },
@@ -155,7 +156,7 @@ export default function ProductCatalogModal({
 
   // Brand object terpilih
   const selectedBrandObj = useMemo(() => {
-    return brands.find((b) => b.name === brand || b.id === brandId || b.backendId === brandId);
+    return brands.find((b) => isBrandMatch(b, { brand, brandId, backendId: brandId, name: brand }));
   }, [brands, brand, brandId]);
 
   const prevOpenRef = useRef(false);
@@ -185,8 +186,8 @@ export default function ProductCatalogModal({
       setTitle(initialData.title || initialData.name || '');
 
       const initialBrand = initialData.brand || brands[0]?.name || '';
-      setBrand(initialBrand);
-      const matchedBrand = brands.find((b) => b.name === initialBrand);
+      const matchedBrand = brands.find((b) => isBrandMatch(b, { brand: initialBrand, brandId: initialData.brand_id || initialData.brandId, name: initialBrand }));
+      setBrand(matchedBrand ? matchedBrand.name : initialBrand);
       setBrandId(initialData.brand_id || initialData.brandId || matchedBrand?.backendId || matchedBrand?.id || '');
 
       const initialCategory = initialData.category || categories[0] || 'Gamis & Abaya';
@@ -508,8 +509,11 @@ export default function ProductCatalogModal({
 
   const handleBrandChange = (brandName) => {
     setBrand(brandName);
-    const bObj = brands.find((b) => b.name === brandName);
-    if (bObj) setBrandId(bObj.backendId || bObj.id || '');
+    const bObj = brands.find((b) => isBrandMatch(b.name, brandName));
+    if (bObj) {
+      setBrand(bObj.name);
+      setBrandId(bObj.backendId || bObj.id || '');
+    }
   };
 
   const handleCategoryChange = (catName) => {
@@ -586,7 +590,7 @@ export default function ProductCatalogModal({
       alert('Nama batch PO wajib diisi.');
       return;
     }
-    const selectedBrandObj = brands.find((b) => b.name === brand || b.id === brandId || b.backendId === brandId);
+    const selectedBrandObj = brands.find((b) => isBrandMatch(b, { brand, brandId, backendId: brandId, name: brand }));
     const numericBrandId =
       (selectedBrandObj && (selectedBrandObj.backendId || (typeof selectedBrandObj.id === 'number' ? selectedBrandObj.id : null))) ||
       (typeof brandId === 'number' ? brandId : null) ||
@@ -883,7 +887,7 @@ export default function ProductCatalogModal({
       const activePrices = variants.filter((v) => v.is_active && Number(v.price) > 0).map((v) => Number(v.price));
       const effectiveBasePrice = activePrices.length > 0 ? Math.min(...activePrices) : Number(variants[0]?.price) || 0;
 
-      const selectedBrandObj = brands.find((b) => b.name === brand || b.id === brandId || b.backendId === brandId);
+      const selectedBrandObj = brands.find((b) => isBrandMatch(b, { brand, brandId, backendId: brandId, name: brand }));
       const numericBrandId =
         (selectedBrandObj && (selectedBrandObj.backendId || (typeof selectedBrandObj.id === 'number' ? selectedBrandObj.id : null))) ||
         (typeof brandId === 'number' ? brandId : null) ||
@@ -1487,7 +1491,7 @@ export default function ProductCatalogModal({
                         {b.name}
                       </option>
                     ))}
-                    {brand && !brands.some((b) => b.name === brand) && (
+                    {brand && !brands.some((b) => isBrandMatch(b.name, brand)) && (
                       <option value={brand}>{brand}</option>
                     )}
                   </select>

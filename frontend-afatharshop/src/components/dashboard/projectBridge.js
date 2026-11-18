@@ -157,6 +157,7 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
     const orderTitle = order.title || items[0]?.title;
     const matchedProduct =
       (products || []).find((p) => String(p.id) === String(items[0]?.productId ?? '__')) ||
+      (products || []).find((p) => p.projectId && String(p.projectId) === String(items[0]?.productId ?? '__')) ||
       (products || []).find((p) => titleKey(p.title) === titleKey(orderTitle));
     const qty = items.reduce((sum, item) => sum + num(item.qty), 0) || num(order.qty) || 1;
     const subtotal =
@@ -234,8 +235,11 @@ export const projectOrdersToCore = (projectOrders, { currentUser, seedMitra = []
       level,
       phone: order.mitraPhone || seed?.phone || currentUser?.phone || '',
       email: order.mitraEmail || '',
-      brand: prettyBrand(order.brand || items[0]?.brand),
-      produkId: matchedProduct ? `p-${matchedProduct.id}` : `p-${slug(orderTitle)}`,
+      brand: prettyBrand(order.brand || items[0]?.brand || matchedProduct?.brand),
+      brand_id: order.brand_id ?? items[0]?.brand_id ?? matchedProduct?.brand_id ?? null,
+      produkId: matchedProduct
+        ? (String(matchedProduct.id).startsWith('p-') ? matchedProduct.id : `p-${matchedProduct.id}`)
+        : `p-${slug(orderTitle)}`,
       produk: orderTitle || 'Pesanan PO',
       variant: items.map((i) => i.variant).filter(Boolean).join(' · ') || order.variant || '-',
       qty,
@@ -605,7 +609,12 @@ export const projectProductsToCore = (products) =>
       projectId: product.id,
       title: product.title,
       brand: prettyBrand(product.brand, product.brandId),
+      brand_id: product.brand_id ?? product.backendMeta?.brandId ?? null,
+      brandId: product.brandId || null,
       category: product.category || 'Gamis & Abaya',
+      category_id: product.category_id ?? product.backendMeta?.categoryId ?? null,
+      po_batch_id: product.po_batch_id ?? product.backendMeta?.batch?.id ?? null,
+      batch: product.batch || product.backendMeta?.batch?.name || '',
       price: num(product.price),
       hpp: Math.round(num(product.price) * 0.62),
       isSale: !!product.isSale,
@@ -655,7 +664,7 @@ export const coreProductsToProject = (coreProducts, prevProducts) => {
       (product.projectId ? byId.get(String(product.projectId)) : null) ||
       byId.get(String(product.id)) ||
       byId.get(baseId);
-    const brandName = String(product.brand || base?.brand || '').toUpperCase();
+    const brandName = String(product.brand || base?.brand || '').trim();
     const brandId = brandIdOf(product.brand || base?.brand);
     const variants = product.variants || [];
     const colors = [...new Set(variants.map((v) => v.color).filter(Boolean))];
@@ -703,6 +712,7 @@ export const coreProductsToProject = (coreProducts, prevProducts) => {
       series: base?.series || 'PRE-ORDER COLLECTION • 2027 SERIES',
       sku: base?.sku || product.title,
       brand: brandName,
+      brand_id: product.brand_id ?? base?.brand_id ?? null,
       brandId,
       category: product.category || 'Gamis & Abaya',
       price: basePrice,
@@ -788,12 +798,14 @@ export const coreBrandsToProject = (coreBrands, prevBrands) => {
   const byId = new Map(prev.map((b) => [String(b.id), b]));
   const rows = (coreBrands || []).map((brand) => {
     const slugId = slug(brand.name);
+    const resolvedCount = brand.count ?? brand.products_count ?? (byId.get(String(slugId))?.count ?? byId.get(String(brand.id))?.count ?? 0);
     return {
       id: slugId,
       rawId: brand.id,
       backendId: brand.backendId || brand.id,
       name: brand.name,
-      count: byId.get(String(slugId))?.count ?? byId.get(String(brand.id))?.count ?? 0
+      logo: brand.logo || null,
+      count: resolvedCount
     };
   });
   return [{ id: 'all', name: 'Semua Brand', count: rows.reduce((sum, b) => sum + b.count, 0) }, ...rows];

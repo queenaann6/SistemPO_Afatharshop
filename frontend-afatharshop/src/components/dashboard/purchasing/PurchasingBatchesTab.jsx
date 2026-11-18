@@ -109,7 +109,7 @@ export default function PurchasingBatchesTab({
             {filteredBatches.map((b) => {
               const linkedCount =
                 b.products_count ??
-                products.filter((p) => p.po_batch_id === b.id || p.batch === b.name).length;
+                products.filter((p) => p.po_batch_id === b.id || (p.batch && b.name && String(p.batch).trim().toLowerCase() === String(b.name).trim().toLowerCase())).length;
               const isOpen = b.status === 'open';
 
               let closeText = '—';

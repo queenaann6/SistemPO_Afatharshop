@@ -376,15 +376,25 @@ class ManagementController extends Controller
     }
 
     // Brands
-    public function brands(): JsonResponse
+    private function formatBrand(Brand $b, ?Request $request = null): array
     {
-        $brands = Brand::with('supplier')->withCount('products')->orderBy('id')->get();
-        $data = $brands->map(fn (Brand $b) => [
+        $supplierName = $b->supplier?->name ?? ($request?->supplier ?? '');
+        $address = $request?->address ?? $b->supplier?->city ?? 'Solo';
+
+        return [
             'id'                => $b->id,
             'name'              => $b->name,
             'supplier_id'       => $b->supplier_id,
-            'supplier'          => $b->supplier?->name ?? '',
-            'address'           => $b->supplier?->city ?? 'Solo',
+            'supplier'          => $supplierName,
+            'supplier_name'     => $supplierName,
+            'supplier_obj'      => $b->supplier ? [
+                'id'             => $b->supplier->id,
+                'name'           => $b->supplier->name,
+                'city'           => $b->supplier->city,
+                'phone'          => $b->supplier->phone,
+                'contact_person' => $b->supplier->contact_person,
+            ] : null,
+            'address'           => $address,
             'logo'              => $b->logo,
             'description'       => $b->description,
             'discount_db_all'   => (float) ($b->discount_db_all ?? 30),
@@ -403,15 +413,47 @@ class ManagementController extends Controller
             'feeType'           => $b->fee_type ?? 'pct',
             'is_active'         => (bool) $b->is_active,
             'active'            => (bool) $b->is_active,
-            'products_count'    => $b->products_count,
+            'products_count'    => $b->relationLoaded('products') ? $b->products->count() : ($b->products_count ?? $b->products()->count()),
+            'count'             => $b->relationLoaded('products') ? $b->products->count() : ($b->products_count ?? $b->products()->count()),
             'created_at'        => optional($b->created_at)->toIso8601String(),
-        ]);
+        ];
+    }
+
+    public function brands(): JsonResponse
+    {
+        $brands = Brand::with('supplier')->withCount('products')->orderBy('id')->get();
+        $data = $brands->map(fn (Brand $b) => $this->formatBrand($b));
 
         return response()->json([
             'success' => true,
             'message' => 'Daftar brand.',
             'total'   => $data->count(),
             'data'    => $data,
+        ]);
+    }
+
+    public function showBrand($id): JsonResponse
+    {
+        $cleanId = is_string($id) && preg_match('/^[a-z]+-(\d+)$/i', trim($id), $matches)
+            ? (int) $matches[1]
+            : (is_numeric($id) ? (int) $id : null);
+
+        $brand = $cleanId ? Brand::with('supplier')->withCount('products')->find($cleanId) : null;
+        if (!$brand && is_string($id)) {
+            $cleanSlug = preg_replace('/^[a-z]+-/i', '', trim($id));
+            $brand = Brand::with('supplier')->withCount('products')
+                ->whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($cleanSlug)])
+                ->orWhereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($id))])
+                ->first();
+        }
+
+        if (!$brand) {
+            return response()->json(['success' => false, 'message' => 'Brand tidak ditemukan.'], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => $this->formatBrand($brand),
         ]);
     }
 
@@ -430,7 +472,7 @@ class ManagementController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => "Brand {$existing->name} sudah terdaftar.",
-                'data'    => $existing,
+                'data'    => $this->formatBrand($existing, $request),
             ], 200);
         }
 
@@ -467,32 +509,7 @@ class ManagementController extends Controller
         return response()->json([
             'success' => true,
             'message' => "Brand {$brand->name} berhasil ditambahkan.",
-            'data'    => [
-                'id'                => $brand->id,
-                'name'              => $brand->name,
-                'supplier_id'       => $brand->supplier_id,
-                'supplier'          => $brand->supplier?->name ?? ($request->supplier ?? ''),
-                'address'           => $request->address ?? $brand->supplier?->city ?? 'Solo',
-                'logo'              => $brand->logo,
-                'description'       => $brand->description,
-                'discount_db_all'   => (float) ($brand->discount_db_all ?? 30),
-                'discount_sub_db'   => (float) ($brand->discount_sub_db ?? 25),
-                'discount_agen'     => (float) ($brand->discount_agen ?? 20),
-                'discount_reseller' => (float) ($brand->discount_reseller ?? 15),
-                'discountDBAll'     => (float) ($brand->discount_db_all ?? 30),
-                'discountSubDB'     => (float) ($brand->discount_sub_db ?? 25),
-                'discountAgen'      => (float) ($brand->discount_agen ?? 20),
-                'discountReseller'  => (float) ($brand->discount_reseller ?? 15),
-                'discount_type'     => $request->discountType ?? $request->discount_type ?? 'pct',
-                'discountType'      => $request->discountType ?? $request->discount_type ?? 'pct',
-                'discount_value'    => (float) ($request->discountValue ?? $request->discount_value ?? $brand->discount_db_all ?? 30),
-                'discountValue'     => (float) ($request->discountValue ?? $request->discount_value ?? $brand->discount_db_all ?? 30),
-                'fee_type'          => $request->feeType ?? $request->fee_type ?? 'pct',
-                'feeType'           => $request->feeType ?? $request->fee_type ?? 'pct',
-                'is_active'         => (bool) $brand->is_active,
-                'active'            => (bool) $brand->is_active,
-                'products_count'    => 0,
-            ],
+            'data'    => $this->formatBrand($brand, $request),
         ], 201);
     }
 
@@ -504,10 +521,17 @@ class ManagementController extends Controller
 
         $brand = $cleanId ? Brand::find($cleanId) : null;
         if (!$brand && is_string($id)) {
-            $brand = Brand::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($id))])->first();
+            $cleanSlug = preg_replace('/^[a-z]+-/i', '', trim($id));
+            $brand = Brand::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($cleanSlug)])
+                ->orWhereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($id))])
+                ->first();
         }
         if (!$brand && is_numeric($id)) {
             $brand = Brand::find((int) $id);
+        }
+        if (!$brand && ($request->filled('oldName') || $request->filled('old_name'))) {
+            $old = trim((string) ($request->oldName ?? $request->old_name));
+            $brand = Brand::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($old)])->first();
         }
         if (!$brand && $request->filled('name')) {
             $brand = Brand::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($request->name))])->first();
@@ -527,6 +551,7 @@ class ManagementController extends Controller
             $brand->is_active = (bool) ($request->is_active ?? $request->active);
         }
         if ($request->has('description')) $brand->description = $request->description;
+        if ($request->has('logo')) $brand->logo = $request->logo;
         if ($request->has('discount_db_all') || $request->has('discountDBAll')) {
             $brand->discount_db_all = (float) ($request->discount_db_all ?? $request->discountDBAll);
         }
@@ -579,32 +604,7 @@ class ManagementController extends Controller
         return response()->json([
             'success' => true,
             'message' => "Brand {$brand->name} berhasil diperbarui.",
-            'data'    => [
-                'id'                => $brand->id,
-                'name'              => $brand->name,
-                'supplier_id'       => $brand->supplier_id,
-                'supplier'          => $brand->supplier?->name ?? ($request->supplier ?? ''),
-                'address'           => $request->address ?? $brand->supplier?->city ?? 'Solo',
-                'logo'              => $brand->logo,
-                'description'       => $brand->description,
-                'discount_db_all'   => (float) ($brand->discount_db_all ?? 30),
-                'discount_sub_db'   => (float) ($brand->discount_sub_db ?? 25),
-                'discount_agen'     => (float) ($brand->discount_agen ?? 20),
-                'discount_reseller' => (float) ($brand->discount_reseller ?? 15),
-                'discountDBAll'     => (float) ($brand->discount_db_all ?? 30),
-                'discountSubDB'     => (float) ($brand->discount_sub_db ?? 25),
-                'discountAgen'      => (float) ($brand->discount_agen ?? 20),
-                'discountReseller'  => (float) ($brand->discount_reseller ?? 15),
-                'discount_type'     => $request->discountType ?? $request->discount_type ?? 'pct',
-                'discountType'      => $request->discountType ?? $request->discount_type ?? 'pct',
-                'discount_value'    => (float) ($request->discountValue ?? $request->discount_value ?? $brand->discount_db_all ?? 30),
-                'discountValue'     => (float) ($request->discountValue ?? $request->discount_value ?? $brand->discount_db_all ?? 30),
-                'fee_type'          => $request->feeType ?? $request->fee_type ?? 'pct',
-                'feeType'           => $request->feeType ?? $request->fee_type ?? 'pct',
-                'is_active'         => (bool) $brand->is_active,
-                'active'            => (bool) $brand->is_active,
-                'products_count'    => $brand->products()->count(),
-            ],
+            'data'    => $this->formatBrand($brand, $request),
         ]);
     }
 
@@ -616,7 +616,10 @@ class ManagementController extends Controller
 
         $brand = $cleanId ? Brand::find($cleanId) : null;
         if (!$brand && is_string($id)) {
-            $brand = Brand::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($id))])->first();
+            $cleanSlug = preg_replace('/^[a-z]+-/i', '', trim($id));
+            $brand = Brand::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($cleanSlug)])
+                ->orWhereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($id))])
+                ->first();
         }
         if (!$brand && is_numeric($id)) {
             $brand = Brand::find((int) $id);
@@ -3793,6 +3796,14 @@ class ManagementController extends Controller
         }
 
         if (!is_numeric($id)) {
+            $strId = trim((string) $id);
+            $cleanName = preg_replace('/^[a-z]+-/i', '', $strId);
+            $found = $modelClass::whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($cleanName)])
+                ->orWhereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower($strId)])
+                ->first();
+            if ($found) {
+                return (int) $found->id;
+            }
             throw new \InvalidArgumentException("Ref {$field} harus berupa id angka, bukan \"{$id}\".");
         }
 

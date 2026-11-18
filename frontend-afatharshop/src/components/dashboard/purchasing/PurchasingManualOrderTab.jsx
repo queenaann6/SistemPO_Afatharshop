@@ -6,6 +6,7 @@ import {
   Field,
   Icon,
   Input,
+  isBrandMatch,
   PageHead,
   Select,
   Textarea,
@@ -58,8 +59,8 @@ export default function PurchasingManualOrderTab({
               <Select
                 value={draftPreview.brand?.name || ''}
                 onChange={(e) => {
-                  const b = brands.find((x) => x.name === e.target.value);
-                  const first = products.find((p) => p.brand === b?.name);
+                  const b = brands.find((x) => isBrandMatch(x.name, e.target.value));
+                  const first = products.find((p) => isBrandMatch(p.brand, b?.name));
                   setDraft({
                     ...draft,
                     produkId: first?.id || '',
@@ -93,7 +94,7 @@ export default function PurchasingManualOrderTab({
               >
                 <option value="">— Pilih produk —</option>
                 {products
-                  .filter((p) => p.brand === draftPreview.brand?.name)
+                  .filter((p) => isBrandMatch(p.brand, draftPreview.brand?.name))
                   .map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.title} {p.status === 'closed' ? '(PO tutup)' : ''}

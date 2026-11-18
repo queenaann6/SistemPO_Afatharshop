@@ -955,4 +955,82 @@ class OrderSyncAndApiConnectivityTest extends TestCase
         $export->assertStatus(200);
         $this->assertStringContainsString('text/csv', $export->headers->get('content-type'));
     }
+
+    public function test_brand_api_lifecycle_and_nominal_discounts_across_all_sides(): void
+    {
+        $actors = $this->seedActors();
+        $purchasingToken = $actors['tokens']['purchasing'];
+        $ownerToken = $actors['tokens']['owner'];
+
+        // 1. Publik: list brands
+        $publicBrandsRes = $this->getJson('/api/brands')->assertStatus(200);
+        $publicBrandsRes->assertJsonPath('success', true);
+
+        // 2. Tambah brand baru dengan diskon nominal & fee nominal besar (> 999.99) oleh Purchasing (marketing)
+        $createRes = $this->asToken($purchasingToken)->postJson('/api/management/brands', [
+            'name'              => 'Brand Premium Hijab',
+            'supplier'          => 'Pabrik Konveksi Solo',
+            'address'           => 'Surakarta',
+            'discount_type'     => 'nominal',
+            'discount_value'    => 35000.00,
+            'fee_type'          => 'nominal',
+            'discount_db_all'   => 20000.00,
+            'discount_sub_db'   => 15000.00,
+            'discount_agen'     => 10000.00,
+            'discount_reseller' => 5000.00,
+        ])->assertStatus(201);
+
+        $createRes->assertJsonPath('success', true);
+        $createRes->assertJsonPath('data.name', 'Brand Premium Hijab');
+        $createRes->assertJsonPath('data.supplier', 'Pabrik Konveksi Solo');
+        $this->assertEquals(35000, $createRes->json('data.discount_value'));
+        $this->assertEquals(20000, $createRes->json('data.discount_db_all'));
+
+        $brandId = $createRes->json('data.id');
+        $this->assertIsNumeric($brandId);
+
+        // 3. Detail brand: publik dan management
+        $this->getJson('/api/brands/' . $brandId)->assertStatus(200)
+            ->assertJsonPath('data.name', 'Brand Premium Hijab');
+
+        $this->asToken($purchasingToken)->getJson('/api/management/brands/' . $brandId)->assertStatus(200)
+            ->assertJsonPath('data.name', 'Brand Premium Hijab');
+
+        // 4. Update brand menggunakan slug ID (b-ID)
+        $updateRes = $this->asToken($purchasingToken)->putJson('/api/management/brands/b-' . $brandId, [
+            'name'              => 'Brand Premium Hijab Updated',
+            'discount_value'    => 40000.00,
+            'discount_db_all'   => 25000.00,
+        ])->assertStatus(200);
+
+        $updateRes->assertJsonPath('data.name', 'Brand Premium Hijab Updated');
+        $this->assertEquals(40000, $updateRes->json('data.discount_value'));
+        $this->assertEquals(25000, $updateRes->json('data.discount_db_all'));
+
+        // 5. RBAC: Staff Purchasing (marketing) tidak boleh menghapus brand (403 Forbidden)
+        $this->asToken($purchasingToken)->deleteJson('/api/management/brands/' . $brandId)
+            ->assertStatus(403);
+
+        // 6. Cek integritas relasi: Owner mencoba menghapus brand yang terhubung ke produk (409 Conflict)
+        $product = Product::create([
+            'brand_id'    => $brandId,
+            'name'        => 'Gamis Syari Test Brand',
+            'price'       => 150000,
+            'status'      => 'draft',
+            'is_active'   => true,
+        ]);
+
+        $conflictDelete = $this->asToken($ownerToken)->deleteJson('/api/management/brands/' . $brandId);
+        $conflictDelete->assertStatus(409);
+
+        // Hapus produk terlebih dahulu
+        $product->delete();
+
+        // 7. Hapus brand sukses dilakukan oleh Owner
+        $deleteRes = $this->asToken($ownerToken)->deleteJson('/api/management/brands/' . $brandId);
+        $deleteRes->assertStatus(200)->assertJsonPath('success', true);
+
+        // Pastikan brand sudah tidak ada di publik
+        $this->getJson('/api/brands/' . $brandId)->assertStatus(404);
+    }
 }

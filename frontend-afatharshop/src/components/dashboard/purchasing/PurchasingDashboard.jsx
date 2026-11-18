@@ -79,6 +79,7 @@ import {
   downloadCSV,
   feeNominalFor,
   feeTypeFor,
+  isBrandMatch,
   brandDiscountNominalFor,
   brandDiscountTypeFor,
   brandDiscountValueFor,
@@ -416,7 +417,7 @@ export default function PurchasingDashboard({
           api.management.batches().catch(() => ({ data: [] }))
         ]);
         if (cancelled) return;
-        if (brandsRes.status === 'fulfilled' && Array.isArray(brandsRes.value?.data) && brandsRes.value.data.length > 0) {
+        if (brandsRes.status === 'fulfilled' && Array.isArray(brandsRes.value?.data)) {
           commitBrands(brandsRes.value.data.map(mapBrandToCore));
         }
         if (suppliersRes.status === 'fulfilled' && Array.isArray(suppliersRes.value?.data) && suppliersRes.value.data.length > 0) {
@@ -465,7 +466,13 @@ export default function PurchasingDashboard({
   const productSummary = useMemo(
     () =>
       products.map((p) => {
-        const list = orders.filter((o) => o.produkId === p.id && o.marketingStatus !== MKT.TOLAK);
+        const list = orders.filter((o) => {
+          if (o.marketingStatus === MKT.TOLAK) return false;
+          if (o.produkId === p.id) return true;
+          if (p.projectId && (o.produkId === `p-${p.projectId}` || String(o.produkId) === String(p.projectId))) return true;
+          if (o.produk && p.title && String(o.produk).trim().toLowerCase() === String(p.title).trim().toLowerCase()) return true;
+          return false;
+        });
         const quota = sumBy(p.variants, (v) => v.quota);
         const used = sumBy(p.variants, (v) => v.used);
         return {
@@ -499,7 +506,7 @@ export default function PurchasingDashboard({
         num(b.discountSubDB),
         num(b.discountAgen),
         num(b.discountReseller),
-        products.filter((p) => p.brand === b.name).length,
+        products.filter((p) => isBrandMatch(p, b)).length,
         list.length,
         sumBy(list, (o) => num(o.qty)),
         sumBy(list, (o) => num(o.subtotal)),
@@ -623,7 +630,7 @@ export default function PurchasingDashboard({
       const matchesSearch =
         !q ||
         (b.name || '').toLowerCase().includes(q) ||
-        (b.supplier || '').toLowerCase().includes(q) ||
+        (typeof b.supplier === 'object' ? (b.supplier?.name || '') : (b.supplier || '')).toLowerCase().includes(q) ||
         (b.address || '').toLowerCase().includes(q);
       const matchesCity = brandCityFilter === 'all' || b.address === brandCityFilter;
       return matchesSearch && matchesCity;
@@ -632,14 +639,14 @@ export default function PurchasingDashboard({
     const sorted = [...list];
     if (brandSort === 'omzet') {
       sorted.sort((a, b) => {
-        const omzetA = sumBy(productSummary.filter((p) => p.brand === a.name), (p) => p.omzet);
-        const omzetB = sumBy(productSummary.filter((p) => p.brand === b.name), (p) => p.omzet);
+        const omzetA = sumBy(productSummary.filter((p) => isBrandMatch(p, a)), (p) => p.omzet);
+        const omzetB = sumBy(productSummary.filter((p) => isBrandMatch(p, b)), (p) => p.omzet);
         return omzetB - omzetA;
       });
     } else if (brandSort === 'products') {
       sorted.sort((a, b) => {
-        const countA = productSummary.filter((p) => p.brand === a.name).length;
-        const countB = productSummary.filter((p) => p.brand === b.name).length;
+        const countA = productSummary.filter((p) => isBrandMatch(p, a)).length;
+        const countB = productSummary.filter((p) => isBrandMatch(p, b)).length;
         return countB - countA;
       });
     } else {
@@ -1577,7 +1584,7 @@ export default function PurchasingDashboard({
       return match ? { ...v, id: match.id } : v;
     });
 
-    const newId = serverProduct?.id ? `P-${serverProduct.id}` : uid('p');
+    const newId = serverProduct?.id ? `p-${serverProduct.id}` : uid('p');
     const newP = {
       id: newId,
       ...payload,
@@ -1701,11 +1708,12 @@ export default function PurchasingDashboard({
       return match ? { ...v, id: match.id } : v;
     });
 
-    const newId = uid('p');
+    const newId = serverProduct?.id ? `p-${serverProduct.id}` : uid('p');
     const newP = {
       id: newId,
       ...payload,
       backendId: serverProduct?.id ?? null,
+      projectId: serverProduct?.id ?? null,
       status: 'open',
       image: f.image || '',
       isSale,
@@ -2015,14 +2023,15 @@ export default function PurchasingDashboard({
       }
       const serverBrand = created?.data;
       const newB = {
+        ...payload,
         ...mapBrandToCore({
           ...payload,
           ...(serverBrand || {}),
           id: serverBrand?.id ?? null,
-          supplier: serverBrand?.supplier?.name || payload.supplier
-        }),
-        ...payload
+          supplier: serverBrand?.supplier_name || (typeof serverBrand?.supplier === 'object' ? serverBrand.supplier?.name : serverBrand?.supplier) || payload.supplier
+        })
       };
+      if (!newB.id && serverBrand?.id) newB.id = `b-${serverBrand.id}`;
       commitBrands((prev) => [newB, ...prev]);
       toast(`Brand ${payload.name} ditambahkan.`);
     }
@@ -2030,7 +2039,7 @@ export default function PurchasingDashboard({
   };
 
   const deleteBrand = (b) => {
-    if (products.some((p) => p.brand === b.name)) {
+    if (products.some((p) => isBrandMatch(p, b))) {
       return toast('Brand masih dipakai produk. Pindahkan produk terlebih dahulu.', 'error');
     }
     setConfirmModal({
@@ -2324,7 +2333,7 @@ export default function PurchasingDashboard({
       if (nextStatus === 'closed') {
         commitProducts((prev) =>
           prev.map((p) =>
-            p.po_batch_id === b.id || p.batch === b.name
+            p.po_batch_id === b.id || (p.batch && b.name && String(p.batch).trim().toLowerCase() === String(b.name).trim().toLowerCase())
               ? { ...p, status: 'closed', statusLabel: 'PO Ditutup' }
               : p
           )
@@ -2332,7 +2341,7 @@ export default function PurchasingDashboard({
       } else {
         commitProducts((prev) =>
           prev.map((p) =>
-            p.po_batch_id === b.id || p.batch === b.name
+            p.po_batch_id === b.id || (p.batch && b.name && String(p.batch).trim().toLowerCase() === String(b.name).trim().toLowerCase())
               ? { ...p, status: 'open', statusLabel: 'Open Pre-Order' }
               : p
           )
@@ -2347,7 +2356,7 @@ export default function PurchasingDashboard({
   const deleteBatch = (b) => {
     const linkedCount =
       b.products_count ??
-      products.filter((p) => p.po_batch_id === b.id || p.batch === b.name).length;
+      products.filter((p) => p.po_batch_id === b.id || (p.batch && b.name && String(p.batch).trim().toLowerCase() === String(b.name).trim().toLowerCase())).length;
     if (linkedCount > 0) {
       return toast(
         `Batch PO "${b.name}" masih terhubung dengan ${linkedCount} produk. Pindahkan produk terlebih dahulu.`,
@@ -3232,7 +3241,7 @@ export default function PurchasingDashboard({
     return counts;
   }, [paymentRequests]);
 
-  const productFiltered = productSummary.filter((p) => rekapBrand === 'all' || p.brand === rekapBrand);
+  const productFiltered = productSummary.filter((p) => rekapBrand === 'all' || isBrandMatch(p.brand, rekapBrand));
 
   const catalogCategories = useMemo(() => {
     const set = new Set();
@@ -3244,7 +3253,7 @@ export default function PurchasingDashboard({
 
   const catalogCounts = useMemo(() => {
     const list = productSummary.filter((p) => {
-      if (catalogBrand !== 'all' && p.brand !== catalogBrand) return false;
+      if (catalogBrand !== 'all' && !isBrandMatch(p.brand, catalogBrand)) return false;
       if (catalogCategory !== 'all' && p.category !== catalogCategory) return false;
       return true;
     });
@@ -3268,7 +3277,7 @@ export default function PurchasingDashboard({
     return productSummary
       .filter((p) => {
         const isClosed = p.status === 'closed' || p.status === 'closed_po' || p.isClosedPO === true;
-        if (catalogBrand !== 'all' && p.brand !== catalogBrand) return false;
+        if (catalogBrand !== 'all' && !isBrandMatch(p.brand, catalogBrand)) return false;
         if (catalogCategory !== 'all' && p.category !== catalogCategory) return false;
         if (catalogStatus === 'open' && isClosed) return false;
         if (catalogStatus === 'closed' && !isClosed) return false;

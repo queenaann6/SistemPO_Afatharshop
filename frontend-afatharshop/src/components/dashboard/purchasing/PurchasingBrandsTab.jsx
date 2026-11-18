@@ -12,6 +12,7 @@ import {
   brandDiscountTypeFor,
   brandDiscountValueFor,
   feeTypeFor,
+  isBrandMatch,
   num,
   rp,
   sumBy
@@ -200,7 +201,7 @@ export default function PurchasingBrandsTab({
           </thead>
           <tbody className="divide-y divide-stone-100">
             {filteredBrands.map((b, index) => {
-              const brandProducts = productSummary.filter((p) => p.brand === b.name);
+              const brandProducts = productSummary.filter((p) => isBrandMatch(p, b));
               const brandInitials = b.name
                 ? b.name
                     .split(' ')
@@ -266,7 +267,7 @@ export default function PurchasingBrandsTab({
                   <td className={`${TD} text-center`}>
                     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-stone-100 text-stone-700 border border-stone-200/70">
                       <Icon name="box" className="w-3 h-3 text-stone-500" />
-                      <span>{brandProducts.length} Produk</span>
+                      <span>{brandProducts.length > 0 ? brandProducts.length : (b.products_count || 0)} Produk</span>
                     </span>
                   </td>
                   <td className={`${TD} text-right`}>
